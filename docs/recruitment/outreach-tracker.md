@@ -14,8 +14,8 @@ Track every contact attempt here. Update weekly.
 
 | Club | Contact name | Channel | Date contacted | Status | Notes |
 |------|-------------|---------|----------------|--------|-------|
-| IEEE CUSB (Computer Club) | Page | LinkedIn | 2026-09-18 | 🟡 | Page message sent — awaiting reply |
-| DSC Cairo University | | | | 🔴 | |
+| IEEE CUSB (Computer Club) | Page | LinkedIn | 2026-09-18 | 🟡 | Page message sent |
+| DSC Cairo University | Page | LinkedIn | 2026-09-18 | 🟡 | Page message sent — Git course angle used |
 | MSP Tech Club CU | | | | 🔴 | |
 | CS-Math Society | | | | 🔴 | |
 
@@ -32,6 +32,6 @@ Track every contact attempt here. Update weekly.
 | Club | First contact | Follow-up due | Follow-up sent |
 |------|---------------|---------------|----------------|
 | IEEE CUSB | 2026-09-18 | 2026-09-23 | |
-| DSC Cairo University | | | |
+| DSC Cairo University | 2026-09-18 | 2026-09-23 | |
 | MSP Tech Club CU | | | |
 | CS-Math Society | | | |
