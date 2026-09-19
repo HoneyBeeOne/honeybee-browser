@@ -18,7 +18,10 @@ We welcome contributions from all Cairo University students! No prior browser ex
 
 - **Read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.**
 - Look for issues labeled **`good first issue`** to get started.
-- Join our community on Discord/Telegram: [Link to be added]
+- Join our community:
+- Discord: [invite link]
+- LinkedIn: https://www.linkedin.com/company/honeybeebrowser
+- Facebook: https://www.facebook.com/HoneyBeeBrowser
 
 ## 🏗️ Project Architecture
 
