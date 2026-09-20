@@ -67,3 +67,19 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Editor
+.vscode/
+.idea/
+*.swp

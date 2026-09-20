@@ -32,17 +32,58 @@ This project is governed by our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). By par
 
 ## 🛠️ Development Setup
 
-> Detailed setup instructions will be added as the project's stack is finalized.
+### Prerequisites
 
-**Prerequisites (placeholder):**
-- A C++ compiler (GCC or Clang) or Rust toolchain
-- CMake or Cargo
-- Git
+- A C++20 compiler (GCC 10+ or Clang 12+)
+- CMake 3.20 or newer
+- Ninja (recommended) or Make
+- pkg-config
+- GTK 4 with C++ bindings (gtkmm-4)
+- libcurl development headers
+
+### Ubuntu / Debian
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  cmake \
+  ninja-build \
+  pkg-config \
+  libgtkmm-4.0-dev \
+  libcurl4-openssl-dev
+```
+
+### Build
+
+```bash
+git clone https://github.com/HoneyBeeOne/honeybee-browser.git
+cd honeybee-browser
+mkdir -p build
+cd build
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Debug
+ninja
+```
+
+### Run
+
+```bash
+./bin/honeybee
+```
+
+For a full walkthrough with explanations and troubleshooting, see [docs/getting-started.md](docs/getting-started.md).
 
 ## 🧪 Running Tests
 
-> Test commands will be documented once the build system is in place.
+Test infrastructure is not yet in place (Phase 0). Once tests exist, they will run via:
+
+```bash
+cd build
+ctest --output-on-failure
+```
 
 ## 🙋 Getting Help
 
-Join our Discord/Telegram community: [Link to be added]
+Join our Discord community: [discord invite](https://discord.gg/nAEBNVw83)
+
+If you're stuck on a task for more than an hour, ask for help. Nobody is expected to figure everything out alone.
