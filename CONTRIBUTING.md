@@ -30,6 +30,8 @@ This project is governed by our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). By par
 5. **Push** to your fork and open a **Pull Request** against the `main` branch.
 6. Fill out the **PR template** completely.
 
+**All pull requests are reviewed by the maintainer before merging.** Expect feedback within 48 hours. If you don't hear back, ping the maintainer in Discord.
+
 ## 🛠️ Development Setup
 
 ### Prerequisites
