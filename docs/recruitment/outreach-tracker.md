@@ -1,6 +1,4 @@
-# Outreach Tracker — Cairo University Clubs
-
-Track every contact attempt here. Update weekly.
+# Outreach Tracker
 
 ## Status key
 
@@ -8,30 +6,52 @@ Track every contact attempt here. Update weekly.
 - 🟡 Contacted — awaiting reply
 - 🟢 Replied
 - ✅ Shared with members
+- ⏸️ Deferred — revisit later
 - ❌ Declined / no response after 2 weeks
 
-## Tier 1 — Direct Fit
+## Tier 1 — Clubs
 
 | Club | Contact name | Channel | Date contacted | Status | Notes |
 |------|-------------|---------|----------------|--------|-------|
 | IEEE CUSB (Computer Club) | Page | LinkedIn | 2026-09-18 | 🟡 | Page message sent |
-| DSC Cairo University | Page | LinkedIn | 2026-09-18 | 🟡 | Page message sent — Git course angle used |
-| MSP Tech Club CU | | | | 🔴 | |
-| CS-Math Society | | | | 🔴 | |
+| DSC Cairo University | Page | LinkedIn | 2026-09-18 | 🟡 | Git course angle used |
+| MSP Tech Club CU | — | — | — | ⏸️ | Skipped — revisit later |
+| CS-Math Society | Page | LinkedIn | 2026-09-18 | 🟡 | CS fundamentals angle used |
 
-## Tier 2 — Broad Reach
+## Tier 1b — Faculty Pages
 
-| Club | Contact name | Channel | Date contacted | Status | Notes |
+| Page | Contact name | Channel | Date contacted | Status | Notes |
 |------|-------------|---------|----------------|--------|-------|
-| GDSC Cairo University | | | | 🔴 | |
-| ICPC Cairo Science Community | | | | 🔴 | |
-| ACM Cairo University Chapter | | | | 🔴 | |
+| Faculty of Engineering, CU | — | Facebook | — | ⏸️ | Postponed |
+| Faculty of Computers & AI (FCAI), CU | — | Facebook | — | ⏸️ | Postponed |
+| Engineering Student Union | — | Facebook | — | ⏸️ | Postponed |
+| FCAI Student Union | — | Facebook | — | ⏸️ | Postponed |
 
-## Follow-up schedule
+## Facebook Groups (CU students)
 
-| Club | First contact | Follow-up due | Follow-up sent |
-|------|---------------|---------------|----------------|
-| IEEE CUSB | 2026-09-18 | 2026-09-23 | |
-| DSC Cairo University | 2026-09-18 | 2026-09-23 | |
-| MSP Tech Club CU | | | |
-| CS-Math Society | | | |
+| Group | Members (approx) | Date posted | Status | Notes |
+|-------|------------------|-------------|--------|-------|
+| Cairo University Faculty of Engineering | — | — | 🔴 | |
+| Cairo University FCAI | — | — | 🔴 | |
+| CU Engineering 2027 | — | — | 🔴 | |
+| CU Engineering 2028 | — | — | 🔴 | |
+| حاسبات القاهرة | — | — | 🔴 | |
+
+## Community Platforms
+
+| Platform | URL | Date posted | Status | Notes |
+|----------|-----|-------------|--------|-------|
+| Qabilah | https://qabilah.com/ | 2026-09-20 | ✅ | Arabic launch post published |
+| Facebook Page | https://www.facebook.com/HoneyBeeBrowser | 2026-09-18 | ✅ | Page created, launch post pinned |
+| LinkedIn Page | https://www.linkedin.com/company/honeybeebrowser | 2026-09-19 | ✅ | Page created, launch post pinned |
+| Discord | https://discord.gg/nAEBNVw83 | — | ✅ | Server live |
+
+## Postponed
+
+| Channel | Reason |
+|---------|--------|
+| dev.to | Postponed — focus on CU students first |
+| goodfirstissue.dev | Postponed — global audience, not CU-specific |
+| up-for-grabs.net | Postponed — global audience, not CU-specific |
+| Lecturers | Postponed |
+| MSP Tech Club CU | Skipped for now |
