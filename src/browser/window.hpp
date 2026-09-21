@@ -7,5 +7,7 @@ public:
     HoneyBeeWindow();
 
 private:
-    Gtk::Label m_label;
+    Gtk::Box m_root_box;    // الحاوية الرئيسية: تخطيط عمودي
+    Gtk::Entry m_url_bar;   // شريط العنوان
+    Gtk::Label m_label;     // النص المؤقت في وسط النافذة
 };
