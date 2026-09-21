@@ -2,7 +2,8 @@
 
 HoneyBeeWindow::HoneyBeeWindow()
     : m_root_box(Gtk::Orientation::VERTICAL),
-      m_toolbar_box(Gtk::Orientation::HORIZONTAL) {
+      m_toolbar_box(Gtk::Orientation::HORIZONTAL),
+      m_status_bar(Gtk::Orientation::HORIZONTAL) {
     set_title("HoneyBee Browser — متصفح");
     set_default_size(1024, 768);
 
@@ -39,9 +40,20 @@ HoneyBeeWindow::HoneyBeeWindow()
     m_label.set_margin(24);
     m_label.set_vexpand(true);      // يمتد رأسياً ليملأ المساحة المتبقية
 
-    // التخطيط العمودي: شريط الأدوات في الأعلى، والنص تحته
+    // إعداد شريط الحالة في الأسفل
+    m_status_label.set_text("جاهز");
+    m_version_label.set_text("v0.1.0");
+    m_version_label.set_hexpand(true);
+    m_version_label.set_halign(Gtk::Align::END);
+
+    m_status_bar.set_margin(6);
+    m_status_bar.append(m_status_label);
+    m_status_bar.append(m_version_label);
+
+    // التخطيط العمودي: شريط الأدوات في الأعلى، النص في الوسط، وشريط الحالة في الأسفل
     m_root_box.append(m_toolbar_box);
     m_root_box.append(m_label);
+    m_root_box.append(m_status_bar);
 
     set_child(m_root_box);
 }
