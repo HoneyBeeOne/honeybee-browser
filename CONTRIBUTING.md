@@ -23,6 +23,7 @@
 1. **اعمل Fork** للمستودع.
 2. **أنشئ فرعًا** باسم وصفي: `feat/url-parser` أو `fix/html-entity`.
 3. **طبّق التغييرات** وأضف اختبارات إن أمكن.
+   - عند تعديل ملفات C++، اتبع [دليل تنسيق الكود](docs/code-style.md).
 4. **اعمل Commit** لتغييراتك وفق الاتفاقية:
    - `feat(renderer): add CSS selector matching`
    - `fix(net): handle HTTP 301 redirects`
