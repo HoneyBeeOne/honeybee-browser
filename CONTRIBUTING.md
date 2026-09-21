@@ -1,47 +1,54 @@
-# Contributing to HoneyBee Browser (HoneyBeeOne)
+# المساهمة في HoneyBee Browser (HoneyBeeOne)
 
-Thank you for considering contributing to HoneyBee! We're excited to have you.
+شكرًا لاهتمامك بالمساهمة في HoneyBee! يسعدنا انضمامك.
 
-## 📜 Code of Conduct
+## 📜 مدونة السلوك
 
-This project is governed by our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
+يخضع هذا المشروع لـ [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). بالمشاركة، يُتوقع منك الالتزام بهذه المدونة.
 
-## 🐛 How to Report a Bug
+## 🐛 كيفية الإبلاغ عن خطأ
 
-1. Search existing issues to avoid duplicates.
-2. Open a new issue using the **Bug Report** template.
-3. Include steps to reproduce, expected vs. actual behavior, and your environment.
+1. ابحث في المشكلات الموجودة لتجنب التكرار.
+2. افتح مشكلة جديدة باستخدام قالب **Bug Report**.
+3. اذكر خطوات إعادة الإنتاج، والسلوك المتوقع مقابل الفعلي، وبيئة التشغيل.
 
-## ✨ How to Request a Feature
+## ✨ كيفية طلب ميزة جديدة
 
-1. Search existing issues to avoid duplicates.
-2. Open a new issue using the **Feature Request** template.
-3. Explain the problem it solves and your proposed solution.
+1. ابحث في المشكلات الموجودة لتجنب التكرار.
+2. افتح مشكلة جديدة باستخدام قالب **Feature Request**.
+3. اشرح المشكلة التي تحلها، والحل المقترح.
 
-## 💻 How to Submit a Pull Request
+## 💻 كيفية إرسال Pull Request
 
-1. **Fork** the repository.
-2. **Create a branch** with a descriptive name: `feat/url-parser` or `fix/html-entity`.
-3. **Make your changes** and add tests if applicable.
-4. **Commit** your changes following our convention:
+1. **اعمل Fork** للمستودع.
+2. **أنشئ فرعًا** باسم وصفي: `feat/url-parser` أو `fix/html-entity`.
+3. **طبّق التغييرات** وأضف اختبارات إن أمكن.
+4. **اعمل Commit** لتغييراتك وفق الاتفاقية:
    - `feat(renderer): add CSS selector matching`
    - `fix(net): handle HTTP 301 redirects`
    - `docs(readme): clarify setup steps`
-5. **Push** to your fork and open a **Pull Request** against the `main` branch.
-6. Fill out the **PR template** completely.
+5. **ادفع** إلى نسختك وافتح **Pull Request** مقابل فرع `main`.
+6. املأ **قالب PR** بالكامل.
 
-**All pull requests are reviewed by the maintainer before merging.** Expect feedback within 48 hours. If you don't hear back, ping the maintainer in Discord.
+**جميع طلبات السحب تتم مراجعتها من قبل المشرف قبل الدمج.** توقّع ردًا خلال 48 ساعة. إذا لم يصلك رد، ذكّر المشرف على Discord.
 
-## 🛠️ Development Setup
+## 🌐 اتفاقيات اللغة
 
-### Prerequisites
+- **التعليقات في الكود** تُكتب بالعربية. هذا المشروع يستهدف الطلاب الناطقين بالعربية أولًا.
+- **أسماء المتغيرات والدوال والأنواع** تبقى بالإنجليزية.
+- **النصوص التي تظهر للمستخدم** (عناوين النوافذ، نصوص الأزرار، النصوص المؤقتة) تُكتب بالعربية.
+- **التوثيق** (مجلد `docs/`، وملفات `README.md`، `CONTRIBUTING.md`) يُكتب بالعربية في الوقت الحالي.
 
-- A C++20 compiler (GCC 10+ or Clang 12+)
-- CMake 3.20 or newer
-- Ninja (recommended) or Make
+## 🛠️ إعداد بيئة التطوير
+
+### المتطلبات
+
+- مترجم C++20 (GCC 10+ أو Clang 12+)
+- CMake 3.20 أو أحدث
+- Ninja (موصى به) أو Make
 - pkg-config
-- GTK 4 with C++ bindings (gtkmm-4)
-- libcurl development headers
+- GTK 4 مع روابط C++ (gtkmm-4)
+- مكتبات تطوير libcurl
 
 ### Ubuntu / Debian
 
@@ -56,7 +63,7 @@ sudo apt install -y \
   libcurl4-openssl-dev
 ```
 
-### Build
+### البناء
 
 ```bash
 git clone https://github.com/HoneyBeeOne/honeybee-browser.git
@@ -67,25 +74,25 @@ cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja
 ```
 
-### Run
+### التشغيل
 
 ```bash
 ./bin/honeybee
 ```
 
-For a full walkthrough with explanations and troubleshooting, see [docs/getting-started.md](docs/getting-started.md).
+للحصول على دليل كامل مع الشرح وحل المشكلات، راجع [docs/getting-started.md](docs/getting-started.md).
 
-## 🧪 Running Tests
+## 🧪 تشغيل الاختبارات
 
-Test infrastructure is not yet in place (Phase 0). Once tests exist, they will run via:
+البنية التحتية للاختبارات لم تُجهَّز بعد (المرحلة صفر). عند تجهيزها، ستُشغَّل عبر:
 
 ```bash
 cd build
 ctest --output-on-failure
 ```
 
-## 🙋 Getting Help
+## 🙋 الحصول على المساعدة
 
-Join our Discord community: [discord invite](https://discord.gg/nAEBNVw83)
+انضم إلى مجتمعنا على Discord: [دعوة](https://discord.gg/nAEBNVw83)
 
-If you're stuck on a task for more than an hour, ask for help. Nobody is expected to figure everything out alone.
+إذا واجهت صعوبة في مهمة لأكثر من ساعة، اطلب المساعدة. لا يُتوقع من أحد أن يحل كل شيء بمفرده.
