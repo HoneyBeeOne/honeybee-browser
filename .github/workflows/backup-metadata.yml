@@ -33,12 +33,15 @@ jobs:
           BACKUP_TOKEN: ${{ secrets.METADATA_BACKUP_TOKEN }}
         run: |
           mkdir -p /tmp/metadata-backup
-          github-backup \
-            --user HoneyBeeOne \
-            --repository honeybee-browser \
-            --token "$BACKUP_TOKEN" \
-            --include issues,pulls,labels,milestones \
-            --output-directory /tmp/metadata-backup
+          github-backup HoneyBeeOne \
+            -O \
+            -t "$BACKUP_TOKEN" \
+            -o /tmp/metadata-backup \
+            -R honeybee-browser \
+            --issues \
+            --pulls \
+            --labels \
+            --milestones
 
       - name: Prepare orphan backups/metadata branch
         run: |
