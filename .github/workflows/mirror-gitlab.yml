@@ -1,0 +1,32 @@
+name: Mirror to GitLab
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    name: Push mirror to GitLab
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load SSH key for GitLab
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.GITLAB_SSH_KEY }}
+
+      - name: Add GitLab to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H gitlab.com >> ~/.ssh/known_hosts
+
+      - name: Push all branches and tags to GitLab
+        run: |
+          git remote add gitlab git@gitlab.com:amrmuhammad/honeybee-browser.git
+          git push gitlab --mirror
