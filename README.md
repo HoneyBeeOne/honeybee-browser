@@ -1,14 +1,24 @@
+<div dir="rtl" align="right">
+
 # HoneyBee Browser 🐝
 
 **متصفح ويب مفتوح المصدر يبنيه طلاب جامعة القاهرة.**
 
 HoneyBee مشروع مفتوح المصدر يشارك فيه طلاب من كلية الحاسبات والذكاء الاصطناعي وكلية الهندسة، لبناء متصفح ويب حقيقي من الصفر. فرصة عملية لتعلّم المكونات الداخلية للمتصفح: تحليل HTML، تنسيق CSS، محركات JavaScript، الشبكات، والمزيد.
 
+</div>
+
+<div dir="ltr" align="left">
+
 [![Build](https://github.com/HoneyBeeOne/honeybee-browser/actions/workflows/build.yml/badge.svg)](https://github.com/HoneyBeeOne/honeybee-browser/actions/workflows/build.yml)
 [![Contributors](https://img.shields.io/github/contributors/HoneyBeeOne/honeybee-browser.svg)](https://github.com/HoneyBeeOne/honeybee-browser/graphs/contributors)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Good First Issues](https://img.shields.io/github/issues/HoneyBeeOne/honeybee-browser/good%20first%20issue.svg)](https://github.com/HoneyBeeOne/honeybee-browser/labels/good%20first%20issue)
 [![GitLab Mirror](https://img.shields.io/badge/GitLab-mirror-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/amrmuhammad/honeybee-browser)
+
+</div>
+
+<div dir="rtl" align="right">
 
 ## 🎯 رؤيتنا
 
@@ -33,3 +43,5 @@ HoneyBee مشروع مفتوح المصدر يشارك فيه طلاب من كل
 ## 📜 الرخصة
 
 هذا المشروع مرخّص تحت Apache License 2.0. راجع [LICENSE](LICENSE) للتفاصيل.
+
+</div>
