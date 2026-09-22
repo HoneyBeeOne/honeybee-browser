@@ -1,8 +1,8 @@
 # HoneyBee Browser 🐝
 
-**متصفح ويب مفتوح المصدر يبنيه طلاب جامعة القاهرة.**
+**A community-built web browser from Cairo University students.**
 
-HoneyBee مشروع مفتوح المصدر يشارك فيه طلاب من كلية الحاسبات والذكاء الاصطناعي وكلية الهندسة، لبناء متصفح ويب حقيقي من الصفر. فرصة عملية لتعلّم المكونات الداخلية للمتصفح: تحليل HTML، تنسيق CSS، محركات JavaScript، الشبكات، والمزيد.
+HoneyBee is an open-source project where students from the Faculty of Computers and AI and the Faculty of Engineering contribute to building a real web browser from scratch. It's a hands-on learning opportunity for browser internals: HTML parsing, CSS layout, JavaScript engines, networking, and more.
 
 [![Build](https://github.com/HoneyBeeOne/honeybee-browser/actions/workflows/build.yml/badge.svg)](https://github.com/HoneyBeeOne/honeybee-browser/actions/workflows/build.yml)
 [![Contributors](https://img.shields.io/github/contributors/HoneyBeeOne/honeybee-browser.svg)](https://github.com/HoneyBeeOne/honeybee-browser/graphs/contributors)
@@ -10,26 +10,26 @@ HoneyBee مشروع مفتوح المصدر يشارك فيه طلاب من كل
 [![Good First Issues](https://img.shields.io/github/issues/HoneyBeeOne/honeybee-browser/good%20first%20issue.svg)](https://github.com/HoneyBeeOne/honeybee-browser/labels/good%20first%20issue)
 [![GitLab Mirror](https://img.shields.io/badge/GitLab-mirror-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/amrmuhammad/honeybee-browser)
 
-## 🎯 رؤيتنا
+## 🎯 Our Vision
 
-بناء متصفح ويب مفتوح المصدر بالكامل، يبنيه مجتمع طلاب جامعة القاهرة، ويوفر تجربة تعلم لا مثيل لها في هندسة البرمجيات على نطاق واسع.
+To create a fully functional, open-source web browser built entirely by the student community at Cairo University, providing an unparalleled learning experience in large-scale software engineering.
 
-## ✨ كيف تساهم
+## ✨ How to Contribute
 
-نرحب بمساهمات جميع طلاب جامعة القاهرة! لا حاجة لخبرة سابقة في المتصفحات.
+We welcome contributions from all Cairo University students! No prior browser experience is needed.
 
-- **اقرأ دليل [CONTRIBUTING.md](CONTRIBUTING.md).**
-- ابحث عن المهام المُعلَّمة بـ **`good first issue`** للبدء.
-- انضم إلى مجتمعنا على Discord: https://discord.gg/nAEBNVw83
+- **Read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.**
+- Look for issues labeled **`good first issue`** to get started.
+- Join our community on Discord: https://discord.gg/nAEBNVw83
 
-## 🏗️ معمارية المشروع
+## 🏗️ Project Architecture
 
-راجع [docs/architecture.md](docs/architecture.md) للحصول على نظرة عامة على معمارية المشروع.
+See [docs/architecture.md](docs/architecture.md) for a high-level overview of the project.
 
-## 🗺️ خارطة الطريق
+## 🗺️ Roadmap
 
-راجع [docs/roadmap.md](docs/roadmap.md) لخطة التطوير المرحلية.
+See [docs/roadmap.md](docs/roadmap.md) for our phased development plan.
 
-## 📜 الرخصة
+## 📜 License
 
-هذا المشروع مرخّص تحت Apache License 2.0. راجع [LICENSE](LICENSE) للتفاصيل.
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
