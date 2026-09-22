@@ -1,0 +1,72 @@
+name: Backup Metadata
+
+on:
+  schedule:
+    # كل يوم جمعة الساعة 2 صباحًا UTC
+    - cron: '0 2 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    name: Backup issues and PRs to backups/metadata branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install github-backup
+        run: pip install github-backup
+
+      - name: Run github-backup
+        env:
+          BACKUP_TOKEN: ${{ secrets.METADATA_BACKUP_TOKEN }}
+        run: |
+          mkdir -p /tmp/metadata-backup
+          github-backup \
+            --user HoneyBeeOne \
+            --repository honeybee-browser \
+            --token "$BACKUP_TOKEN" \
+            --include issues,pulls,labels,milestones \
+            --output-directory /tmp/metadata-backup
+
+      - name: Prepare orphan backups/metadata branch
+        run: |
+          git checkout --orphan backups/metadata
+          git rm -rf . || true
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+      - name: Add README to the backup branch
+        run: |
+          cat << 'MARKDOWN' > README.md
+          # Metadata Backup
+
+          This branch is generated automatically by the `backup-metadata` workflow.
+
+          It contains JSON snapshots of GitHub metadata (issues, PRs, labels,
+          milestones) for the HoneyBee Browser repository, produced by the
+          `github-backup` tool.
+
+          **Do not edit this branch manually.** It is force-pushed on each run.
+          MARKDOWN
+
+      - name: Copy backup data into the branch
+        run: |
+          cp -r /tmp/metadata-backup/* . || echo "No data to copy"
+
+      - name: Commit and push
+        run: |
+          git add -A
+          git commit -m "chore: metadata backup $(date -u +%Y-%m-%d)" || echo "No changes to commit"
+          git push --force origin backups/metadata
