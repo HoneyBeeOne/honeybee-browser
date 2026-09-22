@@ -30,6 +30,18 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_compile_options(-O3 -DNDEBUG)
 endif()
 
+# تفعيل نظام الاختبارات
+enable_testing()
+
+# جلب مكتبة Catch2 للاختبارات
+include(FetchContent)
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG        v3.5.2
+)
+FetchContent_MakeAvailable(Catch2)
+
 # Find dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM4 REQUIRED IMPORTED_TARGET gtkmm-4.0)
@@ -37,3 +49,4 @@ pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 
 # Add source directory
 add_subdirectory(src)
+add_subdirectory(tests)
