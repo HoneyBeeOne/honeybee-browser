@@ -1,4 +1,5 @@
 #include "window.hpp"
+#include "base/version.hpp"
 
 HoneyBeeWindow::HoneyBeeWindow()
     : m_root_box(Gtk::Orientation::VERTICAL),
@@ -35,14 +36,19 @@ HoneyBeeWindow::HoneyBeeWindow()
     m_toolbar_box.append(m_url_bar);
 
     // النص المؤقت أسفل شريط الأدوات
-    m_label.set_text("HoneyBee Browser\n\nالمرحلة صفر — الإصدار 0.1.0\n\nسيُعرض محتوى الصفحة هنا");
+    // نستخدم نسخة الإصدار بدلاً من كتابتها مباشرة، حتى تكون في مكان واحد
+    const std::string label_text =
+        "HoneyBee Browser\n\nالمرحلة صفر — الإصدار " +
+        honeybee::version_string() +
+        "\n\nسيُعرض محتوى الصفحة هنا";
+    m_label.set_text(label_text);
     m_label.set_justify(Gtk::Justification::CENTER);
     m_label.set_margin(24);
     m_label.set_vexpand(true);      // يمتد رأسياً ليملأ المساحة المتبقية
 
     // إعداد شريط الحالة في الأسفل
     m_status_label.set_text("جاهز");
-    m_version_label.set_text("v0.1.0");
+    m_version_label.set_text("v" + honeybee::version_string());
     m_version_label.set_hexpand(true);
     m_version_label.set_halign(Gtk::Align::END);
 
