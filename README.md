@@ -26,6 +26,8 @@ We welcome contributions from all Cairo University students! No prior browser ex
 
 See [docs/architecture.md](docs/architecture.md) for a high-level overview of the project.
 
+See [docs/companions.md](docs/companions.md) to meet the project companions.
+
 ## 🗺️ Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for our phased development plan.
