@@ -155,3 +155,4 @@ We build the browser: the CSS cascade, the layout engine, the paint pipeline, th
 - [MDN: How browsers work](https://developer.mozilla.org/en-US/docs/Web/Performance/How_browsers_work)
 - [Chromium Process Model](https://www.chromium.org/developers/design-documents/process-models)
 - [Nordstjernen Browser](https://github.com/nordstjernen-web/nordstjernen-browser)
+- [URL Format](learning/url-format.md) (in Arabic) — a guide to URL structure
