@@ -1,6 +1,7 @@
 # المكتبة المشتركة: كود نقي قابل للاختبار (بدون GTK)
 add_library(honeybee_lib
   base/version.cpp
+  base/url.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC
