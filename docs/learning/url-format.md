@@ -205,3 +205,4 @@
 
 - المهمة [#59](https://github.com/HoneyBeeOne/honeybee-browser/issues/59) — تنفيذ `is_valid_url()`
 - [docs/architecture.md](../architecture.md) — معمارية المشروع
+- [docs/learning/how-browsers-work.md](how-browsers-work.md) — كيف يعمل متصفح الويب
