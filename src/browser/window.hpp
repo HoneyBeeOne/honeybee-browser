@@ -7,6 +7,10 @@ public:
     HoneyBeeWindow();
 
 private:
+    // معالجة ضغط Enter في شريط العنوان.
+    // تتحقق من الرابط، وتُحدّث شريط الحالة بالنتيجة.
+    void on_url_activated();
+
     Gtk::Box m_root_box;            // الحاوية الرئيسية: تخطيط عمودي
     Gtk::Box m_toolbar_box;         // شريط الأدوات: تخطيط أفقي
     Gtk::Button m_back_button;      // زر الرجوع

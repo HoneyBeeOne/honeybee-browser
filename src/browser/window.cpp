@@ -1,5 +1,6 @@
 #include "window.hpp"
 #include "base/version.hpp"
+#include "base/url.hpp"
 
 HoneyBeeWindow::HoneyBeeWindow()
     : m_root_box(Gtk::Orientation::VERTICAL),
@@ -26,6 +27,10 @@ HoneyBeeWindow::HoneyBeeWindow()
     // شريط العنوان: حقل نص أحادي السطر
     m_url_bar.set_placeholder_text("أدخل عنوان الموقع");
     m_url_bar.set_hexpand(true);    // يمتد أفقياً ليملأ المساحة المتبقية
+
+    // ربط إشارة ضغط Enter بالدالة المسؤولة عن معالجة الرابط
+    m_url_bar.signal_activate().connect(
+        [this]() { on_url_activated(); });
 
     // تجميع الأزرار وشريط العنوان في صف أفقي واحد
     m_toolbar_box.set_spacing(6);   // مسافة بين العناصر
@@ -62,4 +67,15 @@ HoneyBeeWindow::HoneyBeeWindow()
     m_root_box.append(m_status_bar);
 
     set_child(m_root_box);
+}
+
+// عند ضغط المستخدم على Enter في شريط العنوان:
+// نأخذ النص المُدخل، ونتحقق من صحته، ونُحدّث شريط الحالة بالنتيجة.
+void HoneyBeeWindow::on_url_activated() {
+    const std::string url = m_url_bar.get_text();
+    if (honeybee::is_valid_url(url)) {
+        m_status_label.set_text("تم قبول الرابط: " + url);
+    } else {
+        m_status_label.set_text("رابط غير صالح");
+    }
 }
