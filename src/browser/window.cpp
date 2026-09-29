@@ -70,12 +70,43 @@ HoneyBeeWindow::HoneyBeeWindow()
 }
 
 // عند ضغط المستخدم على Enter في شريط العنوان:
-// نأخذ النص المُدخل، ونتحقق من صحته، ونُحدّث شريط الحالة بالنتيجة.
+// نتحقق من الرابط، ثم نبدأ جلبه في الخيط الخلفي.
+//
+// ملاحظة: نُعطّل حقل الإدخال أثناء الجلب، لمنع إدخال رابط
+// جديد قبل انتهاء الجلب السابق. يُعاد تفعيله في الـ callback.
 void HoneyBeeWindow::on_url_activated() {
     const std::string url = m_url_bar.get_text();
-    if (honeybee::is_valid_url(url)) {
-        m_status_label.set_text("تم قبول الرابط: " + url);
-    } else {
+
+    if (!honeybee::is_valid_url(url)) {
         m_status_label.set_text("رابط غير صالح");
+        return;
     }
+
+    m_status_label.set_text("جارٍ الجلب...");
+    m_url_bar.set_sensitive(false);
+
+    // نبدأ الجلب في الخيط الخلفي. الـ callback يُستدعى في
+    // الخيط الرئيسي بعد الانتهاء.
+    m_async_fetcher.fetch(url, [this](honeybee::net::Response r) {
+        // نُعيد تفعيل حقل الإدخال.
+        m_url_bar.set_sensitive(true);
+
+        if (!r.success()) {
+            m_status_label.set_text("فشل الجلب (رمز الحالة: " +
+                                    std::to_string(r.status_code) + ")");
+            return;
+        }
+
+        // نقتطع المحتوى لعرضه في m_label.
+        constexpr std::size_t kMaxPreview = 500;
+        std::string preview = r.body.substr(0, kMaxPreview);
+        if (r.body.size() > kMaxPreview) {
+            preview += "\n\n... (اقتُطع المحتوى)";
+        }
+
+        m_label.set_text(preview);
+        m_label.set_justify(Gtk::Justification::LEFT);
+        m_status_label.set_text(
+            "تم الجلب: " + std::to_string(r.body.size()) + " بايت");
+    });
 }
