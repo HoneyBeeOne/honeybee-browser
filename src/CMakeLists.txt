@@ -2,10 +2,16 @@
 add_library(honeybee_lib
   base/version.cpp
   base/url.cpp
+  net/client.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# ربط CURL كمكتبة عامة، حتى يرثها التنفيذي والاختبارات
+target_link_libraries(honeybee_lib PUBLIC
+  PkgConfig::CURL
 )
 
 # التنفيذي الرئيسي
@@ -22,7 +28,6 @@ target_include_directories(honeybee PRIVATE
 target_link_libraries(honeybee PRIVATE
   honeybee_lib
   PkgConfig::GTKMM4
-  PkgConfig::CURL
 )
 
 set_target_properties(honeybee PROPERTIES

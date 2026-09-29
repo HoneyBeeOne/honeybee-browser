@@ -1,6 +1,7 @@
 add_executable(honeybee_tests
   test_version.cpp
   test_url.cpp
+  test_net.cpp
 )
 
 target_link_libraries(honeybee_tests PRIVATE
