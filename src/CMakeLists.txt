@@ -19,6 +19,7 @@ add_executable(honeybee
   main.cpp
   browser/app.cpp
   browser/window.cpp
+  browser/async_fetcher.cpp
 )
 
 target_include_directories(honeybee PRIVATE
