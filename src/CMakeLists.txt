@@ -3,7 +3,6 @@ add_library(honeybee_lib
   base/version.cpp
   base/url.cpp
   net/client.cpp
-  renderer/html/parser.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC
