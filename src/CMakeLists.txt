@@ -3,6 +3,7 @@ add_library(honeybee_lib
   base/version.cpp
   base/url.cpp
   net/client.cpp
+  renderer/html/document.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC
@@ -12,6 +13,13 @@ target_include_directories(honeybee_lib PUBLIC
 # ربط CURL كمكتبة عامة، حتى يرثها التنفيذي والاختبارات
 target_link_libraries(honeybee_lib PUBLIC
   PkgConfig::CURL
+)
+
+# lexbor is a private implementation detail of the HTML parser.
+# Consumers of honeybee_lib do not need to know about it, but CMake
+# propagates the link dependency to final executables.
+target_link_libraries(honeybee_lib PRIVATE
+  lexbor_static
 )
 
 # التنفيذي الرئيسي
