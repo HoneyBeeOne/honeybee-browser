@@ -4,6 +4,7 @@ add_library(honeybee_lib
   base/url.cpp
   net/client.cpp
   renderer/html/document.cpp
+  renderer/html/preview.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC

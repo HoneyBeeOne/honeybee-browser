@@ -4,6 +4,7 @@ add_executable(honeybee_tests
   test_net.cpp
   test_lexbor_smoke.cpp
   test_html_document.cpp
+  test_preview.cpp
 )
 
 target_link_libraries(honeybee_tests PRIVATE

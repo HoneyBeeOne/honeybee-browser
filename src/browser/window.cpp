@@ -18,6 +18,7 @@
 
 // استيراد دالة التحقق من الرابط.
 #include "base/url.hpp"
+#include "renderer/html/preview.hpp"
 
 // =============================================================
 // المُنشئ: بناء الواجهة
@@ -237,18 +238,19 @@ void HoneyBeeWindow::on_url_activated() {
         // لاستخدامه في إعادة التحميل لاحقاً.
         m_current_url = url;
 
-        // نقتطع أول خمس مئة حرف فقط، لأن النص لا يصلح
-        // للنصوص الطويلة، وقد يُبطئ الواجهة.
-        constexpr std::size_t kMaxPreview = 500;
-        std::string preview = r.body.substr(0, kMaxPreview);
+        // Parse the HTML and extract a UI-ready preview.
+        // See renderer/html/preview.hpp for details.
+        const auto preview =
+            honeybee::renderer::html::make_preview(r.body);
 
-        // نُنبّه المستخدم أن المحتوى مقتطع.
-        if (r.body.size() > kMaxPreview) {
-            preview += "\n\n... اقتُطع المحتوى";
+        // If the page has a <title>, show it in the window title bar.
+        if (!preview.title.empty()) {
+            set_title(preview.title + " — HoneyBee");
         }
 
-        // عرض المحتوى في منطقة العرض.
-        m_label.set_text(preview);
+        m_label.set_text(preview.text.empty()
+                             ? "(empty page)"
+                             : preview.text);
         m_label.set_justify(Gtk::Justification::LEFT);
 
         // تحديث شريط الحالة بحجم المحتوى الكامل.
