@@ -47,6 +47,23 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM4 REQUIRED IMPORTED_TARGET gtkmm-4.0)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 
+# ----------------------------------------------------------------------------
+# lexbor: vendored HTML parser (submodule in third_party/lexbor)
+# ----------------------------------------------------------------------------
+# Configure lexbor before adding it: build static only, skip its tests,
+# examples, benchmarks, and install rules. We embed it, we don't install it.
+set(LEXBOR_BUILD_SHARED      OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_STATIC      ON  CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_TESTS_CPP   OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_BENCHMARKS  OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_UTILS       OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_WASM        OFF CACHE BOOL "" FORCE)
+set(LEXBOR_INSTALL_HEADERS   OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(third_party/lexbor EXCLUDE_FROM_ALL)
+
 # Add source directory
 add_subdirectory(src)
 add_subdirectory(tests)
