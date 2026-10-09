@@ -1,0 +1,123 @@
+[
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "f143ab",
+        "default": true,
+        "description": "Barrier affecting people with disabilities",
+        "id": 12248727592,
+        "name": "accessibility",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAKA",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/accessibility"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "d73a4a",
+        "default": true,
+        "description": "Something isn't working",
+        "id": 12248727608,
+        "name": "bug",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAOA",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/bug"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "0075ca",
+        "default": true,
+        "description": "Improvements or additions to documentation",
+        "id": 12248727619,
+        "name": "documentation",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAQw",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/documentation"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "cfd3d7",
+        "default": true,
+        "description": "This issue or pull request already exists",
+        "id": 12248727631,
+        "name": "duplicate",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTATw",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/duplicate"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "a2eeef",
+        "default": true,
+        "description": "New feature or request",
+        "id": 12248727644,
+        "name": "enhancement",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAXA",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/enhancement"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "7057ff",
+        "default": true,
+        "description": "Good for newcomers",
+        "id": 12248727657,
+        "name": "good first issue",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAaQ",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/good%20first%20issue"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "008672",
+        "default": true,
+        "description": "Extra attention is needed",
+        "id": 12248727670,
+        "name": "help wanted",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAdg",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/help%20wanted"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "fbca04",
+        "default": false,
+        "description": "قيد العمل حاليًا",
+        "id": 12285029297,
+        "name": "in-progress",
+        "node_id": "LA_kwDOUf6GX88AAAAC3D6rsQ",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/in-progress"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "e4e669",
+        "default": true,
+        "description": "This doesn't seem right",
+        "id": 12248727679,
+        "name": "invalid",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAfw",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/invalid"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "d876e3",
+        "default": true,
+        "description": "Further information is requested",
+        "id": 12248727693,
+        "name": "question",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAjQ",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/question"
+    },
+    {
+        "archived_at": null,
+        "archived_by": null,
+        "color": "ffffff",
+        "default": true,
+        "description": "This will not be worked on",
+        "id": 12248727702,
+        "name": "wontfix",
+        "node_id": "LA_kwDOUf6GX88AAAAC2hTAlg",
+        "url": "https://api.github.com/repos/HoneyBeeOne/honeybee-browser/labels/wontfix"
+    }
+]
