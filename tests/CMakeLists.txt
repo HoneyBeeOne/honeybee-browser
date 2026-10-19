@@ -2,8 +2,9 @@ add_executable(honeybee_tests
   test_version.cpp
   test_url.cpp
   test_net.cpp
+  test_dom.cpp
   test_lexbor_smoke.cpp
-  test_html_document.cpp
+  test_convert.cpp
   test_preview.cpp
 )
 
