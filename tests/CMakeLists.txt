@@ -5,6 +5,7 @@ add_executable(honeybee_tests
   test_dom.cpp
   test_selectors.cpp
   test_stylesheet.cpp
+  test_cascade.cpp
   test_lexbor_smoke.cpp
   test_convert.cpp
   test_preview.cpp
