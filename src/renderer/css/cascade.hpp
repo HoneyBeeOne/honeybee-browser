@@ -2,12 +2,9 @@
 // File: cascade.hpp
 // Purpose: CSS cascade (per ADR-010).
 //
-// Commit 1 of the cascade work: matching + specificity ordering.
-// Commit 2 adds inheritance + typed getters.
-//
-// Given a parsed Stylesheet and an owned DOM Document, produce a
-// per-element ComputedStyle by applying matching rules in
-// (important, specificity, source_order) order.
+// Computes per-element ComputedStyle by applying matching
+// rules in (important, specificity, source_order) order, then
+// propagating the seven inherited properties down the tree.
 // =============================================================
 
 #pragma once
@@ -15,6 +12,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "renderer/css/selectors.hpp"
@@ -23,9 +21,6 @@
 
 namespace honeybee::renderer::css {
 
-// One winning declaration for a property, with the coordinate
-// that determined the win (useful for debugging and for future
-// invalidation logic).
 struct CascadeValue {
     std::string value;
     bool important = false;
@@ -43,9 +38,11 @@ struct ComputedStyle {
 using ComputedStyleMap =
     std::unordered_map<const dom::Element*, ComputedStyle>;
 
-// Computes the cascade for every element in the document.
-// Commit 1: matching + specificity ordering only.
-// Commit 2 adds inheritance for the seven inherited properties.
+// True for the seven properties inherited in v1 per ADR-010:
+// color, font-family, font-size, font-style, font-weight,
+// line-height, visibility.
+bool is_inherited(std::string_view property);
+
 ComputedStyleMap cascade(const Stylesheet& sheet, const dom::Document& doc);
 
 } // namespace honeybee::renderer::css

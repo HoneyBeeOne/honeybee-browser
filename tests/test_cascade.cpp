@@ -160,3 +160,39 @@ TEST_CASE("cascade: later declaration in same rule wins",
         Stylesheet::parse("p { color: red; color: blue }"), *doc);
     CHECK(result.at(p).get("color").value_or("") == "blue");
 }
+
+// =============================================================
+// Inheritance tests (Commit 2).
+// =============================================================
+
+TEST_CASE("cascade: inherited property flows to descendant",
+          "[css][cascade][inheritance]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto result = cascade(Stylesheet::parse("body { color: navy }"), *doc);
+    CHECK(result.at(p).get("color").value_or("") == "navy");
+}
+
+TEST_CASE("cascade: own declaration beats inherited",
+          "[css][cascade][inheritance]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto result = cascade(
+        Stylesheet::parse("body { color: navy } p { color: red }"), *doc);
+    CHECK(result.at(p).get("color").value_or("") == "red");
+}
+
+TEST_CASE("cascade: non-inherited property does not propagate",
+          "[css][cascade][inheritance]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto result = cascade(
+        Stylesheet::parse("body { display: block }"), *doc);
+    CHECK_FALSE(result.at(p).get("display").has_value());
+}

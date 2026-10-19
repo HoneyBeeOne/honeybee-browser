@@ -1,14 +1,23 @@
 #include "renderer/css/cascade.hpp"
 
 #include <cstddef>
+#include <string_view>
 #include <utility>
 
 namespace honeybee::renderer::css {
 
+bool is_inherited(std::string_view property) {
+    return property == "color" ||
+           property == "font-family" ||
+           property == "font-size" ||
+           property == "font-style" ||
+           property == "font-weight" ||
+           property == "line-height" ||
+           property == "visibility";
+}
+
 namespace {
 
-// Returns true if `a` beats `b` for the same property.
-// Order per ADR-010: importance > specificity > source order.
 bool beats(const CascadeValue& a, const CascadeValue& b) {
     if (a.important != b.important) return a.important;
     if (a.specificity == b.specificity) {
@@ -17,10 +26,6 @@ bool beats(const CascadeValue& a, const CascadeValue& b) {
     return b.specificity < a.specificity;
 }
 
-// Apply one rule's declarations to `style`, if the rule's
-// selector list matches `el`. `counter` is a monotonic
-// per-element counter that captures "later in source order wins"
-// including later declarations within the same rule.
 void apply_rule(const Rule& rule, const dom::Element& el,
                 std::size_t& counter, ComputedStyle& style) {
     auto spec = rule.selectors.matches(el);
@@ -42,8 +47,8 @@ void apply_rule(const Rule& rule, const dom::Element& el,
     }
 }
 
-void walk(const dom::Node& node, const Stylesheet& sheet,
-          ComputedStyleMap& out) {
+void compute_styles(const dom::Node& node, const Stylesheet& sheet,
+                    ComputedStyleMap& out) {
     if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
         ComputedStyle style;
@@ -54,7 +59,34 @@ void walk(const dom::Node& node, const Stylesheet& sheet,
         out[&el] = std::move(style);
     }
     for (const auto& child : node.children()) {
-        walk(*child, sheet, out);
+        compute_styles(*child, sheet, out);
+    }
+}
+
+void propagate_inheritance(const dom::Node& node,
+                           ComputedStyleMap& out) {
+    if (node.type() == dom::NodeType::Element) {
+        const auto& el = static_cast<const dom::Element&>(node);
+        const dom::Node* parent_node = el.parent();
+        if (parent_node && parent_node->type() == dom::NodeType::Element) {
+            const auto* parent_el =
+                static_cast<const dom::Element*>(parent_node);
+            auto parent_it = out.find(parent_el);
+            if (parent_it != out.end()) {
+                auto& style = out[&el];
+                for (const auto& [prop, val] : parent_it->second.declarations) {
+                    if (!is_inherited(prop)) continue;
+                    if (style.declarations.find(prop) !=
+                        style.declarations.end()) {
+                        continue;
+                    }
+                    style.declarations[prop] = val;
+                }
+            }
+        }
+    }
+    for (const auto& child : node.children()) {
+        propagate_inheritance(*child, out);
     }
 }
 
@@ -73,7 +105,8 @@ ComputedStyle::get(const std::string& property) const {
 
 ComputedStyleMap cascade(const Stylesheet& sheet, const dom::Document& doc) {
     ComputedStyleMap out;
-    walk(doc, sheet, out);
+    compute_styles(doc, sheet, out);
+    propagate_inheritance(doc, out);
     return out;
 }
 
