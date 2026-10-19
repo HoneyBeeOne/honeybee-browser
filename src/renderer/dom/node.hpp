@@ -31,6 +31,8 @@ namespace honeybee::renderer::dom {
 
 enum class NodeType : std::uint8_t { Document, Element, Text };
 
+class Element;  // forward declaration
+
 class Node {
 public:
     virtual ~Node() = default;
@@ -50,7 +52,14 @@ public:
     void append_child(std::unique_ptr<Node> child);
 
     // Concatenated text of all descendant TextNodes, in document order.
+    // Per DOM spec: includes all text, including <title> and <head>.
     std::string text_content() const;
+
+    // First descendant element with the given tag name. Excludes this
+    // node itself. Returns nullptr if none found. The pointer is valid
+    // only while this node lives.
+    Element* find_element(std::string_view tag);
+    const Element* find_element(std::string_view tag) const;
 
 protected:
     Node() = default;
@@ -95,8 +104,8 @@ class Document final : public Node {
 public:
     NodeType type() const override { return NodeType::Document; }
 
-    // Returns the text content of the first <title> element found
-    // anywhere in the tree, or an empty string if none exists.
+    // Text content of the first <title> element found in the tree.
+    // Empty string if no <title> exists.
     std::string title() const;
 };
 

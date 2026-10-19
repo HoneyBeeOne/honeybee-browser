@@ -1,17 +1,22 @@
 // =============================================================
 // File: preview.cpp
 // Purpose: Implementation of make_preview().
+//
+// Builds on the owned DOM (via html::parse) and preserves the
+// original behavior: title from <title>, text from <body> only.
 // =============================================================
 
 #include "renderer/html/preview.hpp"
 
-#include "renderer/html/document.hpp"
+#include <string>
+
+#include "renderer/dom/node.hpp"
+#include "renderer/html/convert.hpp"
 
 namespace honeybee::renderer::html {
 
 namespace {
 
-// Cut `text` to at most `max_len` bytes. If truncated, append "...".
 std::string truncate_with_ellipsis(const std::string& text,
                                    std::size_t max_len) {
     if (text.size() <= max_len) {
@@ -25,13 +30,19 @@ std::string truncate_with_ellipsis(const std::string& text,
 } // namespace
 
 Preview make_preview(std::string_view html, std::size_t max_text) {
-    auto doc = Document::parse(html);
+    auto doc = parse(html);
     if (doc == nullptr) {
         return Preview{"Parse error", ""};
     }
+
+    // Old behavior: text was extracted from <body> only, not the whole
+    // document. Preserve that by navigating explicitly.
+    const dom::Element* body = doc->find_element("body");
+    const std::string text = body ? body->text_content() : std::string{};
+
     return Preview{
         doc->title(),
-        truncate_with_ellipsis(doc->text_content(), max_text)
+        truncate_with_ellipsis(text, max_text)
     };
 }
 

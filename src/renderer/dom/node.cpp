@@ -1,6 +1,5 @@
 #include "renderer/dom/node.hpp"
 
-#include <functional>
 #include <utility>
 
 namespace honeybee::renderer::dom {
@@ -23,6 +22,22 @@ std::string Node::text_content() const {
     return result;
 }
 
+Element* Node::find_element(std::string_view tag) {
+    return const_cast<Element*>(
+        static_cast<const Node*>(this)->find_element(tag));
+}
+
+const Element* Node::find_element(std::string_view tag) const {
+    for (const auto& child : children_) {
+        if (child->type() == NodeType::Element) {
+            const auto* el = static_cast<const Element*>(child.get());
+            if (el->tag() == tag) return el;
+        }
+        if (const Element* found = child->find_element(tag)) return found;
+    }
+    return nullptr;
+}
+
 Element::Element(std::string tag) : tag_(std::move(tag)) {}
 
 void Element::set_attribute(std::string name, std::string value) {
@@ -38,19 +53,8 @@ std::string Element::get_attribute(std::string_view name) const {
 TextNode::TextNode(std::string data) : data_(std::move(data)) {}
 
 std::string Document::title() const {
-    const Element* found = nullptr;
-    std::function<void(const Node*)> dfs = [&](const Node* node) {
-        if (found) return;
-        if (node->type() == NodeType::Element) {
-            const auto* el = static_cast<const Element*>(node);
-            if (el->tag() == "title") { found = el; return; }
-        }
-        for (const auto& child : node->children()) {
-            dfs(child.get());
-        }
-    };
-    dfs(this);
-    return found ? found->text_content() : std::string{};
+    const Element* el = find_element("title");
+    return el ? el->text_content() : std::string{};
 }
 
 } // namespace honeybee::renderer::dom
