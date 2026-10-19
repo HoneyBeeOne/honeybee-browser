@@ -5,6 +5,7 @@ add_library(honeybee_lib
   net/client.cpp
   renderer/dom/node.cpp
   renderer/css/selectors.cpp
+  renderer/css/stylesheet.cpp
   renderer/html/convert.cpp
   renderer/html/preview.cpp
 )
