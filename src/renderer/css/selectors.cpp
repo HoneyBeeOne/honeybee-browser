@@ -1,4 +1,5 @@
 #include "renderer/css/selectors.hpp"
+#include "renderer/dom/node.hpp"
 
 #include <utility>
 
@@ -269,6 +270,149 @@ Specificity Selector::specificity() const {
 std::optional<SelectorList> SelectorList::parse(std::string_view text) {
     Parser p(text);
     return p.parse_list();
+}
+
+
+// =============================================================
+// Matcher (Commit 2 of ADR-008).
+// =============================================================
+
+
+namespace {
+
+const dom::Node* previous_sibling(const dom::Node* node) {
+    if (!node) return nullptr;
+    const dom::Node* parent = node->parent();
+    if (!parent) return nullptr;
+    const auto& children = parent->children();
+    for (size_t i = 0; i < children.size(); ++i) {
+        if (children[i].get() == node) {
+            return i == 0 ? nullptr : children[i - 1].get();
+        }
+    }
+    return nullptr;
+}
+
+bool is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+bool contains_word(std::string_view text, std::string_view word) {
+    if (word.empty()) return false;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        while (pos < text.size() && is_ws(text[pos])) ++pos;
+        size_t start = pos;
+        while (pos < text.size() && !is_ws(text[pos])) ++pos;
+        if (text.substr(start, pos - start) == word) return true;
+    }
+    return false;
+}
+
+bool matches_attribute(const SimpleSelector& s, const dom::Element& el) {
+    const auto& attrs = el.attributes();
+    auto it = attrs.find(s.name);
+    if (it == attrs.end()) return false;
+    if (s.attr_match == AttributeMatch::Presence) return true;
+
+    const std::string& value = it->second;
+    // Per CSS: for non-Exact operators, an empty match value never matches.
+    if (s.attr_value.empty() && s.attr_match != AttributeMatch::Exact) {
+        return false;
+    }
+    switch (s.attr_match) {
+        case AttributeMatch::Presence: return true;
+        case AttributeMatch::Exact:    return value == s.attr_value;
+        case AttributeMatch::Prefix:   return value.starts_with(s.attr_value);
+        case AttributeMatch::Suffix:   return value.ends_with(s.attr_value);
+        case AttributeMatch::Contains:
+            return value.find(s.attr_value) != std::string::npos;
+        case AttributeMatch::Word:
+            return contains_word(value, s.attr_value);
+        case AttributeMatch::Hyphen:
+            if (value == s.attr_value) return true;
+            return value.size() > s.attr_value.size() &&
+                   value.starts_with(s.attr_value) &&
+                   value[s.attr_value.size()] == '-';
+    }
+    return false;
+}
+
+bool matches_simple(const SimpleSelector& s, const dom::Element& el) {
+    switch (s.kind) {
+        case SimpleKind::Universal:
+            return true;
+        case SimpleKind::Type:
+            return el.tag() == s.name;
+        case SimpleKind::Class: {
+            auto it = el.attributes().find("class");
+            if (it == el.attributes().end()) return false;
+            return contains_word(it->second, s.name);
+        }
+        case SimpleKind::Id: {
+            auto it = el.attributes().find("id");
+            return it != el.attributes().end() && it->second == s.name;
+        }
+        case SimpleKind::Attribute:
+            return matches_attribute(s, el);
+    }
+    return false;
+}
+
+bool matches_compound(const CompoundSelector& c, const dom::Element& el) {
+    for (const auto& s : c.simples) {
+        if (!matches_simple(s, el)) return false;
+    }
+    return true;
+}
+
+bool matches_from(const Selector& sel, const dom::Node* node, size_t index) {
+    if (!node || index >= sel.parts.size()) return false;
+    if (node->type() != dom::NodeType::Element) return false;
+
+    const auto* el = static_cast<const dom::Element*>(node);
+    if (!matches_compound(sel.parts[index].compound, *el)) return false;
+
+    if (index == 0) return true;
+
+    switch (sel.parts[index].combinator) {
+        case Combinator::None:
+            return false;
+        case Combinator::Child:
+            return matches_from(sel, node->parent(), index - 1);
+        case Combinator::Descendant:
+            for (const dom::Node* p = node->parent(); p; p = p->parent()) {
+                if (matches_from(sel, p, index - 1)) return true;
+            }
+            return false;
+        case Combinator::Adjacent:
+            return matches_from(sel, previous_sibling(node), index - 1);
+        case Combinator::Sibling:
+            for (const dom::Node* p = previous_sibling(node); p;
+                 p = previous_sibling(p)) {
+                if (matches_from(sel, p, index - 1)) return true;
+            }
+            return false;
+    }
+    return false;
+}
+
+} // namespace
+
+bool Selector::matches(const dom::Node& node) const {
+    if (parts.empty()) return false;
+    return matches_from(*this, &node, parts.size() - 1);
+}
+
+std::optional<Specificity>
+SelectorList::matches(const dom::Node& node) const {
+    std::optional<Specificity> best;
+    for (const auto& sel : selectors) {
+        if (!sel.matches(node)) continue;
+        const auto spec = sel.specificity();
+        if (!best || *best < spec) best = spec;
+    }
+    return best;
 }
 
 } // namespace honeybee::renderer::css

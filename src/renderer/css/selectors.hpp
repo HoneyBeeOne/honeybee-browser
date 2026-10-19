@@ -1,13 +1,12 @@
 // =============================================================
 // File: selectors.hpp
-// Purpose: CSS selector parsing and specificity (per ADR-008).
+// Purpose: CSS selector parsing, specificity, and matching
+//          (per ADR-008).
 //
-// Commit 1 of the selectors work: types, parser, specificity.
-// The matcher (matches()) is added in Commit 2.
-//
-// v1 scope per ADR-008: type, universal, class, id, attribute;
-// descendant, child, adjacent-sibling, general-sibling combinators;
-// selector lists. Pseudo-classes and pseudo-elements are deferred.
+// v1 scope per ADR-008: type, universal, class, id, attribute
+// selectors; descendant, child, adjacent-sibling, general-sibling
+// combinators; selector lists. Pseudo-classes and pseudo-elements
+// are deferred.
 // =============================================================
 
 #pragma once
@@ -16,6 +15,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace honeybee::renderer::dom { class Node; }
 
 namespace honeybee::renderer::css {
 
@@ -39,13 +40,13 @@ enum class SimpleKind {
 };
 
 enum class AttributeMatch {
-    Presence,   // [href]
-    Exact,      // [href="x"]
-    Prefix,     // [href^="x"]
-    Suffix,     // [href$="x"]
-    Contains,   // [href*="x"]
-    Word,       // [class~="x"]
-    Hyphen,     // [lang|="en"]
+    Presence,
+    Exact,
+    Prefix,
+    Suffix,
+    Contains,
+    Word,
+    Hyphen,
 };
 
 struct SimpleSelector {
@@ -75,12 +76,22 @@ struct Selector {
     std::vector<Part> parts;
 
     static std::optional<Selector> parse(std::string_view text);
+
+    // Right-to-left match: the rightmost compound must match `node`,
+    // then walk backwards through parents/siblings per combinator.
+    bool matches(const dom::Node& node) const;
+
     Specificity specificity() const;
 };
 
 struct SelectorList {
     std::vector<Selector> selectors;
+
     static std::optional<SelectorList> parse(std::string_view text);
+
+    // Specificity of the highest-specificity selector in the list
+    // that matches `node`, or nullopt if none match.
+    std::optional<Specificity> matches(const dom::Node& node) const;
 };
 
 } // namespace honeybee::renderer::css

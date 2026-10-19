@@ -1,4 +1,5 @@
 #include "renderer/css/selectors.hpp"
+#include "renderer/dom/node.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -177,4 +178,223 @@ TEST_CASE("malformed selector list returns nullopt", "[css][selectors]") {
         INFO("input: '" << t << "'");
         CHECK_FALSE(SelectorList::parse(t).has_value());
     }
+}
+
+// =============================================================
+// Matcher tests (Commit 2 of ADR-008).
+// Build a real DOM tree and exercise matches() on it.
+// =============================================================
+
+namespace {
+
+namespace dom = honeybee::renderer::dom;
+
+// Test tree:
+//   Document
+//     html
+//       head > title("Test Page")
+//       body
+//         div#main.container
+//           h1.title ("Heading")
+//           p.first  ("First paragraph")
+//           p.second > span.highlight ("highlighted")
+//         footer
+std::unique_ptr<dom::Document> build_test_tree() {
+    auto doc  = std::make_unique<dom::Document>();
+    auto html = std::make_unique<dom::Element>("html");
+
+    auto head = std::make_unique<dom::Element>("head");
+    auto title = std::make_unique<dom::Element>("title");
+    title->append_child(std::make_unique<dom::TextNode>("Test Page"));
+    head->append_child(std::move(title));
+    html->append_child(std::move(head));
+
+    auto body = std::make_unique<dom::Element>("body");
+
+    auto div = std::make_unique<dom::Element>("div");
+    div->set_attribute("id", "main");
+    div->set_attribute("class", "container");
+
+    auto h1 = std::make_unique<dom::Element>("h1");
+    h1->set_attribute("class", "title");
+    h1->append_child(std::make_unique<dom::TextNode>("Heading"));
+    div->append_child(std::move(h1));
+
+    auto p1 = std::make_unique<dom::Element>("p");
+    p1->set_attribute("class", "first");
+    p1->append_child(std::make_unique<dom::TextNode>("First paragraph"));
+    div->append_child(std::move(p1));
+
+    auto p2 = std::make_unique<dom::Element>("p");
+    p2->set_attribute("class", "second");
+    auto span = std::make_unique<dom::Element>("span");
+    span->set_attribute("class", "highlight");
+    span->append_child(std::make_unique<dom::TextNode>("highlighted"));
+    p2->append_child(std::move(span));
+    div->append_child(std::move(p2));
+
+    body->append_child(std::move(div));
+
+    auto footer = std::make_unique<dom::Element>("footer");
+    body->append_child(std::move(footer));
+
+    html->append_child(std::move(body));
+    doc->append_child(std::move(html));
+    return doc;
+}
+
+const dom::Element* nth_element_child(const dom::Node& parent, size_t n) {
+    size_t count = 0;
+    for (const auto& child : parent.children()) {
+        if (child->type() == dom::NodeType::Element) {
+            if (count == n)
+                return static_cast<const dom::Element*>(child.get());
+            ++count;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("matcher: type selector positive and negative",
+          "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* p1 = nth_element_child(*doc->find_element("div"), 1);
+    REQUIRE(p1);
+    CHECK(parse_ok("p").matches(*p1));
+    CHECK_FALSE(parse_ok("div").matches(*p1));
+    CHECK(parse_ok("*").matches(*p1));
+}
+
+TEST_CASE("matcher: class selector", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(parse_ok(".container").matches(*div));
+    CHECK_FALSE(parse_ok(".missing").matches(*div));
+    CHECK(parse_ok(".container.missing").matches(*div) == false);
+}
+
+TEST_CASE("matcher: id selector", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(parse_ok("#main").matches(*div));
+    CHECK_FALSE(parse_ok("#other").matches(*div));
+}
+
+TEST_CASE("matcher: attribute operators", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(parse_ok("[id]").matches(*div));
+    CHECK_FALSE(parse_ok("[missing]").matches(*div));
+    CHECK(parse_ok("[id=\"main\"]").matches(*div));
+    CHECK_FALSE(parse_ok("[id=\"other\"]").matches(*div));
+    CHECK(parse_ok("[id^=\"ma\"]").matches(*div));
+    CHECK(parse_ok("[id$=\"in\"]").matches(*div));
+    CHECK(parse_ok("[id*=\"ai\"]").matches(*div));
+    CHECK(parse_ok("[class~=\"container\"]").matches(*div));
+}
+
+TEST_CASE("matcher: hyphen attribute operator", "[css][matcher]") {
+    auto doc = std::make_unique<dom::Document>();
+    auto el = std::make_unique<dom::Element>("html");
+    el->set_attribute("lang", "en-GB");
+    doc->append_child(std::move(el));
+    const auto* html = doc->find_element("html");
+    REQUIRE(html);
+    CHECK(parse_ok("[lang|=\"en\"]").matches(*html));
+    CHECK(parse_ok("[lang|=\"en-GB\"]").matches(*html));
+    CHECK_FALSE(parse_ok("[lang|=\"e\"]").matches(*html));
+}
+
+TEST_CASE("matcher: descendant combinator", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* span = doc->find_element("span");
+    REQUIRE(span);
+    CHECK(parse_ok("div span").matches(*span));
+    CHECK(parse_ok("body span").matches(*span));
+    CHECK(parse_ok("html span").matches(*span));
+    CHECK_FALSE(parse_ok("footer span").matches(*span));
+    CHECK_FALSE(parse_ok("head span").matches(*span));
+}
+
+TEST_CASE("matcher: child combinator", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(parse_ok("body > div").matches(*div));
+    CHECK_FALSE(parse_ok("html > div").matches(*div));
+    CHECK_FALSE(parse_ok("body div").matches(*div) == false);  // descendant also matches
+}
+
+TEST_CASE("matcher: adjacent sibling combinator", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    const auto* p1 = nth_element_child(*div, 1);
+    const auto* p2 = nth_element_child(*div, 2);
+    REQUIRE(p1);
+    REQUIRE(p2);
+    CHECK(parse_ok("h1 + p").matches(*p1));
+    CHECK_FALSE(parse_ok("h1 + p").matches(*p2));
+    CHECK(parse_ok("p + p").matches(*p2));
+    CHECK_FALSE(parse_ok("p + p").matches(*p1));
+}
+
+TEST_CASE("matcher: general sibling combinator", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    const auto* p1 = nth_element_child(*div, 1);
+    const auto* p2 = nth_element_child(*div, 2);
+    REQUIRE(p1);
+    REQUIRE(p2);
+    CHECK(parse_ok("h1 ~ p").matches(*p1));
+    CHECK(parse_ok("h1 ~ p").matches(*p2));
+    CHECK_FALSE(parse_ok("p ~ h1").matches(*p1));
+    CHECK_FALSE(parse_ok("p ~ h1").matches(*p2));
+}
+
+TEST_CASE("matcher: compound selector", "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(parse_ok("div#main.container").matches(*div));
+    CHECK_FALSE(parse_ok("div#missing").matches(*div));
+    CHECK_FALSE(parse_ok("span#main").matches(*div));
+}
+
+TEST_CASE("matcher: full chain with multiple combinators",
+          "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* span = doc->find_element("span");
+    REQUIRE(span);
+    CHECK(parse_ok("div > p > span").matches(*span));
+    CHECK(parse_ok("body div span").matches(*span));
+    CHECK_FALSE(parse_ok("div > span").matches(*span));  // span's parent is p, not div
+}
+
+TEST_CASE("matcher: SelectorList returns highest matching specificity",
+          "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    auto list = SelectorList::parse("div, .container, #main");
+    REQUIRE(list);
+    const auto spec = list->matches(*div);
+    REQUIRE(spec);
+    CHECK(*spec == Specificity{1, 0, 0});  // #main wins
+}
+
+TEST_CASE("matcher: SelectorList returns nullopt when nothing matches",
+          "[css][matcher]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    auto list = SelectorList::parse(".nothing, [data-missing], #nope");
+    REQUIRE(list);
+    CHECK_FALSE(list->matches(*div).has_value());
 }
