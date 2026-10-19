@@ -84,3 +84,129 @@ TEST_CASE("stylesheet: semicolon at-rule skipped", "[css][stylesheet]") {
     const auto s = Stylesheet::parse("@import url(\"x.css\"); h1 {}");
     REQUIRE(s.rules.size() == 1);
 }
+
+// =============================================================
+// Declaration parsing (Commit 2).
+// =============================================================
+
+TEST_CASE("stylesheet: single declaration", "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red; }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK_FALSE(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: trailing semicolon optional",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[0].value == "red");
+}
+
+TEST_CASE("stylesheet: multiple declarations", "[css][stylesheet]") {
+    const auto s =
+        Stylesheet::parse("h1 { color: red; font-size: 24px; }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 2);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[1].property == "font-size");
+    CHECK(s.rules[0].declarations[1].value == "24px");
+}
+
+TEST_CASE("stylesheet: malformed declaration skipped, others kept",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse(
+        "h1 { color: red; broken ; font-size: 20px; }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 2);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[1].property == "font-size");
+}
+
+TEST_CASE("stylesheet: missing colon yields no declaration",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color }");
+    REQUIRE(s.rules.size() == 1);
+    CHECK(s.rules[0].declarations.empty());
+}
+
+TEST_CASE("stylesheet: empty property skipped", "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { : red }");
+    REQUIRE(s.rules.size() == 1);
+    CHECK(s.rules[0].declarations.empty());
+}
+
+TEST_CASE("stylesheet: empty value skipped", "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: }");
+    REQUIRE(s.rules.size() == 1);
+    CHECK(s.rules[0].declarations.empty());
+}
+
+TEST_CASE("stylesheet: whitespace around colon and semicolon trimmed",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 {   color   :   red   ;   }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[0].value == "red");
+}
+
+TEST_CASE("stylesheet: !important flag set", "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red !important; }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: !IMPORTANT case insensitive",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red !IMPORTANT }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: !important with no space before bang",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red!important }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: ! important with space after bang",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red ! important }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: no !important leaves flag false",
+          "[css][stylesheet]") {
+    const auto s = Stylesheet::parse("h1 { color: red }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK_FALSE(s.rules[0].declarations[0].important);
+}
+
+TEST_CASE("stylesheet: real-world example", "[css][stylesheet]") {
+    const auto s = Stylesheet::parse(
+        "h1 { color: navy; font-size: 24px; }\n"
+        "p { margin: 0 0 1em 0; }\n"
+        "a.link { color: blue !important; }\n");
+    REQUIRE(s.rules.size() == 3);
+    CHECK(s.rules[0].declarations.size() == 2);
+    CHECK(s.rules[1].declarations.size() == 1);
+    CHECK(s.rules[2].declarations.size() == 1);
+    CHECK(s.rules[2].declarations[0].important);
+}
