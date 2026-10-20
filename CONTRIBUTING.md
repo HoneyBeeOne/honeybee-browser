@@ -89,10 +89,8 @@ sudo apt install -y \
 ```bash
 git clone https://github.com/HoneyBeeOne/honeybee-browser.git
 cd honeybee-browser
-mkdir -p build
-cd build
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Debug
-ninja
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
 ```
 
 ### التشغيل
@@ -105,12 +103,52 @@ ninja
 
 ## 🧪 تشغيل الاختبارات
 
-البنية التحتية للاختبارات لم تُجهَّز بعد (المرحلة صفر). عند تجهيزها، ستُشغَّل عبر:
+البنية التحتية للاختبارات جاهزة. يوجد حاليًا **154 حالة اختبار و644 تأكيد**، كلها ناجحة.
 
 ```bash
-cd build
-ctest --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+./build/tests/honeybee_tests
 ```
+
+أو عبر CTest:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+الاختبارات لا تعتمد على GTK أو Pango، لذا تعمل headless داخل CI.
+
+## ⚠️ فخاخ شائعة
+
+مشاكل واجهناها فعليًا أثناء بناء المراحل الأولى. تجنبها يوفر ساعات.
+
+### 1. Bash history expansion on `!`
+
+كتابة `!` داخل رسالة الـ commit تُسبب خطأ `event not found`. الحل: اكتب الرسالة إلى ملف واستخدم `-F`:
+
+```bash
+cat << 'MSG' > /tmp/msg.txt
+docs: fix !important note
+MSG
+git commit -F /tmp/msg.txt
+```
+
+### 2. Heredoc `->` leaks as a shell redirect
+
+سطر markdown مثل `width: 50% -> parent_content_width` داخل heredoc قد يتسرب إذا أسقطت نافذة الطرفية سطرًا أثناء اللصق. في هذه الحالة `>` يصبح redirect ويُنشأ ملف فارغ باسم `parent_content_width`. دائمًا شغّل `git status` بعد كتابة heredoc كبير.
+
+### 3. `#include` inside a namespace
+
+لا تُدرج header داخل كتلة `namespace foo {`. الرموز القياسية ستحل كـ `foo::std::vector`، وستظهر رسائل خطأ مضللة بصيغة `foo::std::X does not name a type`.
+
+### 4. Version lives in two places
+
+`CMakeLists.txt` يحتوي على `VERSION 0.1.0` و `src/base/version.cpp` يحتوي على `return "0.1.0";`. عدّل الاثنين عند إصدار نسخة جديدة.
+
+### 5. Test tags
+
+حالة اختبار موسومة بـ `[length]` داخل `tests/test_layout.cpp` لا تُطابق فلتر `honeybee_tests "[layout]"`. إذا أعاد الفلتر عددًا أقل من المتوقع، تحقق من الوسوم قبل افتراض خطأ.
 
 ## 🙋 الحصول على المساعدة
 

@@ -10,6 +10,34 @@ HoneyBee is an open-source project where students from the Faculty of Computers 
 [![Good First Issues](https://img.shields.io/github/issues/HoneyBeeOne/honeybee-browser/good%20first%20issue.svg)](https://github.com/HoneyBeeOne/honeybee-browser/labels/good%20first%20issue)
 [![GitLab Mirror](https://img.shields.io/badge/GitLab-mirror-FC6D26?logo=gitlab&logoColor=white)](https://gitlab.com/amrmuhammad/honeybee-browser)
 
+## 📊 What Works Today
+
+HoneyBee is at **v0.1.0 (first paint)**. It parses HTML, cascades CSS, lays out block-level boxes, and paints via Cairo. Arabic text renders with correct letter-shaping through Pango.
+
+![HoneyBee rendering docs/demo.html](docs/demo-screenshot.png)
+
+| Feature | Status |
+|---|---|
+| HTML parsing (lexbor) | :white_check_mark: |
+| Owned DOM tree | :white_check_mark: |
+| CSS selector matching | :white_check_mark: |
+| CSS stylesheet parsing | :white_check_mark: |
+| Cascade (importance + specificity + inheritance) | :white_check_mark: |
+| Block-flow layout | :white_check_mark: |
+| Cairo paint (backgrounds, borders, text) | :white_check_mark: |
+| Box shorthands (`margin: 10px 20px`) | :white_check_mark: |
+| Length units (`px`, `em`, `rem`, `%`, `auto`) | :white_check_mark: |
+| Arabic text shaping | :white_check_mark: |
+| Inline formatting (`span`, `a`, `em`) | :x: |
+| UA stylesheet (default `<h1>`, `<p>` margins) | :x: |
+| Pseudo-classes (`:hover`, `:link`) | :x: |
+| `@media` queries | :x: |
+| `border-radius`, `box-shadow` | :x: |
+
+For the full picture -- including a per-property breakdown of why example.com still differs from Firefox -- see [`docs/current-state.md`](docs/current-state.md).
+
+Try it: load [`docs/demo.html`](docs/demo.html) in the built browser to see the render above.
+
 ## 🎯 Our Vision
 
 To create a fully functional, open-source web browser built entirely by the student community at Cairo University, providing an unparalleled learning experience in large-scale software engineering.
