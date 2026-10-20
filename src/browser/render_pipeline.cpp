@@ -5,6 +5,7 @@
 
 #include "pango_text.hpp"
 #include "renderer/css/cascade.hpp"
+#include "renderer/css/ua_stylesheet.hpp"
 #include "renderer/css/stylesheet.hpp"
 #include "renderer/html/convert.hpp"
 #include "renderer/layout/layout.hpp"
@@ -52,7 +53,8 @@ void RenderPipeline::relayout(float viewport_width) {
 
     const std::string css = extract_inline_css(*doc_);
     auto sheet = renderer::css::Stylesheet::parse(css);
-    auto styles = renderer::css::cascade(sheet, *doc_);
+    auto styles = renderer::css::cascade(
+        renderer::css::ua_stylesheet(), sheet, *doc_);
 
     layout_root_ = renderer::layout::layout(
         *doc_, styles, &measure_with_pango, viewport_width);

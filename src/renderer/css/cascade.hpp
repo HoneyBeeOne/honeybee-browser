@@ -1,15 +1,16 @@
 // =============================================================
 // File: cascade.hpp
-// Purpose: CSS cascade (per ADR-010).
+// Purpose: CSS cascade (per ADR-010, extended per ADR-014).
 //
-// Computes per-element ComputedStyle by applying matching
-// rules in (important, specificity, source_order) order, then
-// propagating the seven inherited properties down the tree.
+// Per-element ComputedStyle from matching rules in
+// (important, origin, specificity, source_order) order, with
+// inheritance for the seven properties declared inherited.
 // =============================================================
 
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,9 +22,18 @@
 
 namespace honeybee::renderer::css {
 
+// Cascade origin per CSS 2.1 section 6.4.1. For normal
+// declarations, Author wins over UserAgent regardless of
+// specificity. For important declarations, the order inverts
+// (UserAgent wins), but v1 has no UA-important rules, so the
+// important-origin case is not exercised; a future ADR that
+// adds UA !important rules will extend beats() accordingly.
+enum class Origin : std::uint8_t { UserAgent, Author };
+
 struct CascadeValue {
     std::string value;
     bool important = false;
+    Origin origin = Origin::Author;
     Specificity specificity;
     std::size_t source_order = 0;
 };
@@ -38,11 +48,21 @@ struct ComputedStyle {
 using ComputedStyleMap =
     std::unordered_map<const dom::Element*, ComputedStyle>;
 
-// True for the seven properties inherited in v1 per ADR-010:
-// color, font-family, font-size, font-style, font-weight,
-// line-height, visibility.
 bool is_inherited(std::string_view property);
 
-ComputedStyleMap cascade(const Stylesheet& sheet, const dom::Document& doc);
+// Two-sheet form (ADR-014): apply ua_sheet first, then
+// author_sheet. Author normal declarations override UA normal
+// declarations regardless of specificity (CSS 2.1 section
+// 6.4.1).
+ComputedStyleMap cascade(const Stylesheet& ua_sheet,
+                         const Stylesheet& author_sheet,
+                         const dom::Document& doc);
+
+// Single-sheet form: equivalent to the two-sheet form with an
+// empty UA stylesheet. Kept so existing tests and any future
+// headless entry point that doesn't want UA defaults compile
+// unchanged.
+ComputedStyleMap cascade(const Stylesheet& author_sheet,
+                         const dom::Document& doc);
 
 } // namespace honeybee::renderer::css
