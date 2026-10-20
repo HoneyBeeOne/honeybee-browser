@@ -10,6 +10,7 @@ add_library(honeybee_lib
   renderer/css/ua_stylesheet.cpp
   renderer/layout/style_values.cpp
   renderer/layout/layout.cpp
+  renderer/layout/text_utils.cpp
   renderer/paint/paint.cpp
   renderer/html/convert.cpp
   renderer/html/preview.cpp

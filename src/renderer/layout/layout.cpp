@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "renderer/layout/style_values.hpp"
+#include "renderer/layout/text_utils.hpp"
 
 namespace honeybee::renderer::layout {
 
@@ -160,10 +161,12 @@ LayoutBox layout_element(const dom::Element& el,
             box.children.push_back(std::move(child_box));
         } else if (child->type() == dom::NodeType::Text) {
             const auto& text_node = static_cast<const dom::TextNode&>(*child);
+            std::string collapsed = collapse_whitespace(text_node.data());
+            if (collapsed.empty()) continue;
             auto lt = std::make_unique<LayoutText>();
             lt->x = content_x;
             lt->y = cursor_y;
-            lt->text = text_node.data();
+            lt->text = std::move(collapsed);
             lt->font_family = font_family_of(style);
             lt->font_size = own_font_size;
             lt->color = text_color_of(style);

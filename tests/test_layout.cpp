@@ -8,6 +8,7 @@
 #include "renderer/html/convert.hpp"
 #include "renderer/layout/layout.hpp"
 #include "renderer/layout/style_values.hpp"
+#include "renderer/layout/text_utils.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -400,4 +401,97 @@ TEST_CASE("layout: auto margin with padding and border",
     REQUIRE(ps.size() == 1);
     CHECK(ps[0]->margin[3] == 135.0f);
     CHECK(ps[0]->margin[1] == 135.0f);
+}
+
+// =============================================================
+// Text utilities (ADR-015, Commit 1).
+// =============================================================
+
+TEST_CASE("collapse_whitespace: basic collapse", "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("a b c") == "a b c");
+    CHECK(layout::collapse_whitespace("a   b") == "a b");
+    CHECK(layout::collapse_whitespace("a\t\nb") == "a b");
+    CHECK(layout::collapse_whitespace("a\r\n\t b") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: trims", "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("") == "");
+    CHECK(layout::collapse_whitespace("   ") == "");
+    CHECK(layout::collapse_whitespace("\n\t ") == "");
+    CHECK(layout::collapse_whitespace("   a") == "a");
+    CHECK(layout::collapse_whitespace("a   ") == "a");
+    CHECK(layout::collapse_whitespace("  a  b  ") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: preserves nbsp", "[layout][text_utils]") {
+    // U+00A0 in UTF-8 is 0xC2 0xA0. Not in the ASCII whitespace
+    // set, so it survives collapsing unchanged.
+    CHECK(layout::collapse_whitespace("a\xC2\xA0\xC2\xA0" "b") == "a\xC2\xA0\xC2\xA0" "b");
+    CHECK(layout::collapse_whitespace("a   b") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: doesn't touch internal content",
+          "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("hello world") == "hello world");
+    CHECK(layout::collapse_whitespace("foo-bar_baz") == "foo-bar_baz");
+}
+
+TEST_CASE("detect_rtl: Arabic", "[layout][text_utils]") {
+    CHECK(layout::detect_rtl("\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85"));   // السلام
+    CHECK(layout::detect_rtl("\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7"));           // مرحبا
+}
+
+TEST_CASE("detect_rtl: Hebrew", "[layout][text_utils]") {
+    // Hebrew word "shalom"
+    CHECK(layout::detect_rtl("\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d"));
+}
+
+TEST_CASE("detect_rtl: Latin", "[layout][text_utils]") {
+    CHECK_FALSE(layout::detect_rtl("Hello"));
+    CHECK_FALSE(layout::detect_rtl("world"));
+    CHECK_FALSE(layout::detect_rtl("Hello World"));
+}
+
+TEST_CASE("detect_rtl: first strong char wins", "[layout][text_utils]") {
+    // Latin first -> LTR (even though Arabic appears later)
+    CHECK_FALSE(layout::detect_rtl(
+        "Hello \xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85"));
+    // Arabic first -> RTL (even though Latin appears later)
+    CHECK(layout::detect_rtl(
+        "\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85 Hello"));
+}
+
+TEST_CASE("detect_rtl: default LTR for no strong chars",
+          "[layout][text_utils]") {
+    CHECK_FALSE(layout::detect_rtl(""));
+    CHECK_FALSE(layout::detect_rtl("123"));
+    CHECK_FALSE(layout::detect_rtl("   "));
+    CHECK_FALSE(layout::detect_rtl("!@#$%"));
+    CHECK_FALSE(layout::detect_rtl("  123  !@#  "));
+}
+
+TEST_CASE("layout: collapses whitespace in text nodes",
+          "[layout][text_utils]") {
+    auto t = run("<p>hello    world</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "hello world");
+}
+
+TEST_CASE("layout: skips whitespace-only text nodes",
+          "[layout][text_utils]") {
+    // A div with only whitespace between tags should produce no
+    // text layout child (the collapse produces an empty string,
+    // which the layout branch skips).
+    auto t = run("<div>   \n\t   </div>", "");
+    const auto texts = find_all_texts(t.root);
+    CHECK(texts.empty());
+}
+
+TEST_CASE("layout: trims leading and trailing whitespace",
+          "[layout][text_utils]") {
+    auto t = run("<p>   trimmed   </p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "trimmed");
 }
