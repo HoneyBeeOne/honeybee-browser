@@ -9,6 +9,7 @@ add_library(honeybee_lib
   renderer/css/cascade.cpp
   renderer/layout/style_values.cpp
   renderer/layout/layout.cpp
+  renderer/paint/paint.cpp
   renderer/html/convert.cpp
   renderer/html/preview.cpp
 )
@@ -20,6 +21,7 @@ target_include_directories(honeybee_lib PUBLIC
 # ربط CURL كمكتبة عامة، حتى يرثها التنفيذي والاختبارات
 target_link_libraries(honeybee_lib PUBLIC
   PkgConfig::CURL
+  PkgConfig::CAIRO
 )
 
 # lexbor is a private implementation detail of the HTML parser.

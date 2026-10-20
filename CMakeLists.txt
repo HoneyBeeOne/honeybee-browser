@@ -46,6 +46,7 @@ FetchContent_MakeAvailable(Catch2)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM4 REQUIRED IMPORTED_TARGET gtkmm-4.0)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 
 # ----------------------------------------------------------------------------
 # lexbor: vendored HTML parser (submodule in third_party/lexbor)
