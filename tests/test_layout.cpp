@@ -250,3 +250,49 @@ TEST_CASE("layout: <script> is not rendered", "[layout][skip]") {
         CHECK(text->text.find("alert") == std::string::npos);
     }
 }
+
+// =============================================================
+// Shorthand expansion consumption in layout (ADR-012).
+// =============================================================
+
+TEST_CASE("layout: margin two values", "[layout][shorthand]") {
+    auto t = run("<p>Hi</p>", "p { margin: 10px 20px }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->margin[0] == 10.0f);
+    CHECK(ps[0]->margin[1] == 20.0f);
+    CHECK(ps[0]->margin[2] == 10.0f);
+    CHECK(ps[0]->margin[3] == 20.0f);
+    CHECK(ps[0]->width == 760.0f);
+}
+
+TEST_CASE("layout: padding four values", "[layout][shorthand]") {
+    auto t = run("<p>Hi</p>", "p { padding: 1px 2px 3px 4px }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->padding[0] == 1.0f);
+    CHECK(ps[0]->padding[1] == 2.0f);
+    CHECK(ps[0]->padding[2] == 3.0f);
+    CHECK(ps[0]->padding[3] == 4.0f);
+}
+
+TEST_CASE("layout: border-width two values", "[layout][shorthand]") {
+    auto t = run("<p>Hi</p>", "p { border-width: 1px 2px }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->border[0] == 1.0f);
+    CHECK(ps[0]->border[1] == 2.0f);
+    CHECK(ps[0]->border[2] == 1.0f);
+    CHECK(ps[0]->border[3] == 2.0f);
+}
+
+TEST_CASE("layout: longhand margin-top works", "[layout][shorthand]") {
+    auto t = run("<p>Hi</p>", "p { margin-top: 10px }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->margin[0] == 10.0f);
+    CHECK(ps[0]->margin[1] == 0.0f);
+    CHECK(ps[0]->margin[2] == 0.0f);
+    CHECK(ps[0]->margin[3] == 0.0f);
+    CHECK(ps[0]->y == 10.0f);
+}

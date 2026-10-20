@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace honeybee::renderer::css {
 
@@ -58,12 +59,8 @@ std::string trim(std::string_view s) {
     return std::string(s.substr(b, e - b));
 }
 
-// Detect and strip a trailing !important. Case-insensitive per
-// CSS spec, and whitespace between '!' and 'important' is allowed.
-// Returns true if !important was present (and removed).
 bool strip_important(std::string& value) {
     const size_t e = value.size();
-    // Find last '!'
     size_t bang = std::string::npos;
     for (size_t k = e; k > 0; --k) {
         if (value[k - 1] == '!') { bang = k - 1; break; }
@@ -83,14 +80,98 @@ bool strip_important(std::string& value) {
         if (c != kTarget[k]) return false;
     }
 
-    // Strip !important plus any trailing whitespace before it.
     size_t new_e = bang;
     while (new_e > 0 && is_ws(value[new_e - 1])) --new_e;
     value.resize(new_e);
     return true;
 }
 
-// Parse one declaration; malformed chunks are skipped silently.
+// Split on whitespace into tokens. Returns one token per
+// contiguous non-whitespace run.
+std::vector<std::string> split_tokens(std::string_view s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && is_ws(s[i])) ++i;
+        if (i >= s.size()) break;
+        const size_t start = i;
+        while (i < s.size() && !is_ws(s[i])) ++i;
+        out.emplace_back(s.substr(start, i - start));
+    }
+    return out;
+}
+
+bool is_box_shorthand(std::string_view prop) {
+    return prop == "margin" || prop == "padding" ||
+           prop == "border-width";
+}
+
+// Push one declaration, expanding if it's a box shorthand.
+// ADR-012: 1/2/3/4 tokens -> top/right/bottom/left longhands.
+void expand_shorthand(std::string_view property, std::string_view value,
+                      bool important, std::vector<Declaration>& out) {
+    if (!is_box_shorthand(property)) {
+        Declaration d;
+        d.property = std::string(property);
+        d.value = std::string(value);
+        d.important = important;
+        out.push_back(std::move(d));
+        return;
+    }
+
+    const auto tokens = split_tokens(value);
+    if (tokens.empty() || tokens.size() > 4) return;
+
+    std::string top, right, bottom, left;
+    switch (tokens.size()) {
+        case 1:
+            top = right = bottom = left = tokens[0];
+            break;
+        case 2:
+            top = bottom = tokens[0];
+            right = left = tokens[1];
+            break;
+        case 3:
+            top = tokens[0];
+            right = left = tokens[1];
+            bottom = tokens[2];
+            break;
+        case 4:
+            top = tokens[0];
+            right = tokens[1];
+            bottom = tokens[2];
+            left = tokens[3];
+            break;
+    }
+
+    const char* longhand_names[4] = {nullptr, nullptr, nullptr, nullptr};
+    if (property == "margin") {
+        longhand_names[0] = "margin-top";
+        longhand_names[1] = "margin-right";
+        longhand_names[2] = "margin-bottom";
+        longhand_names[3] = "margin-left";
+    } else if (property == "padding") {
+        longhand_names[0] = "padding-top";
+        longhand_names[1] = "padding-right";
+        longhand_names[2] = "padding-bottom";
+        longhand_names[3] = "padding-left";
+    } else if (property == "border-width") {
+        longhand_names[0] = "border-top-width";
+        longhand_names[1] = "border-right-width";
+        longhand_names[2] = "border-bottom-width";
+        longhand_names[3] = "border-left-width";
+    }
+
+    const std::string* values[4] = {&top, &right, &bottom, &left};
+    for (int k = 0; k < 4; ++k) {
+        Declaration d;
+        d.property = longhand_names[k];
+        d.value = *values[k];
+        d.important = important;
+        out.push_back(std::move(d));
+    }
+}
+
 void add_declaration(std::string_view raw, std::vector<Declaration>& out) {
     const std::string trimmed = trim(raw);
     if (trimmed.empty()) return;
@@ -106,11 +187,7 @@ void add_declaration(std::string_view raw, std::vector<Declaration>& out) {
     const bool important = strip_important(value);
     if (value.empty()) return;
 
-    Declaration d;
-    d.property = std::move(property);
-    d.value = std::move(value);
-    d.important = important;
-    out.push_back(std::move(d));
+    expand_shorthand(property, value, important, out);
 }
 
 // Split a declaration block on top-level ';', respecting nested
