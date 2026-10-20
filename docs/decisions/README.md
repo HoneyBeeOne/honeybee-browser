@@ -16,11 +16,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 011 | [The First Paint](011-first-paint.md) | Two-stage layout + paint pipeline |
 | 012 | [Shorthand Expansion](012-shorthand-expansion.md) | Parse-time expansion of box shorthands |
 | 013 | [Length Units and Auto Margins](013-length-units.md) | em/rem/%/auto with LengthContext |
+| 014 | [User-Agent Stylesheet](014-ua-stylesheet.md) | UA defaults + origin-aware cascade |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 013 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 014 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.

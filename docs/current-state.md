@@ -30,6 +30,7 @@ To reproduce: clone the repo, build, then load `docs/demo.html` in the browser (
 | Block-flow layout: box model, width fills parent, height derived | #110 |
 | Cairo paint: background-color, border, text | #110 |
 | Arabic text with correct letter joining (via Pango) | #110 |
+| UA stylesheet: body margin, heading sizes, paragraph gaps | #121 |
 
 ## What does NOT render yet
 
@@ -37,7 +38,6 @@ To reproduce: clone the repo, build, then load `docs/demo.html` in the browser (
 |---|---|---|
 | Inline formatting (`<span>`, `<a>`, `<em>`) | layout is block-only | future ADR |
 | Text wrapping | single line per text node | inline formatting ADR |
-| UA stylesheet (`<h1>` at 2em, `<p>` paragraph gaps) | not implemented | ADR-014 (next) |
 | Pseudo-classes (`:hover`, `:link`, `:visited`) | not in selector parser | future ADR |
 | Pseudo-elements (`::before`, `::after`) | not in selector parser | future ADR |
 | `@media` queries | at-rules skipped by parser | future ADR |
@@ -70,6 +70,12 @@ Of the ~10 properties here, HoneyBee renders **two**: `margin: auto` (which corr
 | `margin: auto` | 0 (correct -- no slack) | works, but no effect without `max-width` |
 | `padding: 25vh 2em 2em` | partial -- `25vh` becomes 0 | `vh` not implemented; `2em` works |
 | `text-align: center` | ignored | not implemented |
+
+After ADR-014, the paragraph also gains UA `p { margin: 1em 0 }`
+-- visible as about 16px of whitespace above and below the
+text. The author `body { margin: auto }` correctly overrides UA
+`body { margin: 8px }`; that override is the origin-aware
+cascade working as designed.
 
 **This is not a bug.** It is a page that uses CSS features HoneyBee does not support yet. When those features land via future ADRs, example.com will render closer to Firefox.
 
