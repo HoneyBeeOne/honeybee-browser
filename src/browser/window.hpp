@@ -27,11 +27,13 @@
 #include <gtkmm.h>
 
 // استيراد نوع النص المعياري، لتخزين الرابط الحالي.
+#include <memory>
 #include <string>
 
 // استيراد إعلان الجالب اللاتزامني، لأن النافذة
 // تحتوي عليه كعضو.
 #include "browser/async_fetcher.hpp"
+#include "browser/render_pipeline.hpp"
 
 // الصنف: نافذة هَني بي.
 // يرث من نافذة الواجهة، فيرث كل خصائص النافذة العادية:
@@ -105,7 +107,7 @@ private:
     // في المرحلة الحالية، نعرض أول خمس مئة حرف من
     // المحتوى. وفي المراحل التالية، سيُستبدَل بمحرك
     // عرض حقيقي.
-    Gtk::Label m_label;
+    Gtk::DrawingArea m_drawing_area;
 
     // شريط الحالة: تخطيط أفقي.
     // يحتوي على رسالة الحالة ورقم الإصدار.
@@ -131,4 +133,16 @@ private:
     // ويُبلِّغ الخيط الرئيسي عند الانتهاء.
     // هذا يمنع تجمّد الواجهة أثناء الجلب.
     AsyncFetcher m_async_fetcher;
+
+    // Pipeline: HTML -> layout tree (owns the parsed DOM).
+    honeybee::browser::RenderPipeline m_pipeline;
+
+    // Width used in the last layout pass. -1 forces relayout.
+    int m_last_width = -1;
+
+    // Draw handler for the view area (Gtk::DrawingArea).
+    void on_draw(const Cairo::RefPtr<Cairo::Context>& cr, int width, int height);
+
+    // Run the full pipeline and repaint.
+    void render_html(const std::string& html);
 };

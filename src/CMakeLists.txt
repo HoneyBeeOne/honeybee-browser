@@ -37,6 +37,8 @@ add_executable(honeybee
   browser/app.cpp
   browser/window.cpp
   browser/async_fetcher.cpp
+  browser/pango_text.cpp
+  browser/render_pipeline.cpp
 )
 
 target_include_directories(honeybee PRIVATE
