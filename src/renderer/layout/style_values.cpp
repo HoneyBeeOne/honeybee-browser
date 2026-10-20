@@ -26,27 +26,80 @@ int hex_digit(char c) {
     return -1;
 }
 
+bool has_internal_ws(std::string_view s) {
+    for (char c : s) if (is_ws(c)) return true;
+    return false;
+}
+
+bool ends_with(std::string_view s, std::string_view suffix) {
+    return s.size() >= suffix.size() &&
+           s.substr(s.size() - suffix.size()) == suffix;
+}
+
 } // namespace
 
 float parse_px(std::string_view s) {
     s = trim(s);
     if (s.empty()) return 0.0f;
-
-    // Reject multi-value input like "10px 20px".
-    for (char c : s) {
-        if (is_ws(c)) return 0.0f;
-    }
-
-    // Must end with "px".
+    if (has_internal_ws(s)) return 0.0f;
     if (s.size() < 3) return 0.0f;
-    if (s.substr(s.size() - 2) != "px") return 0.0f;
-
-    const std::string num_str(s.substr(0, s.size() - 2));
+    if (!ends_with(s, "px")) return 0.0f;
     try {
-        return std::stof(num_str);
+        return std::stof(std::string(s.substr(0, s.size() - 2)));
     } catch (...) {
         return 0.0f;
     }
+}
+
+float parse_length(std::string_view s, const LengthContext& ctx) {
+    s = trim(s);
+    if (s.empty()) return 0.0f;
+    if (has_internal_ws(s)) return 0.0f;
+    if (s == "auto") return 0.0f;
+
+    enum Unit { PX, EM, REM, PCT } unit;
+    size_t suffix_len = 0;
+
+    if (ends_with(s, "px")) {
+        unit = PX; suffix_len = 2;
+    } else if (ends_with(s, "rem")) {
+        unit = REM; suffix_len = 3;
+    } else if (ends_with(s, "em")) {
+        unit = EM; suffix_len = 2;
+    } else if (ends_with(s, "%")) {
+        unit = PCT; suffix_len = 1;
+    } else {
+        return 0.0f;
+    }
+
+    if (s.size() <= suffix_len) return 0.0f;
+
+    float n = 0.0f;
+    try {
+        n = std::stof(std::string(s.substr(0, s.size() - suffix_len)));
+    } catch (...) {
+        return 0.0f;
+    }
+
+    switch (unit) {
+        case PX:
+            return n;
+        case EM: {
+            const float ref = ctx.on_font_size_property
+                                  ? ctx.parent_font_size
+                                  : ctx.font_size;
+            return n * ref;
+        }
+        case REM:
+            return n * ctx.root_font_size;
+        case PCT:
+            return (n / 100.0f) * ctx.parent_content_width;
+    }
+    return 0.0f;
+}
+
+bool is_auto(std::string_view s) {
+    return trim(s) == "auto";
 }
 
 Color parse_color(std::string_view s) {
@@ -77,7 +130,6 @@ Color parse_color(std::string_view s) {
     auto it = named.find(key);
     if (it != named.end()) return it->second;
 
-    // Hex colors: #rgb, #rrggbb.
     if (!key.empty() && key[0] == '#') {
         const std::string hex = key.substr(1);
         if (hex.size() == 3) {
