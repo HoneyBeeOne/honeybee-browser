@@ -9,7 +9,6 @@ namespace honeybee::renderer::css {
 bool is_inherited(std::string_view property) {
     return property == "color" ||
            property == "font-family" ||
-           property == "font-size" ||
            property == "font-style" ||
            property == "font-weight" ||
            property == "line-height" ||

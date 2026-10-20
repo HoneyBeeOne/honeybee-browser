@@ -296,3 +296,108 @@ TEST_CASE("layout: longhand margin-top works", "[layout][shorthand]") {
     CHECK(ps[0]->margin[3] == 0.0f);
     CHECK(ps[0]->y == 10.0f);
 }
+
+// ---------------- parse_length (ADR-013 Stage A) ----------------
+
+TEST_CASE("parse_length: px is absolute", "[length]") {
+    layout::LengthContext ctx;
+    CHECK(layout::parse_length("16px", ctx) == 16.0f);
+    CHECK(layout::parse_length("0px", ctx) == 0.0f);
+    CHECK(layout::parse_length("  12px  ", ctx) == 12.0f);
+}
+
+TEST_CASE("parse_length: em uses own font-size", "[length]") {
+    layout::LengthContext ctx;
+    ctx.font_size = 20.0f;
+    CHECK(layout::parse_length("2em", ctx) == 40.0f);
+    CHECK(layout::parse_length("0.5em", ctx) == 10.0f);
+}
+
+TEST_CASE("parse_length: em on font-size uses parent", "[length]") {
+    layout::LengthContext ctx;
+    ctx.font_size = 20.0f;
+    ctx.parent_font_size = 24.0f;
+    ctx.on_font_size_property = true;
+    CHECK(layout::parse_length("1.5em", ctx) == 36.0f);
+}
+
+TEST_CASE("parse_length: rem uses root font-size", "[length]") {
+    layout::LengthContext ctx;
+    ctx.root_font_size = 20.0f;
+    CHECK(layout::parse_length("2rem", ctx) == 40.0f);
+    CHECK(layout::parse_length("0.5rem", ctx) == 10.0f);
+}
+
+TEST_CASE("parse_length: percent uses parent width", "[length]") {
+    layout::LengthContext ctx;
+    ctx.parent_content_width = 800.0f;
+    CHECK(layout::parse_length("50%", ctx) == 400.0f);
+    CHECK(layout::parse_length("10%", ctx) == 80.0f);
+}
+
+TEST_CASE("parse_length: auto and unknown units return 0", "[length]") {
+    layout::LengthContext ctx;
+    CHECK(layout::parse_length("auto", ctx) == 0.0f);
+    CHECK(layout::parse_length("2vw", ctx) == 0.0f);
+    CHECK(layout::parse_length("", ctx) == 0.0f);
+    CHECK(layout::parse_length("10", ctx) == 0.0f);
+    CHECK(layout::parse_length("10px 20px", ctx) == 0.0f);
+}
+
+TEST_CASE("is_auto: detects auto with whitespace", "[length]") {
+    CHECK(layout::is_auto("auto"));
+    CHECK(layout::is_auto("  auto  "));
+    CHECK_FALSE(layout::is_auto(""));
+    CHECK_FALSE(layout::is_auto("10px"));
+    CHECK_FALSE(layout::is_auto("autos"));
+}
+
+// ---------------- Auto margins (ADR-013 Stage C) ----------------
+
+TEST_CASE("layout: margin 0 auto centers explicit-width box",
+          "[layout][auto]") {
+    auto t = run("<p>Hi</p>",
+                 "p { width: 600px; margin-left: auto; margin-right: auto }",
+                 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->width == 600.0f);
+    CHECK(ps[0]->margin[3] == 100.0f);
+    CHECK(ps[0]->margin[1] == 100.0f);
+    CHECK(ps[0]->x == 100.0f);
+}
+
+TEST_CASE("layout: only margin-left auto pushes right",
+          "[layout][auto]") {
+    auto t = run("<p>Hi</p>",
+                 "p { width: 600px; margin-left: auto }",
+                 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->margin[3] == 200.0f);
+    CHECK(ps[0]->margin[1] == 0.0f);
+}
+
+TEST_CASE("layout: auto with auto width does not center",
+          "[layout][auto]") {
+    auto t = run("<p>Hi</p>",
+                 "p { margin-left: auto; margin-right: auto }",
+                 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->width == 800.0f);
+    CHECK(ps[0]->margin[3] == 0.0f);
+    CHECK(ps[0]->margin[1] == 0.0f);
+}
+
+TEST_CASE("layout: auto margin with padding and border",
+          "[layout][auto]") {
+    auto t = run("<p>Hi</p>",
+                 "p { width: 500px; padding: 10px; border-width: 5px; "
+                 "    margin-left: auto; margin-right: auto }",
+                 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    CHECK(ps[0]->margin[3] == 135.0f);
+    CHECK(ps[0]->margin[1] == 135.0f);
+}

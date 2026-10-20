@@ -1,10 +1,10 @@
 // =============================================================
 // File: style_values.hpp
-// Purpose: Parse CSS values used by layout (per ADR-011).
+// Purpose: Parse CSS values used by layout (per ADR-011, ADR-013).
 //
-// v1 only supports single-value "Npx" for lengths and named/hex
-// colors. Multi-value shorthand, rgb(), hsl(), em/rem etc. are
-// deferred per ADR-011.
+// ADR-013 adds LengthContext and parse_length for px/em/rem/%.
+// parse_px is kept for backward compat until Stage B (which
+// switches layout over to parse_length and removes parse_px).
 // =============================================================
 
 #pragma once
@@ -15,13 +15,27 @@
 
 namespace honeybee::renderer::layout {
 
-// Parse a pixel length like "10px" or "-5px".
-// Returns 0.0f for anything else (multi-value, em, %, malformed).
+// Context for resolving relative length units per ADR-013.
+struct LengthContext {
+    float font_size = 16.0f;            // own font-size (for em on non-font-size)
+    float parent_font_size = 16.0f;     // parent font-size (for em on font-size)
+    float root_font_size = 16.0f;       // root font-size (for rem)
+    float parent_content_width = 0.0f;  // parent content width (for %)
+    bool on_font_size_property = false; // true when resolving the font-size property itself
+};
+
+// Legacy: parse Npx only. Returns 0 for any other unit.
+// Still used by layout until Stage B migrates to parse_length.
 float parse_px(std::string_view s);
 
-// Parse a CSS color.
-// Supports named colors (red, navy, black, white, transparent, ...)
-// and hex (#rgb, #rrggbb). Returns transparent for unknown input.
+// Parse a CSS length in the given context.
+// Supports px, em, rem, %. Returns 0 for auto or unknown units.
+float parse_length(std::string_view s, const LengthContext& ctx);
+
+// True if the trimmed input is exactly "auto".
+bool is_auto(std::string_view s);
+
+// Parse a CSS color (named or hex).
 Color parse_color(std::string_view s);
 
 } // namespace honeybee::renderer::layout
