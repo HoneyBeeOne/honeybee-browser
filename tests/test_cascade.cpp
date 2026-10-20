@@ -196,3 +196,59 @@ TEST_CASE("cascade: non-inherited property does not propagate",
         Stylesheet::parse("body { display: block }"), *doc);
     CHECK_FALSE(result.at(p).get("display").has_value());
 }
+
+// =============================================================
+// Origin-aware cascade (ADR-014).
+// =============================================================
+
+TEST_CASE("cascade: author * beats UA h1 on origin tie-break",
+          "[css][cascade][origin]") {
+    // The canonical case from CSS 2.1 section 6.4.1: author `*`
+    // (specificity 0,0,0) beats UA `p` (specificity 0,0,1) because
+    // author origin wins before specificity is compared. With naive
+    // concatenation, UA specificity would win and color would stay
+    // navy. Origin-aware cascade makes it red.
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto ua = Stylesheet::parse("p { color: navy }");
+    const auto author = Stylesheet::parse("* { color: red }");
+    const auto result = cascade(ua, author, *doc);
+    CHECK(result.at(p).get("color").value_or("") == "red");
+}
+
+TEST_CASE("cascade: author p beats UA p",
+          "[css][cascade][origin]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto ua = Stylesheet::parse("p { color: navy }");
+    const auto author = Stylesheet::parse("p { color: green }");
+    const auto result = cascade(ua, author, *doc);
+    CHECK(result.at(p).get("color").value_or("") == "green");
+}
+
+TEST_CASE("cascade: UA applies when no author rule matches",
+          "[css][cascade][origin]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto ua = Stylesheet::parse("p { color: navy }");
+    const auto author = Stylesheet::parse("div { color: red }");
+    const auto result = cascade(ua, author, *doc);
+    CHECK(result.at(p).get("color").value_or("") == "navy");
+}
+
+TEST_CASE("cascade: single-sheet overload still works",
+          "[css][cascade][origin]") {
+    auto doc = make_simple_doc();
+    const auto* p = doc->find_element("p");
+    REQUIRE(p);
+
+    const auto result = cascade(
+        Stylesheet::parse("p { color: red }"), *doc);
+    CHECK(result.at(p).get("color").value_or("") == "red");
+}

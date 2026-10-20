@@ -6,6 +6,7 @@ add_executable(honeybee_tests
   test_selectors.cpp
   test_stylesheet.cpp
   test_cascade.cpp
+  test_ua_stylesheet.cpp
   test_layout.cpp
   test_paint.cpp
   test_lexbor_smoke.cpp
