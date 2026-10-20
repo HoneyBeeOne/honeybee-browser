@@ -142,9 +142,9 @@ git commit -F /tmp/msg.txt
 
 لا تُدرج header داخل كتلة `namespace foo {`. الرموز القياسية ستحل كـ `foo::std::vector`، وستظهر رسائل خطأ مضللة بصيغة `foo::std::X does not name a type`.
 
-### 4. Version lives in two places
+### 4. Version lives in three places
 
-`CMakeLists.txt` يحتوي على `VERSION 0.1.0` و `src/base/version.cpp` يحتوي على `return "0.1.0";`. عدّل الاثنين عند إصدار نسخة جديدة.
+`CMakeLists.txt` يحتوي على `VERSION`، و `src/base/version.cpp` يحتوي على `return "..."؛`، و `tests/test_version.cpp` يؤكد القيمة نفسها. عدّل الثلاثة عند إصدار نسخة جديدة. لافتة بدء التشغيل في `src/main.cpp` تستدعي `version_string()` مباشرة، فتتحدث تلقائيًا.
 
 ### 5. Test tags
 
