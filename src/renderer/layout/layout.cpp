@@ -24,14 +24,20 @@ const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
 }
 
 void fill_sides(float out[4], const css::ComputedStyle* style,
-                const char* prop) {
+                const char* top, const char* right,
+                const char* bottom, const char* left) {
     if (!style) {
         out[0] = out[1] = out[2] = out[3] = 0.0f;
         return;
     }
-    const auto v = style->get(prop);
-    const float px = v ? parse_px(*v) : 0.0f;
-    out[0] = out[1] = out[2] = out[3] = px;
+    auto px = [&](const char* p) {
+        const auto v = style->get(p);
+        return v ? parse_px(*v) : 0.0f;
+    };
+    out[0] = px(top);
+    out[1] = px(right);
+    out[2] = px(bottom);
+    out[3] = px(left);
 }
 
 std::string font_family_of(const css::ComputedStyle* style) {
@@ -64,9 +70,13 @@ LayoutBox layout_element(const dom::Element& el,
 
     const css::ComputedStyle* style = lookup(styles, el);
 
-    fill_sides(box.margin, style, "margin");
-    fill_sides(box.border, style, "border-width");
-    fill_sides(box.padding, style, "padding");
+    fill_sides(box.margin, style,
+               "margin-top", "margin-right", "margin-bottom", "margin-left");
+    fill_sides(box.border, style,
+               "border-top-width", "border-right-width",
+               "border-bottom-width", "border-left-width");
+    fill_sides(box.padding, style,
+               "padding-top", "padding-right", "padding-bottom", "padding-left");
 
     if (style) {
         const auto bg = style->get("background-color");

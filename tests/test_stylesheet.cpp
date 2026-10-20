@@ -206,7 +206,103 @@ TEST_CASE("stylesheet: real-world example", "[css][stylesheet]") {
         "a.link { color: blue !important; }\n");
     REQUIRE(s.rules.size() == 3);
     CHECK(s.rules[0].declarations.size() == 2);
-    CHECK(s.rules[1].declarations.size() == 1);
+    CHECK(s.rules[1].declarations.size() == 4);
     CHECK(s.rules[2].declarations.size() == 1);
     CHECK(s.rules[2].declarations[0].important);
+}
+
+// =============================================================
+// Shorthand expansion (ADR-012).
+// =============================================================
+
+TEST_CASE("stylesheet: margin single value expands to 4 longhands",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 10px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].property == "margin-top");
+    CHECK(s.rules[0].declarations[1].property == "margin-right");
+    CHECK(s.rules[0].declarations[2].property == "margin-bottom");
+    CHECK(s.rules[0].declarations[3].property == "margin-left");
+    for (const auto& d : s.rules[0].declarations) {
+        CHECK(d.value == "10px");
+    }
+}
+
+TEST_CASE("stylesheet: margin two values", "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 10px 20px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].value == "10px");
+    CHECK(s.rules[0].declarations[1].value == "20px");
+    CHECK(s.rules[0].declarations[2].value == "10px");
+    CHECK(s.rules[0].declarations[3].value == "20px");
+}
+
+TEST_CASE("stylesheet: margin three values", "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 10px 20px 30px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].value == "10px");
+    CHECK(s.rules[0].declarations[1].value == "20px");
+    CHECK(s.rules[0].declarations[2].value == "30px");
+    CHECK(s.rules[0].declarations[3].value == "20px");
+}
+
+TEST_CASE("stylesheet: margin four values",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 1px 2px 3px 4px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].value == "1px");
+    CHECK(s.rules[0].declarations[1].value == "2px");
+    CHECK(s.rules[0].declarations[2].value == "3px");
+    CHECK(s.rules[0].declarations[3].value == "4px");
+}
+
+TEST_CASE("stylesheet: margin too many values skipped",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 1px 2px 3px 4px 5px }");
+    REQUIRE(s.rules.size() == 1);
+    CHECK(s.rules[0].declarations.empty());
+}
+
+TEST_CASE("stylesheet: margin shorthand with important",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin: 10px 20px !important }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    for (const auto& d : s.rules[0].declarations) {
+        CHECK(d.important);
+    }
+}
+
+TEST_CASE("stylesheet: longhand not expanded",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { margin-top: 10px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 1);
+    CHECK(s.rules[0].declarations[0].property == "margin-top");
+    CHECK(s.rules[0].declarations[0].value == "10px");
+}
+
+TEST_CASE("stylesheet: padding expands", "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { padding: 5px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].property == "padding-top");
+    CHECK(s.rules[0].declarations[3].property == "padding-left");
+}
+
+TEST_CASE("stylesheet: border-width expands",
+          "[css][stylesheet][shorthand]") {
+    const auto s = Stylesheet::parse("p { border-width: 1px 2px }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 4);
+    CHECK(s.rules[0].declarations[0].property == "border-top-width");
+    CHECK(s.rules[0].declarations[0].value == "1px");
+    CHECK(s.rules[0].declarations[1].property == "border-right-width");
+    CHECK(s.rules[0].declarations[1].value == "2px");
+    CHECK(s.rules[0].declarations[2].value == "1px");
+    CHECK(s.rules[0].declarations[3].value == "2px");
 }
