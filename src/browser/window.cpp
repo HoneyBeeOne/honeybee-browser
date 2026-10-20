@@ -122,15 +122,6 @@ HoneyBeeWindow::HoneyBeeWindow()
     // وهذا يضمن وجود الإصدار في مكان واحد فقط.
     // ---------------------------------------------------------
 
-    const std::string label_text =
-        "HoneyBee Browser\n\nالمرحلة صفر — الإصدار " +
-        honeybee::version_string() +
-        "\n\nسيُعرض محتوى الصفحة هنا";
-
-    m_label.set_text(label_text);
-    m_label.set_justify(Gtk::Justification::CENTER);
-    m_label.set_margin(24);
-    m_label.set_vexpand(true);      // يمتد رأسياً
 
     // ---------------------------------------------------------
     // الخطوة السادسة: إعداد شريط الحالة
@@ -166,10 +157,31 @@ HoneyBeeWindow::HoneyBeeWindow()
     // ---------------------------------------------------------
 
     m_root_box.append(m_toolbar_box);
-    m_root_box.append(m_label);
+    m_root_box.append(m_drawing_area);
     m_root_box.append(m_status_bar);
 
     // نُعيّن الحاوية الرئيسية كالابن الوحيد للنافذة.
+    // View area setup: draw callback and welcome page.
+    m_drawing_area.set_vexpand(true);
+    m_drawing_area.set_draw_func(
+        [this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            on_draw(cr, w, h);
+        });
+
+    const std::string welcome =
+        "<html><head><title>HoneyBee Browser</title>"
+        "<style>"
+        "body { margin: 20px; }"
+        "h1 { font-size: 32px; color: #d35400; }"
+        "p { font-size: 16px; color: #333; padding: 4px; }"
+        "</style></head><body>"
+        "<h1>HoneyBee Browser</h1>"
+        "<p>Version " + honeybee::version_string() + "</p>"
+        "<p>Type a URL above and press Enter to load a page.</p>"
+        "<p>هذا نص عربي. Rendered via Pango for correct shaping.</p>"
+        "</body></html>";
+    render_html(welcome);
+
     set_child(m_root_box);
 }
 
@@ -238,20 +250,9 @@ void HoneyBeeWindow::on_url_activated() {
         // لاستخدامه في إعادة التحميل لاحقاً.
         m_current_url = url;
 
-        // Parse the HTML and extract a UI-ready preview.
-        // See renderer/html/preview.hpp for details.
-        const auto preview =
-            honeybee::renderer::html::make_preview(r.body);
+        // Run the full render pipeline (HTML -> layout -> paint).
+        render_html(r.body);
 
-        // If the page has a <title>, show it in the window title bar.
-        if (!preview.title.empty()) {
-            set_title(preview.title + " — HoneyBee");
-        }
-
-        m_label.set_text(preview.text.empty()
-                             ? "(empty page)"
-                             : preview.text);
-        m_label.set_justify(Gtk::Justification::LEFT);
 
         // تحديث شريط الحالة بحجم المحتوى الكامل.
         m_status_label.set_text(
@@ -305,4 +306,41 @@ void HoneyBeeWindow::on_reload_clicked() {
 
     // نعيد معالجة الرابط، فيبدأ الجلب من جديد.
     on_url_activated();
+}
+
+// =============================================================
+// render_html: run the full pipeline and repaint.
+// Called on successful fetch and at startup.
+// =============================================================
+
+void HoneyBeeWindow::render_html(const std::string& html) {
+    m_pipeline.render(html, static_cast<float>(m_drawing_area.get_width()));
+
+    const std::string title = m_pipeline.title();
+    if (!title.empty()) {
+        set_title(title + " — HoneyBee");
+    }
+    m_drawing_area.queue_draw();
+}
+
+// =============================================================
+// on_draw: paint the layout tree on the DrawingArea.
+// Relayouts if the viewport width has changed since the last draw.
+// =============================================================
+
+void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
+                             int width, int height) {
+    (void)height;
+
+    if (width != m_last_width) {
+        m_last_width = width;
+        m_pipeline.relayout(static_cast<float>(width));
+    }
+
+    // White background.
+    cr->set_source_rgb(1.0, 1.0, 1.0);
+    cr->paint();
+
+    // Paint the layout tree.
+    m_pipeline.paint(cr->cobj());
 }

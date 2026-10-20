@@ -383,3 +383,56 @@ Pango handles Arabic shaping and RTL rendering correctly **within a single line*
 ## Record of Changes
 
 - **2026-10-20:** Initial decision.
+- **2026-10-20:** Added implementation notes after issue #109 landed.
+
+## Implementation Notes
+
+After implementing this ADR, several small deviations from the
+written spec were made. The architectural decisions (block
+flow, box model, Pango text, two-stage layout/paint) are
+unchanged; the differences below are C++ surface details that
+emerged during construction.
+
+### LayoutNode is an abstract base, not a std::variant
+
+The spec showed `LayoutNode = std::variant<LayoutBox, LayoutText>`.
+The actual implementation makes `LayoutNode` an abstract base
+and `LayoutBox`/`LayoutText` derive from it. Reason: a variant
+containing a recursive `vector<unique_ptr<variant>>` requires
+user-declared out-of-line destructors and move constructors.
+Inheritance gives the same observable behavior with
+straightforward C++. This matches WebKit's `RenderObject` /
+`RenderBox` / `RenderText` hierarchy and Chromium's
+`LayoutObject` design.
+
+### paint() takes raw cairo_t*, not cairomm's RefPtr
+
+The spec showed `Cairo::RefPtr<Cairo::Context>`. The
+implementation uses `cairo_t*`. Reason: keeps `renderer/paint`
+on the Cairo C API and lets `honeybee_lib` stay free of
+cairomm (which would pull GTK-adjacent headers into the
+headless test build). `window.cpp` calls `refptr->cobj()` at
+the boundary. Behavior identical.
+
+### Text drawing is injected via a TextDrawer callback
+
+The spec described Pango directly inside paint. The
+implementation injects a `TextDrawer` callback (analogous to
+`TextMeasurer` in layout), so paint is testable without Pango
+or a display server. `window.cpp` supplies `draw_with_pango`.
+
+### Non-rendered elements are skipped in layout.cpp
+
+The spec deferred the UA stylesheet but did not specify what
+happens to `<head>`, `<style>`, `<script>`, `<title>`, `<meta>`,
+`<link>`, `<base>` without it. In v1, these are skipped by a
+hardcoded helper in `layout.cpp`. The UA stylesheet ADR will
+replace this with `display: none` on those tags.
+
+### Inline `<style>` extraction lives in the browser layer
+
+The spec did not specify how CSS text reaches the cascade.
+`render_pipeline.cpp` walks the parsed DOM for `<style>`
+elements and concatenates their contents into a `Stylesheet`.
+External `<link rel="stylesheet">` is deferred (needs network +
+URL resolution).
