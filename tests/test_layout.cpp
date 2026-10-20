@@ -30,8 +30,10 @@ struct TestLayout {
     layout::LayoutBox root;
 };
 
-std::pair<float, float> fake_measure(const layout::LayoutText& t) {
-    return {static_cast<float>(t.text.size()) * 8.0f, 16.0f};
+std::pair<float, float> fake_measure(
+    std::string_view text, std::string_view /*font_family*/,
+    float /*font_size*/) {
+    return {static_cast<float>(text.size()) * 8.0f, 16.0f};
 }
 
 TestLayout run(const std::string& html, const std::string& css_text,
@@ -494,4 +496,120 @@ TEST_CASE("layout: trims leading and trailing whitespace",
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
     CHECK(texts[0]->text == "trimmed");
+}
+
+// =============================================================
+// break_into_lines (ADR-015, Commit 2).
+// =============================================================
+
+TEST_CASE("break_into_lines: short text one line", "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "abc", "", 16.0f, 100.0f, fake_measure);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "abc");
+    CHECK(lines[0].width == 24.0f);
+    CHECK(lines[0].height == 16.0f);
+    CHECK(lines[0].y == 0.0f);
+}
+
+TEST_CASE("break_into_lines: packs multiple words per line",
+          "[layout][text_utils]") {
+    // "a b c d e" -> a=8, space=8, container 30.
+    // L1: "a b" (24). L2: "c d" (24). L3: "e" (8).
+    auto lines = layout::break_into_lines(
+        "a b c d e", "", 16.0f, 30.0f, fake_measure);
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0].text == "a b");
+    CHECK(lines[1].text == "c d");
+    CHECK(lines[2].text == "e");
+    CHECK(lines[0].y == 0.0f);
+    CHECK(lines[1].y == 16.0f);
+    CHECK(lines[2].y == 32.0f);
+}
+
+TEST_CASE("break_into_lines: long word overflows its line",
+          "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "aaaaa", "", 16.0f, 20.0f, fake_measure);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "aaaaa");
+    CHECK(lines[0].width == 40.0f);
+}
+
+TEST_CASE("break_into_lines: empty input", "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "", "", 16.0f, 100.0f, fake_measure);
+    CHECK(lines.empty());
+}
+
+// =============================================================
+// Layout with line breaking (ADR-015, Commit 2).
+// =============================================================
+
+TEST_CASE("layout: wrapped text produces multiple line fragments",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->lines.size() == 3);
+    CHECK(texts[0]->lines[0].text == "word word");
+    CHECK(texts[0]->lines[1].text == "word word");
+    CHECK(texts[0]->lines[2].text == "word");
+}
+
+TEST_CASE("layout: short text produces one line fragment",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>short</p>", "", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->lines.size() == 1);
+    CHECK(texts[0]->lines[0].text == "short");
+}
+
+TEST_CASE("layout: bounding width is max line width",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    // All three lines are "word word" (72) or "word" (32); max = 72.
+    CHECK(texts[0]->width == 72.0f);
+}
+
+TEST_CASE("layout: bounding height is sum of line heights",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    // 3 lines * 16px = 48.
+    CHECK(texts[0]->height == 48.0f);
+}
+
+TEST_CASE("layout: LTR text rtl flag false", "[layout][text_wrapping]") {
+    auto t = run("<p>Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("layout: Arabic text rtl flag true", "[layout][text_wrapping]") {
+    auto t = run("<p>\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("layout: RTL lines right-aligned to same edge",
+          "[layout][text_wrapping]") {
+    // 5 identical Arabic words (each 4 chars, 8 UTF-8 bytes, 64px),
+    // container 100px. Each word alone on a line (64+8+64 = 136 > 100).
+    // Same width per line means same x for all lines (right-aligned).
+    auto t = run("<p>\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
+                 "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+    REQUIRE(texts[0]->lines.size() == 5);
+    for (std::size_t i = 1; i < texts[0]->lines.size(); ++i) {
+        CHECK(texts[0]->lines[i].x == texts[0]->lines[0].x);
+    }
 }

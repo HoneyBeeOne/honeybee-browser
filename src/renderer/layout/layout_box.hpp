@@ -1,13 +1,11 @@
 // =============================================================
 // File: layout_box.hpp
-// Purpose: Layout tree types (per ADR-011).
+// Purpose: Layout tree types (ADR-011, ADR-015).
 //
 // Pure types with no external dependencies: no dom, no css,
 // no GTK. LayoutNode is an abstract base; LayoutBox and
-// LayoutText derive from it. This is a deviation from the
-// variant-based snippet in ADR-011 -- inheritance avoids the
-// recursive-variant out-of-line-destructor gymnastics and
-// matches the pattern used by WebKit and Chromium.
+// LayoutText derive from it. LayoutText holds a vector of
+// LineFragment (ADR-015) for line-broken text.
 // =============================================================
 
 #pragma once
@@ -16,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,7 +22,6 @@ namespace honeybee::renderer::dom { class Element; }
 
 namespace honeybee::renderer::layout {
 
-// RGBA color, each channel in [0, 1]. Alpha 0 means transparent.
 struct Color {
     float r = 0.0f;
     float g = 0.0f;
@@ -57,7 +55,6 @@ protected:
 };
 
 struct LayoutBox final : LayoutNode {
-    // Box model (top, right, bottom, left)
     float margin[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float padding[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -71,18 +68,33 @@ struct LayoutBox final : LayoutNode {
     LayoutBox() : LayoutNode(LayoutKind::Box) {}
 };
 
-struct LayoutText final : LayoutNode {
+// One rendered line of a text node (ADR-015). Position is
+// absolute, in the same coordinate space as the parent
+// LayoutText's bounding box.
+struct LineFragment {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
     std::string text;
+};
+
+struct LayoutText final : LayoutNode {
+    std::string text;               // full collapsed text
     std::string font_family;
     float font_size = 16.0f;
     Color color = Color::black();
+    std::vector<LineFragment> lines;  // one entry per rendered line
+    bool rtl = false;                 // first-strong heuristic
 
     LayoutText() : LayoutNode(LayoutKind::Text) {}
 };
 
-// Callback for measuring text. Production uses Pango; tests use
-// a fake (chars * 8 wide, 16 tall) for deterministic layout.
-using TextMeasurer =
-    std::function<std::pair<float, float>(const LayoutText&)>;
+// Measures a single string at a given font. Called once per
+// word during line breaking, and once per line for height.
+using TextMeasurer = std::function<std::pair<float, float>(
+    std::string_view text,
+    std::string_view font_family,
+    float font_size)>;
 
 } // namespace honeybee::renderer::layout

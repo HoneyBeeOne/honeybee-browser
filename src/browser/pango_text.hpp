@@ -2,30 +2,30 @@
 // File: pango_text.hpp
 // Purpose: Pango-backed TextMeasurer and TextDrawer.
 //
-// Production implementations of the two callbacks defined in
-// renderer/layout (TextMeasurer) and renderer/paint
-// (TextDrawer). Kept outside honeybee_lib on purpose: only
-// the browser executable needs Pango, and honeybee_lib must
-// stay GTK/Pango-free for headless test builds.
+// measure_with_pango: measures a single string at a given font
+// (called per-word during line breaking, per-line for height).
+//
+// draw_with_pango: draws a LayoutText's content via Pango.
+// Currently draws `lt.text` as one line at `lt.x, lt.y`.
+// Commit 3 will change this to iterate `lt.lines`.
 // =============================================================
 
 #pragma once
 
 #include <cairo.h>
 
+#include <string_view>
 #include <utility>
 
 #include "renderer/layout/layout_box.hpp"
 
 namespace honeybee::browser {
 
-// Measure `t` with Pango. Returns (width, height) in pixels.
-// Uses an offscreen 1x1 image surface so no display is needed.
 std::pair<float, float> measure_with_pango(
-    const renderer::layout::LayoutText& t);
+    std::string_view text,
+    std::string_view font_family,
+    float font_size);
 
-// Draw `t` at its layout position, using its font family,
-// size, and color. Correct Arabic shaping via Pango.
 void draw_with_pango(cairo_t* cr,
                      const renderer::layout::LayoutText& t);
 

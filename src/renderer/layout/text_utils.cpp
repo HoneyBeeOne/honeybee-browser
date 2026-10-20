@@ -120,4 +120,69 @@ bool detect_rtl(std::string_view text) {
     return false;
 }
 
+std::vector<LineFragment> break_into_lines(
+    std::string_view collapsed_text,
+    std::string_view font_family,
+    float font_size,
+    float max_width,
+    const TextMeasurer& measurer) {
+
+    std::vector<LineFragment> lines;
+    if (collapsed_text.empty()) return lines;
+
+    // Tokenize on space.
+    std::vector<std::string_view> words;
+    std::size_t i = 0;
+    while (i < collapsed_text.size()) {
+        while (i < collapsed_text.size() && collapsed_text[i] == ' ') ++i;
+        if (i >= collapsed_text.size()) break;
+        const std::size_t start = i;
+        while (i < collapsed_text.size() && collapsed_text[i] != ' ') ++i;
+        words.emplace_back(collapsed_text.substr(start, i - start));
+    }
+    if (words.empty()) return lines;
+
+    // Space width and line height come from measuring once.
+    const auto [space_w, line_h] =
+        measurer(" ", font_family, font_size);
+
+    std::string current_text;
+    float current_width = 0.0f;
+    float current_y = 0.0f;
+
+    for (const auto& w : words) {
+        const float ww = measurer(w, font_family, font_size).first;
+        const float sep = current_text.empty() ? 0.0f : space_w;
+
+        if (current_width + sep + ww <= max_width) {
+            if (!current_text.empty()) current_text += ' ';
+            current_text += w;
+            current_width += sep + ww;
+        } else {
+            if (!current_text.empty()) {
+                LineFragment f;
+                f.text = std::move(current_text);
+                f.width = current_width;
+                f.height = line_h;
+                f.y = current_y;
+                current_y += line_h;
+                lines.push_back(std::move(f));
+            }
+            current_text = std::string(w);
+            current_width = ww;
+        }
+    }
+
+    if (!current_text.empty()) {
+        LineFragment f;
+        f.text = std::move(current_text);
+        f.width = current_width;
+        f.height = line_h;
+        f.y = current_y;
+        lines.push_back(std::move(f));
+    }
+
+    return lines;
+}
+
 } // namespace honeybee::renderer::layout
