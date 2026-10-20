@@ -219,3 +219,34 @@ TEST_CASE("layout: empty document yields empty box",
     // Root is <html>, but with no text it should have zero height.
     CHECK(t.root.height == 0.0f);
 }
+
+// ---------------- Non-rendered elements ----------------
+
+TEST_CASE("layout: <head> contents are not rendered", "[layout][skip]") {
+    auto t = run(
+        "<html><head><title>Page Title</title></head>"
+        "<body><p>Visible</p></body></html>",
+        "");
+    for (const auto* text : find_all_texts(t.root)) {
+        CHECK(text->text.find("Page Title") == std::string::npos);
+    }
+    CHECK(find_all_boxes(t.root, "p").size() == 1);
+}
+
+TEST_CASE("layout: <style> is not rendered", "[layout][skip]") {
+    auto t = run(
+        "<body><style>p { color: red }</style><p>Hi</p></body>",
+        "");
+    for (const auto* text : find_all_texts(t.root)) {
+        CHECK(text->text.find("color") == std::string::npos);
+    }
+}
+
+TEST_CASE("layout: <script> is not rendered", "[layout][skip]") {
+    auto t = run(
+        "<body><script>alert('hi')</script><p>Hi</p></body>",
+        "");
+    for (const auto* text : find_all_texts(t.root)) {
+        CHECK(text->text.find("alert") == std::string::npos);
+    }
+}

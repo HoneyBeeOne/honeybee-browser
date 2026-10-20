@@ -11,6 +11,12 @@ namespace honeybee::renderer::layout {
 
 namespace {
 
+bool is_non_rendered_tag(const std::string& tag) {
+    return tag == "head" || tag == "style" || tag == "script"
+        || tag == "title" || tag == "meta" || tag == "link"
+        || tag == "base";
+}
+
 const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
                                  const dom::Element& el) {
     auto it = styles.find(&el);
@@ -96,6 +102,7 @@ LayoutBox layout_element(const dom::Element& el,
     for (const auto& child : el.children()) {
         if (child->type() == dom::NodeType::Element) {
             const auto& child_el = static_cast<const dom::Element&>(*child);
+            if (is_non_rendered_tag(child_el.tag())) continue;
             auto child_box = std::make_unique<LayoutBox>(
                 layout_element(child_el, styles, measurer, content_x, cursor_y,
                                content_w));
