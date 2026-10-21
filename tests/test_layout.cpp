@@ -5,6 +5,7 @@
 
 #include "renderer/css/cascade.hpp"
 #include "renderer/css/stylesheet.hpp"
+#include "renderer/css/ua_stylesheet.hpp"
 #include "renderer/html/convert.hpp"
 #include "renderer/layout/layout.hpp"
 #include "renderer/layout/style_values.hpp"
@@ -43,6 +44,18 @@ TestLayout run(const std::string& html, const std::string& css_text,
     REQUIRE(t.doc != nullptr);
     t.sheet = css::Stylesheet::parse(css_text);
     t.styles = css::cascade(t.sheet, *t.doc);
+    t.root = layout::layout(*t.doc, t.styles, fake_measure, viewport_width);
+    return t;
+}
+
+TestLayout run_with_ua(const std::string& html, const std::string& css_text,
+                       float viewport_width = 800.0f) {
+    TestLayout t;
+    t.doc = honeybee::renderer::html::parse(html);
+    REQUIRE(t.doc != nullptr);
+    t.sheet = css::Stylesheet::parse(css_text);
+    auto ua = css::ua_stylesheet();
+    t.styles = css::cascade(ua, t.sheet, *t.doc);
     t.root = layout::layout(*t.doc, t.styles, fake_measure, viewport_width);
     return t;
 }
@@ -257,7 +270,7 @@ TEST_CASE("layout: empty document yields empty box",
 // ---------------- Non-rendered elements ----------------
 
 TEST_CASE("layout: <head> contents are not rendered", "[layout][skip]") {
-    auto t = run(
+    auto t = run_with_ua(
         "<html><head><title>Page Title</title></head>"
         "<body><p>Visible</p></body></html>",
         "");
@@ -268,7 +281,7 @@ TEST_CASE("layout: <head> contents are not rendered", "[layout][skip]") {
 }
 
 TEST_CASE("layout: <style> is not rendered", "[layout][skip]") {
-    auto t = run(
+    auto t = run_with_ua(
         "<body><style>p { color: red }</style><p>Hi</p></body>",
         "");
     for (const auto* text : find_all_texts(t.root)) {
@@ -277,7 +290,7 @@ TEST_CASE("layout: <style> is not rendered", "[layout][skip]") {
 }
 
 TEST_CASE("layout: <script> is not rendered", "[layout][skip]") {
-    auto t = run(
+    auto t = run_with_ua(
         "<body><script>alert('hi')</script><p>Hi</p></body>",
         "");
     for (const auto* text : find_all_texts(t.root)) {
@@ -873,4 +886,54 @@ TEST_CASE("dir: mixed paragraph with no dir inherits LTR",
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
     CHECK_FALSE(texts[0]->rtl);
+}
+
+// =============================================================
+// display: none (ADR-017).
+// =============================================================
+
+TEST_CASE("layout: author display:none skips element",
+          "[layout][display_none]") {
+    auto t = run(
+        "<div>visible</div><div class=\"hidden\">hidden</div>",
+        ".hidden { display: none }");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "visible");
+}
+
+TEST_CASE("layout: display:none skips entire subtree",
+          "[layout][display_none]") {
+    auto t = run(
+        "<div class=\"hidden\"><p>child</p></div><div>visible</div>",
+        ".hidden { display: none }");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "visible");
+}
+
+TEST_CASE("layout: author head { display: block } overrides UA default",
+          "[layout][display_none]") {
+    // UA stylesheet has head { display: none }. Author rule overrides
+    // (origin-aware cascade: author beats UA for normal declarations).
+    // Head becomes a block and its direct text renders.
+    auto t = run_with_ua(
+        "<html><head>head text</head>"
+        "<body><p>body</p></body></html>",
+        "head { display: block }");
+    const auto texts = find_all_texts(t.root);
+    // Expect 2: "head text" from head, "body" from p
+    REQUIRE(texts.size() == 2);
+    CHECK(texts[0]->text == "head text");
+    CHECK(texts[1]->text == "body");
+}
+
+TEST_CASE("layout: template does not render (UA display:none)",
+          "[layout][display_none]") {
+    auto t = run_with_ua(
+        "<body><template><p>hidden</p></template><p>visible</p></body>",
+        "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "visible");
 }

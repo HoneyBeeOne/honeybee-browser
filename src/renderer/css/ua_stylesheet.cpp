@@ -26,6 +26,8 @@ a { color: #0000EE }
 
 span, a, em, i, strong, b, code, kbd, samp, var, small, sub, sup,
 abbr, cite, q, s, u, time, mark { display: inline }
+
+head, style, script, title, meta, link, base, template { display: none }
 )CSS";
 
 } // namespace

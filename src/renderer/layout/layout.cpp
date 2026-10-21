@@ -14,12 +14,6 @@ namespace {
 
 constexpr float kDefaultFontSize = 16.0f;
 
-bool is_non_rendered_tag(const std::string& tag) {
-    return tag == "head" || tag == "style" || tag == "script"
-        || tag == "title" || tag == "meta" || tag == "link"
-        || tag == "base";
-}
-
 const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
                                  const dom::Element& el) {
     auto it = styles.find(&el);
@@ -351,9 +345,8 @@ LayoutBox layout_element(const dom::Element& el,
     for (const auto& child : el.children()) {
         if (child->type() == dom::NodeType::Element) {
             const auto& child_el = static_cast<const dom::Element&>(*child);
-            if (is_non_rendered_tag(child_el.tag())) continue;
-
             const css::ComputedStyle* child_style = lookup(styles, child_el);
+            if (display_of(child_style) == Display::None) continue;
             if (display_of(child_style) == Display::Inline) {
                 inline_run.push_back(child.get());
                 continue;
