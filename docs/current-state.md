@@ -31,13 +31,13 @@ To reproduce: clone the repo, build, then load `docs/demo.html` in the browser (
 | Cairo paint: background-color, border, text | #110 |
 | Arabic text with correct letter joining (via Pango) | #110 |
 | UA stylesheet: body margin, heading sizes, paragraph gaps | #121 |
+| Text wrapping at word boundaries + whitespace collapsing | #125 |
 
 ## What does NOT render yet
 
 | Missing | Reason | Planned |
 |---|---|---|
 | Inline formatting (`<span>`, `<a>`, `<em>`) | layout is block-only | future ADR |
-| Text wrapping | single line per text node | inline formatting ADR |
 | Pseudo-classes (`:hover`, `:link`, `:visited`) | not in selector parser | future ADR |
 | Pseudo-elements (`::before`, `::after`) | not in selector parser | future ADR |
 | `@media` queries | at-rules skipped by parser | future ADR |
@@ -80,6 +80,26 @@ cascade working as designed.
 **This is not a bug.** It is a page that uses CSS features HoneyBee does not support yet. When those features land via future ADRs, example.com will render closer to Firefox.
 
 The [demo page](demo.html) is HoneyBee's honest smoke test. It uses only supported properties, so it renders exactly as its CSS specifies.
+
+## Known behavior: RTL direction heuristic
+
+ADR-015 applies a first-strong-character heuristic to decide
+line direction: if the first strong character in a text node is
+Arabic, Hebrew, Syriac, Thaana, NKo, or Adlam, that text renders
+RTL (lines right-aligned); otherwise it renders LTR.
+
+This diverges from Firefox for **mixed-direction paragraphs**.
+Firefox uses the *inherited* direction (`dir` attribute or
+`direction` CSS property, defaulting to LTR), not a per-text
+heuristic. So a paragraph like `<p>هذا نص عربي. Rendered via
+Pango.</p>` is left-aligned in Firefox (LTR paragraph, RTL
+segment) but right-aligned in HoneyBee (RTL detected by first
+strong character).
+
+This is documented behavior, not a bug. It will be revisited in
+a future ADR when `dir` attribute / `direction` CSS property
+support lands. For pages that rely on Firefox's behavior, an
+explicit `dir="ltr"` will be the eventual escape hatch.
 
 ## How to report a visual bug
 
