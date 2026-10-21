@@ -8,6 +8,7 @@
 #include "renderer/html/convert.hpp"
 #include "renderer/layout/layout.hpp"
 #include "renderer/layout/style_values.hpp"
+#include "renderer/layout/text_utils.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -29,8 +30,10 @@ struct TestLayout {
     layout::LayoutBox root;
 };
 
-std::pair<float, float> fake_measure(const layout::LayoutText& t) {
-    return {static_cast<float>(t.text.size()) * 8.0f, 16.0f};
+std::pair<float, float> fake_measure(
+    std::string_view text, std::string_view /*font_family*/,
+    float /*font_size*/) {
+    return {static_cast<float>(text.size()) * 8.0f, 16.0f};
 }
 
 TestLayout run(const std::string& html, const std::string& css_text,
@@ -400,4 +403,213 @@ TEST_CASE("layout: auto margin with padding and border",
     REQUIRE(ps.size() == 1);
     CHECK(ps[0]->margin[3] == 135.0f);
     CHECK(ps[0]->margin[1] == 135.0f);
+}
+
+// =============================================================
+// Text utilities (ADR-015, Commit 1).
+// =============================================================
+
+TEST_CASE("collapse_whitespace: basic collapse", "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("a b c") == "a b c");
+    CHECK(layout::collapse_whitespace("a   b") == "a b");
+    CHECK(layout::collapse_whitespace("a\t\nb") == "a b");
+    CHECK(layout::collapse_whitespace("a\r\n\t b") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: trims", "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("") == "");
+    CHECK(layout::collapse_whitespace("   ") == "");
+    CHECK(layout::collapse_whitespace("\n\t ") == "");
+    CHECK(layout::collapse_whitespace("   a") == "a");
+    CHECK(layout::collapse_whitespace("a   ") == "a");
+    CHECK(layout::collapse_whitespace("  a  b  ") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: preserves nbsp", "[layout][text_utils]") {
+    // U+00A0 in UTF-8 is 0xC2 0xA0. Not in the ASCII whitespace
+    // set, so it survives collapsing unchanged.
+    CHECK(layout::collapse_whitespace("a\xC2\xA0\xC2\xA0" "b") == "a\xC2\xA0\xC2\xA0" "b");
+    CHECK(layout::collapse_whitespace("a   b") == "a b");
+}
+
+TEST_CASE("collapse_whitespace: doesn't touch internal content",
+          "[layout][text_utils]") {
+    CHECK(layout::collapse_whitespace("hello world") == "hello world");
+    CHECK(layout::collapse_whitespace("foo-bar_baz") == "foo-bar_baz");
+}
+
+TEST_CASE("detect_rtl: Arabic", "[layout][text_utils]") {
+    CHECK(layout::detect_rtl("\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85"));   // السلام
+    CHECK(layout::detect_rtl("\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7"));           // مرحبا
+}
+
+TEST_CASE("detect_rtl: Hebrew", "[layout][text_utils]") {
+    // Hebrew word "shalom"
+    CHECK(layout::detect_rtl("\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d"));
+}
+
+TEST_CASE("detect_rtl: Latin", "[layout][text_utils]") {
+    CHECK_FALSE(layout::detect_rtl("Hello"));
+    CHECK_FALSE(layout::detect_rtl("world"));
+    CHECK_FALSE(layout::detect_rtl("Hello World"));
+}
+
+TEST_CASE("detect_rtl: first strong char wins", "[layout][text_utils]") {
+    // Latin first -> LTR (even though Arabic appears later)
+    CHECK_FALSE(layout::detect_rtl(
+        "Hello \xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85"));
+    // Arabic first -> RTL (even though Latin appears later)
+    CHECK(layout::detect_rtl(
+        "\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85 Hello"));
+}
+
+TEST_CASE("detect_rtl: default LTR for no strong chars",
+          "[layout][text_utils]") {
+    CHECK_FALSE(layout::detect_rtl(""));
+    CHECK_FALSE(layout::detect_rtl("123"));
+    CHECK_FALSE(layout::detect_rtl("   "));
+    CHECK_FALSE(layout::detect_rtl("!@#$%"));
+    CHECK_FALSE(layout::detect_rtl("  123  !@#  "));
+}
+
+TEST_CASE("layout: collapses whitespace in text nodes",
+          "[layout][text_utils]") {
+    auto t = run("<p>hello    world</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "hello world");
+}
+
+TEST_CASE("layout: skips whitespace-only text nodes",
+          "[layout][text_utils]") {
+    // A div with only whitespace between tags should produce no
+    // text layout child (the collapse produces an empty string,
+    // which the layout branch skips).
+    auto t = run("<div>   \n\t   </div>", "");
+    const auto texts = find_all_texts(t.root);
+    CHECK(texts.empty());
+}
+
+TEST_CASE("layout: trims leading and trailing whitespace",
+          "[layout][text_utils]") {
+    auto t = run("<p>   trimmed   </p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "trimmed");
+}
+
+// =============================================================
+// break_into_lines (ADR-015, Commit 2).
+// =============================================================
+
+TEST_CASE("break_into_lines: short text one line", "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "abc", "", 16.0f, 100.0f, fake_measure);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "abc");
+    CHECK(lines[0].width == 24.0f);
+    CHECK(lines[0].height == 16.0f);
+    CHECK(lines[0].y == 0.0f);
+}
+
+TEST_CASE("break_into_lines: packs multiple words per line",
+          "[layout][text_utils]") {
+    // "a b c d e" -> a=8, space=8, container 30.
+    // L1: "a b" (24). L2: "c d" (24). L3: "e" (8).
+    auto lines = layout::break_into_lines(
+        "a b c d e", "", 16.0f, 30.0f, fake_measure);
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0].text == "a b");
+    CHECK(lines[1].text == "c d");
+    CHECK(lines[2].text == "e");
+    CHECK(lines[0].y == 0.0f);
+    CHECK(lines[1].y == 16.0f);
+    CHECK(lines[2].y == 32.0f);
+}
+
+TEST_CASE("break_into_lines: long word overflows its line",
+          "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "aaaaa", "", 16.0f, 20.0f, fake_measure);
+    REQUIRE(lines.size() == 1);
+    CHECK(lines[0].text == "aaaaa");
+    CHECK(lines[0].width == 40.0f);
+}
+
+TEST_CASE("break_into_lines: empty input", "[layout][text_utils]") {
+    auto lines = layout::break_into_lines(
+        "", "", 16.0f, 100.0f, fake_measure);
+    CHECK(lines.empty());
+}
+
+// =============================================================
+// Layout with line breaking (ADR-015, Commit 2).
+// =============================================================
+
+TEST_CASE("layout: wrapped text produces multiple line fragments",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->lines.size() == 3);
+    CHECK(texts[0]->lines[0].text == "word word");
+    CHECK(texts[0]->lines[1].text == "word word");
+    CHECK(texts[0]->lines[2].text == "word");
+}
+
+TEST_CASE("layout: short text produces one line fragment",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>short</p>", "", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->lines.size() == 1);
+    CHECK(texts[0]->lines[0].text == "short");
+}
+
+TEST_CASE("layout: bounding width is max line width",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    // All three lines are "word word" (72) or "word" (32); max = 72.
+    CHECK(texts[0]->width == 72.0f);
+}
+
+TEST_CASE("layout: bounding height is sum of line heights",
+          "[layout][text_wrapping]") {
+    auto t = run("<p>word word word word word</p>", "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    // 3 lines * 16px = 48.
+    CHECK(texts[0]->height == 48.0f);
+}
+
+TEST_CASE("layout: LTR text rtl flag false", "[layout][text_wrapping]") {
+    auto t = run("<p>Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("layout: Arabic text rtl flag true", "[layout][text_wrapping]") {
+    auto t = run("<p>\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("layout: RTL lines right-aligned to same edge",
+          "[layout][text_wrapping]") {
+    // 5 identical Arabic words (each 4 chars, 8 UTF-8 bytes, 64px),
+    // container 100px. Each word alone on a line (64+8+64 = 136 > 100).
+    // Same width per line means same x for all lines (right-aligned).
+    auto t = run("<p>\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
+                 "", 100.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+    REQUIRE(texts[0]->lines.size() == 5);
+    for (std::size_t i = 1; i < texts[0]->lines.size(); ++i) {
+        CHECK(texts[0]->lines[i].x == texts[0]->lines[0].x);
+    }
 }

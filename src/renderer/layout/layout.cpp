@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "renderer/layout/style_values.hpp"
+#include "renderer/layout/text_utils.hpp"
 
 namespace honeybee::renderer::layout {
 
@@ -160,16 +161,36 @@ LayoutBox layout_element(const dom::Element& el,
             box.children.push_back(std::move(child_box));
         } else if (child->type() == dom::NodeType::Text) {
             const auto& text_node = static_cast<const dom::TextNode&>(*child);
+            std::string collapsed = collapse_whitespace(text_node.data());
+            if (collapsed.empty()) continue;
+
+            const std::string family = font_family_of(style);
+            const bool rtl = detect_rtl(collapsed);
+
+            auto fragments = break_into_lines(
+                collapsed, family, own_font_size, content_w, measurer);
+            if (fragments.empty()) continue;
+
+            float max_line_w = 0.0f;
+            float total_h = 0.0f;
+            for (auto& f : fragments) {
+                f.x = rtl ? content_x + content_w - f.width : content_x;
+                f.y += cursor_y;
+                if (f.width > max_line_w) max_line_w = f.width;
+                total_h += f.height;
+            }
+
             auto lt = std::make_unique<LayoutText>();
             lt->x = content_x;
             lt->y = cursor_y;
-            lt->text = text_node.data();
-            lt->font_family = font_family_of(style);
+            lt->width = max_line_w;
+            lt->height = total_h;
+            lt->text = std::move(collapsed);
+            lt->font_family = family;
             lt->font_size = own_font_size;
             lt->color = text_color_of(style);
-            const auto [w, h] = measurer(*lt);
-            lt->width = w;
-            lt->height = h;
+            lt->rtl = rtl;
+            lt->lines = std::move(fragments);
             cursor_y = lt->y + lt->height;
             box.children.push_back(std::move(lt));
         }

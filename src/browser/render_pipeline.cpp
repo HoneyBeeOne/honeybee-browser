@@ -61,7 +61,7 @@ void RenderPipeline::relayout(float viewport_width) {
 }
 
 void RenderPipeline::paint(cairo_t* cr) const {
-    renderer::paint::paint(cr, layout_root_, &draw_with_pango);
+    renderer::paint::paint(cr, layout_root_, &draw_line_with_pango);
 }
 
 std::string RenderPipeline::title() const {

@@ -50,7 +50,11 @@ void paint_children(cairo_t* cr,
             paint_box(cr, static_cast<const layout::LayoutBox&>(*child),
                       drawer);
         } else {
-            drawer(cr, static_cast<const layout::LayoutText&>(*child));
+            const auto& lt =
+                static_cast<const layout::LayoutText&>(*child);
+            for (const auto& frag : lt.lines) {
+                drawer(cr, frag, lt);
+            }
         }
     }
 }
@@ -63,7 +67,10 @@ void paint(cairo_t* cr, const layout::LayoutNode& root,
     if (root.kind == layout::LayoutKind::Box) {
         paint_box(cr, static_cast<const layout::LayoutBox&>(root), drawer);
     } else {
-        drawer(cr, static_cast<const layout::LayoutText&>(root));
+        const auto& lt = static_cast<const layout::LayoutText&>(root);
+        for (const auto& frag : lt.lines) {
+            drawer(cr, frag, lt);
+        }
     }
 }
 
