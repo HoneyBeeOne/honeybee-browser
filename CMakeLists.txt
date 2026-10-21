@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
   honeybee
-  VERSION 0.3.0
+  VERSION 0.4.0
   DESCRIPTION "A community-built web browser from Cairo University students"
   LANGUAGES CXX
 )
