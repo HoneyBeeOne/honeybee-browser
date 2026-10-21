@@ -56,9 +56,10 @@ bool is_blue(const Pixel& p) {
     return p.b > 200 && p.r < 50 && p.g < 50;
 }
 
-void fake_drawer(cairo_t* cr, const layout::LayoutText& t) {
+void fake_drawer(cairo_t* cr, const layout::LineFragment& f,
+                 const layout::LayoutText& /*t*/) {
     cairo_set_source_rgb(cr, 0.0, 0.0, 1.0);
-    cairo_rectangle(cr, t.x, t.y, t.width, t.height);
+    cairo_rectangle(cr, f.x, f.y, f.width, f.height);
     cairo_fill(cr);
 }
 
@@ -135,6 +136,7 @@ TEST_CASE("paint: text drawer called at text position",
     lt->width = 40.0f;
     lt->height = 16.0f;
     lt->text = "Hi";
+    lt->lines.push_back({20.0f, 20.0f, 40.0f, 16.0f, "Hi"});
     root.children.push_back(std::move(lt));
 
     paint::paint(c.cr, root, fake_drawer);
@@ -158,4 +160,52 @@ TEST_CASE("paint: null cr is a no-op", "[paint]") {
     box.background = {1.0f, 0.0f, 0.0f, 1.0f};
     paint::paint(nullptr, box, fake_drawer);
     CHECK(true);
+}
+
+TEST_CASE("paint: multi-line text draws each fragment at its y",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->x = 0.0f;
+    lt->y = 0.0f;
+    lt->width = 40.0f;
+    lt->height = 50.0f;
+    lt->text = "AAA BBB";
+    // Two fragments with a visible gap in between, at distinct
+    // x and y. The fake drawer paints a blue rect per fragment;
+    // the gap remains white.
+    lt->lines.push_back({10.0f, 10.0f, 10.0f, 10.0f, "AAA"});
+    lt->lines.push_back({20.0f, 40.0f, 10.0f, 10.0f, "BBB"});
+    root.children.push_back(std::move(lt));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Fragment 1 covers (10,10)-(20,20)
+    CHECK(is_blue(pixel_at(c.surface, 15, 15)));
+    // Fragment 2 covers (20,40)-(30,50)
+    CHECK(is_blue(pixel_at(c.surface, 25, 45)));
+    // Gap between them stays white
+    CHECK(is_white(pixel_at(c.surface, 15, 30)));
+    CHECK(is_white(pixel_at(c.surface, 5, 5)));
+}
+
+TEST_CASE("paint: empty-lines text draws nothing", "[paint]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 100.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->text = "";
+    // No lines added.
+    root.children.push_back(std::move(lt));
+
+    paint::paint(c.cr, root, fake_drawer);
+    CHECK(is_white(pixel_at(c.surface, 50, 50)));
 }

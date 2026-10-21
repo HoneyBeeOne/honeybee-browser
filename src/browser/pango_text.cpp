@@ -53,13 +53,15 @@ std::pair<float, float> measure_with_pango(
     return {static_cast<float>(w), static_cast<float>(h)};
 }
 
-void draw_with_pango(cairo_t* cr,
-                     const renderer::layout::LayoutText& t) {
-    if (cr == nullptr || t.text.empty()) return;
+void draw_line_with_pango(cairo_t* cr,
+                          const renderer::layout::LineFragment& frag,
+                          const renderer::layout::LayoutText& t) {
+    if (cr == nullptr || frag.text.empty()) return;
 
-    PangoLayout* layout = make_layout(cr, t.text, t.font_family, t.font_size);
+    PangoLayout* layout =
+        make_layout(cr, frag.text, t.font_family, t.font_size);
     cairo_set_source_rgba(cr, t.color.r, t.color.g, t.color.b, t.color.a);
-    cairo_move_to(cr, t.x, t.y);
+    cairo_move_to(cr, frag.x, frag.y);
     pango_cairo_show_layout(cr, layout);
     g_object_unref(layout);
 }

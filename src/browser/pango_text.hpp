@@ -5,9 +5,8 @@
 // measure_with_pango: measures a single string at a given font
 // (called per-word during line breaking, per-line for height).
 //
-// draw_with_pango: draws a LayoutText's content via Pango.
-// Currently draws `lt.text` as one line at `lt.x, lt.y`.
-// Commit 3 will change this to iterate `lt.lines`.
+// draw_line_with_pango: draws one LineFragment using Pango.
+// Called once per fragment by paint.cpp (ADR-015).
 // =============================================================
 
 #pragma once
@@ -26,7 +25,8 @@ std::pair<float, float> measure_with_pango(
     std::string_view font_family,
     float font_size);
 
-void draw_with_pango(cairo_t* cr,
-                     const renderer::layout::LayoutText& t);
+void draw_line_with_pango(cairo_t* cr,
+                          const renderer::layout::LineFragment& frag,
+                          const renderer::layout::LayoutText& t);
 
 } // namespace honeybee::browser
