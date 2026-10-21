@@ -40,7 +40,7 @@ const css::Declaration* find_decl(const css::Rule& r,
 } // namespace
 
 TEST_CASE("ua_stylesheet: parses to 13 rules", "[ua_stylesheet]") {
-    CHECK(css::ua_stylesheet().rules.size() == 14);
+    CHECK(css::ua_stylesheet().rules.size() == 15);
 }
 
 TEST_CASE("ua_stylesheet: returns cached reference",
