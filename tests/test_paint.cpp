@@ -56,8 +56,7 @@ bool is_blue(const Pixel& p) {
     return p.b > 200 && p.r < 50 && p.g < 50;
 }
 
-void fake_drawer(cairo_t* cr, const layout::LineFragment& f,
-                 const layout::LayoutText& /*t*/) {
+void fake_drawer(cairo_t* cr, const layout::LineFragment& f) {
     cairo_set_source_rgb(cr, 0.0, 0.0, 1.0);
     cairo_rectangle(cr, f.x, f.y, f.width, f.height);
     cairo_fill(cr);
@@ -136,7 +135,11 @@ TEST_CASE("paint: text drawer called at text position",
     lt->width = 40.0f;
     lt->height = 16.0f;
     lt->text = "Hi";
-    lt->lines.push_back({20.0f, 20.0f, 40.0f, 16.0f, "Hi"});
+    lt->lines.push_back({
+        .x = 20.0f, .y = 20.0f, .width = 40.0f, .height = 16.0f,
+        .text = "Hi",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
     root.children.push_back(std::move(lt));
 
     paint::paint(c.cr, root, fake_drawer);
@@ -179,8 +182,16 @@ TEST_CASE("paint: multi-line text draws each fragment at its y",
     // Two fragments with a visible gap in between, at distinct
     // x and y. The fake drawer paints a blue rect per fragment;
     // the gap remains white.
-    lt->lines.push_back({10.0f, 10.0f, 10.0f, 10.0f, "AAA"});
-    lt->lines.push_back({20.0f, 40.0f, 10.0f, 10.0f, "BBB"});
+    lt->lines.push_back({
+        .x = 10.0f, .y = 10.0f, .width = 10.0f, .height = 10.0f,
+        .text = "AAA",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    lt->lines.push_back({
+        .x = 20.0f, .y = 40.0f, .width = 10.0f, .height = 10.0f,
+        .text = "BBB",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
     root.children.push_back(std::move(lt));
 
     paint::paint(c.cr, root, fake_drawer);
@@ -208,4 +219,36 @@ TEST_CASE("paint: empty-lines text draws nothing", "[paint]") {
 
     paint::paint(c.cr, root, fake_drawer);
     CHECK(is_white(pixel_at(c.surface, 50, 50)));
+}
+
+TEST_CASE("paint: LayoutInlineContext lines are painted",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 0.0f;
+    ctx->width = 100.0f;
+    ctx->height = 40.0f;
+
+    layout::LineFragment f1;
+    f1.x = 10.0f; f1.y = 10.0f; f1.width = 20.0f; f1.height = 16.0f;
+    f1.text = "A";
+    layout::LineFragment f2;
+    f2.x = 10.0f; f2.y = 30.0f; f2.width = 20.0f; f2.height = 16.0f;
+    f2.text = "B";
+    ctx->lines.push_back(f1);
+    ctx->lines.push_back(f2);
+
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    CHECK(is_blue(pixel_at(c.surface, 15, 15)));  // f1
+    CHECK(is_blue(pixel_at(c.surface, 15, 35)));  // f2
+    CHECK(is_white(pixel_at(c.surface, 15, 28))); // gap between f1 (ends y=26) and f2 (starts y=30)
 }

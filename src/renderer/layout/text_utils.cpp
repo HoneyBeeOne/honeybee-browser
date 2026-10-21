@@ -185,4 +185,70 @@ std::vector<LineFragment> break_into_lines(
     return lines;
 }
 
+std::vector<StyledLine> break_styled_words_into_lines(
+    const std::vector<StyledWord>& words,
+    float max_width,
+    const TextMeasurer& measurer) {
+
+    std::vector<StyledLine> lines;
+    if (words.empty()) return lines;
+
+    StyledLine current;
+    float cursor_x = 0.0f;
+
+    for (const auto& w : words) {
+        const float ww = measurer(w.text, w.font_family, w.font_size).first;
+        const float wh = measurer(w.text, w.font_family, w.font_size).second;
+
+        float sep = 0.0f;
+        if (!current.fragments.empty() && w.preceded_by_space) {
+            sep = measurer(" ", w.font_family, w.font_size).first;
+        }
+
+        if (!current.fragments.empty() && cursor_x + sep + ww > max_width) {
+            // Wrap: flush current line, start new
+            current.width = cursor_x;
+            lines.push_back(std::move(current));
+            current = StyledLine{};
+            cursor_x = 0.0f;
+            sep = 0.0f;
+        }
+
+        // Try to merge with the last fragment on this line.
+        LineFragment* last = current.fragments.empty()
+                                 ? nullptr
+                                 : &current.fragments.back();
+        const bool same_style = last &&
+            last->font_family == w.font_family &&
+            last->font_size == w.font_size &&
+            last->color == w.color;
+
+        if (same_style) {
+            if (sep > 0.0f) last->text += ' ';
+            last->text += w.text;
+            last->width += sep + ww;
+        } else {
+            LineFragment f;
+            f.x = cursor_x + sep;  // relative to line start
+            f.text = w.text;
+            f.font_family = w.font_family;
+            f.font_size = w.font_size;
+            f.color = w.color;
+            f.width = ww;
+            f.height = wh;
+            current.fragments.push_back(std::move(f));
+        }
+
+        cursor_x += sep + ww;
+        if (wh > current.height) current.height = wh;
+    }
+
+    if (!current.fragments.empty()) {
+        current.width = cursor_x;
+        lines.push_back(std::move(current));
+    }
+
+    return lines;
+}
+
 } // namespace honeybee::renderer::layout

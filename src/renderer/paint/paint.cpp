@@ -17,13 +17,13 @@ void fill_rect(cairo_t* cr, const layout::Color& c,
     cairo_fill(cr);
 }
 
-void paint_children(cairo_t* cr,
-                    const std::vector<std::unique_ptr<layout::LayoutNode>>&
-                        children,
-                    const TextDrawer& drawer);
+void paint_children(
+    cairo_t* cr,
+    const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
+    const LineDrawer& drawer);
 
 void paint_box(cairo_t* cr, const layout::LayoutBox& box,
-               const TextDrawer& drawer) {
+               const LineDrawer& drawer) {
     fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
 
     const float& bt = box.border[0];
@@ -40,21 +40,33 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     paint_children(cr, box.children, drawer);
 }
 
-void paint_children(cairo_t* cr,
-                    const std::vector<std::unique_ptr<layout::LayoutNode>>&
-                        children,
-                    const TextDrawer& drawer) {
+void paint_children(
+    cairo_t* cr,
+    const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
+    const LineDrawer& drawer) {
     for (const auto& child : children) {
         if (!child) continue;
-        if (child->kind == layout::LayoutKind::Box) {
-            paint_box(cr, static_cast<const layout::LayoutBox&>(*child),
-                      drawer);
-        } else {
-            const auto& lt =
-                static_cast<const layout::LayoutText&>(*child);
-            for (const auto& frag : lt.lines) {
-                drawer(cr, frag, lt);
+        switch (child->kind) {
+            case layout::LayoutKind::Box:
+                paint_box(
+                    cr, static_cast<const layout::LayoutBox&>(*child),
+                    drawer);
+                break;
+            case layout::LayoutKind::Text: {
+                const auto& lt =
+                    static_cast<const layout::LayoutText&>(*child);
+                for (const auto& frag : lt.lines) drawer(cr, frag);
+                break;
             }
+            case layout::LayoutKind::InlineContext: {
+                const auto& ctx =
+                    static_cast<const layout::LayoutInlineContext&>(*child);
+                for (const auto& frag : ctx.lines) drawer(cr, frag);
+                break;
+            }
+            case layout::LayoutKind::Inline:
+                // Structural, not painted directly.
+                break;
         }
     }
 }
@@ -62,15 +74,27 @@ void paint_children(cairo_t* cr,
 } // namespace
 
 void paint(cairo_t* cr, const layout::LayoutNode& root,
-           TextDrawer drawer) {
+           LineDrawer drawer) {
     if (cr == nullptr || !drawer) return;
-    if (root.kind == layout::LayoutKind::Box) {
-        paint_box(cr, static_cast<const layout::LayoutBox&>(root), drawer);
-    } else {
-        const auto& lt = static_cast<const layout::LayoutText&>(root);
-        for (const auto& frag : lt.lines) {
-            drawer(cr, frag, lt);
+    switch (root.kind) {
+        case layout::LayoutKind::Box:
+            paint_box(
+                cr, static_cast<const layout::LayoutBox&>(root), drawer);
+            break;
+        case layout::LayoutKind::Text: {
+            const auto& lt =
+                static_cast<const layout::LayoutText&>(root);
+            for (const auto& frag : lt.lines) drawer(cr, frag);
+            break;
         }
+        case layout::LayoutKind::InlineContext: {
+            const auto& ctx =
+                static_cast<const layout::LayoutInlineContext&>(root);
+            for (const auto& frag : ctx.lines) drawer(cr, frag);
+            break;
+        }
+        case layout::LayoutKind::Inline:
+            break;
     }
 }
 

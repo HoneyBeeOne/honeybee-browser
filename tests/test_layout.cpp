@@ -75,6 +75,37 @@ find_all_texts(const layout::LayoutBox& root) {
     return out;
 }
 
+std::vector<const layout::LayoutInlineContext*>
+find_all_contexts(const layout::LayoutBox& root) {
+    std::vector<const layout::LayoutInlineContext*> out;
+    for (const auto& child : root.children) {
+        if (child->kind == layout::LayoutKind::InlineContext) {
+            out.push_back(
+                static_cast<const layout::LayoutInlineContext*>(child.get()));
+        } else if (child->kind == layout::LayoutKind::Box) {
+            const auto* box = static_cast<const layout::LayoutBox*>(child.get());
+            auto sub = find_all_contexts(*box);
+            out.insert(out.end(), sub.begin(), sub.end());
+        }
+    }
+    return out;
+}
+
+std::string context_text(const layout::LayoutInlineContext& ctx) {
+    std::string out;
+    for (const auto& frag : ctx.lines) {
+        if (!out.empty() && !frag.text.empty()) {
+            // space between fragments if the source had whitespace
+            // Note: the merge in break_styled_words_into_lines
+            // already handles intra-style spaces, so fragment.text
+            // may contain multiple words. Inter-fragment spaces
+            // come from the source text.
+        }
+        out += frag.text;
+    }
+    return out;
+}
+
 } // namespace
 
 // ---------------- Style value parsing ----------------
@@ -592,7 +623,7 @@ TEST_CASE("layout: LTR text rtl flag false", "[layout][text_wrapping]") {
 }
 
 TEST_CASE("layout: Arabic text rtl flag true", "[layout][text_wrapping]") {
-    auto t = run("<p>\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
+    auto t = run("<p dir=\"rtl\">\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
     CHECK(texts[0]->rtl);
@@ -603,7 +634,7 @@ TEST_CASE("layout: RTL lines right-aligned to same edge",
     // 5 identical Arabic words (each 4 chars, 8 UTF-8 bytes, 64px),
     // container 100px. Each word alone on a line (64+8+64 = 136 > 100).
     // Same width per line means same x for all lines (right-aligned).
-    auto t = run("<p>\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
+    auto t = run("<p dir=\"rtl\">\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
                  "", 100.0f);
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
@@ -612,4 +643,234 @@ TEST_CASE("layout: RTL lines right-aligned to same edge",
     for (std::size_t i = 1; i < texts[0]->lines.size(); ++i) {
         CHECK(texts[0]->lines[i].x == texts[0]->lines[0].x);
     }
+}
+
+// =============================================================
+// display_of (ADR-016, Commit 1).
+// =============================================================
+
+TEST_CASE("display_of: null style returns Block",
+          "[layout][display]") {
+    CHECK(layout::display_of(nullptr) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: missing display returns Block",
+          "[layout][display]") {
+    // Use an empty ComputedStyle, which will not have a
+    // "display" declaration.
+    css::ComputedStyle style;
+    CHECK(layout::display_of(&style) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: explicit inline", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: inline }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Inline);
+}
+
+TEST_CASE("display_of: explicit block", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: block }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: explicit none", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: none }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::None);
+}
+
+TEST_CASE("display_of: unknown value falls back to Block",
+          "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: grid }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+}
+
+TEST_CASE("LineFragment: aggregate init still works",
+          "[layout][display]") {
+    // With the new style fields added in ADR-016, aggregate
+    // initialization with just the original five fields must
+    // still compile and leave style defaults intact.
+    layout::LineFragment frag{
+        .x = 10.0f, .y = 20.0f, .width = 30.0f, .height = 16.0f,
+        .text = "text",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()};
+    CHECK(frag.x == 10.0f);
+    CHECK(frag.y == 20.0f);
+    CHECK(frag.width == 30.0f);
+    CHECK(frag.height == 16.0f);
+    CHECK(frag.text == "text");
+    CHECK(frag.font_family.empty());
+    CHECK(frag.font_size == 16.0f);
+    CHECK(frag.color == layout::Color::black());
+}
+
+// =============================================================
+// Inline formatting (ADR-016, Block B).
+// =============================================================
+
+TEST_CASE("layout: inline em flows with surrounding text",
+          "[layout][inline]") {
+    auto t = run("<p>Hello <em>world</em>!</p>",
+                 "em { display: inline }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    // Exactly one LayoutText child -- the inline run was flattened.
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(context_text(*ctxs[0]) == "Hello world!");
+}
+
+TEST_CASE("layout: adjacent inline elements merge",
+          "[layout][inline]") {
+    auto t = run("<p><em>a</em><em>b</em></p>",
+                 "em { display: inline }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(context_text(*ctxs[0]) == "ab");
+}
+
+TEST_CASE("layout: space between inline elements preserved",
+          "[layout][inline]") {
+    auto t = run("<p><em>a</em> <em>b</em></p>",
+                 "em { display: inline }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(context_text(*ctxs[0]) == "a b");
+}
+
+TEST_CASE("layout: block child interrupts inline run",
+          "[layout][inline]") {
+    auto t = run("<div>before<p>middle</p>after</div>", "", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    // Two inline runs (before, after) and one block (middle).
+    REQUIRE(texts.size() == 3);
+    CHECK(texts[0]->text == "before");
+    CHECK(texts[1]->text == "middle");
+    CHECK(texts[2]->text == "after");
+}
+
+TEST_CASE("layout: whitespace between inline elements collapses",
+          "[layout][inline]") {
+    auto t = run("<p>Hello\n   <em>world</em>\n   !</p>",
+                 "em { display: inline }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(context_text(*ctxs[0]) == "Hello world !");
+}
+
+TEST_CASE("layout: nested inline elements flatten",
+          "[layout][inline]") {
+    auto t = run("<p><em>a<span>b</span>c</em></p>",
+                 "em { display: inline } span { display: inline }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(context_text(*ctxs[0]) == "abc");
+}
+
+TEST_CASE("layout: anchor color appears in fragment",
+          "[layout][inline]") {
+    auto t = run("<p>Click <a href=\"#\">here</a> for more</p>",
+                 "a { display: inline; color: #FF0000 }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    const auto& lines = ctxs[0]->lines;
+    // Adjacent same-style words merge into one fragment.
+    // Expected: ["Click" (black), "here" (red), "for more" (black)]
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0].color == layout::Color::black());
+    CHECK(lines[1].color.r > 0.9f);
+    CHECK(lines[1].color.g < 0.1f);
+    CHECK(lines[1].color.b < 0.1f);
+    CHECK(lines[2].color == layout::Color::black());
+}
+
+TEST_CASE("layout: RTL fragments reverse left-to-right",
+          "[layout][inline]") {
+    // "كلمة" (parent, black) + "ثانية" (em, blue) + "كلمة" (parent, black)
+    auto t = run("<p dir=\"rtl\">\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 "
+                 "<em>\xd8\xab\xd8\xa7\xd9\x86\xd9\x8a\xd8\xa9</em> "
+                 "\xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
+                 "em { display: inline; color: #0000FF }", 800.0f);
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    CHECK(ctxs[0]->rtl);
+    const auto& lines = ctxs[0]->lines;
+    REQUIRE(lines.size() == 3);
+    // In RTL visual order, source-order-first word is rightmost.
+    // lines[0] is the source-order-first word ("كلمة", black) and
+    // must have a larger x than the last fragment.
+    CHECK(lines[0].x > lines[2].x);
+}
+
+// =============================================================
+// dir attribute (ADR-016, Block D).
+// =============================================================
+
+TEST_CASE("dir: missing attribute defaults to LTR",
+          "[layout][direction]") {
+    auto t = run("<p>Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: explicit rtl on paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"rtl\">Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: explicit ltr overrides natural heuristic",
+          "[layout][direction]") {
+    auto t = run("<p dir=\"ltr\">\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</p>",
+                 "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: inherited from html", "[layout][direction]") {
+    auto t = run("<html dir=\"rtl\"><body><p>Hello</p></body></html>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: auto on Arabic paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"auto\">\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</p>",
+                 "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: auto on English paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"auto\">Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: mixed paragraph with no dir inherits LTR",
+          "[layout][direction]") {
+    auto t = run("<p>\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7 Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
 }
