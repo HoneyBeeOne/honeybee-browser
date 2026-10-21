@@ -150,9 +150,12 @@ LayoutBox layout_element(const dom::Element& el,
                          float y_before_margin,
                          float parent_content_width,
                          float parent_font_size,
-                         float root_font_size) {
+                         float root_font_size,
+                         Direction parent_dir) {
     LayoutBox box;
     box.element = &el;
+
+    const Direction own_dir = resolve_direction(el, parent_dir);
 
     const css::ComputedStyle* style = lookup(styles, el);
 
@@ -260,7 +263,7 @@ LayoutBox layout_element(const dom::Element& el,
             inline_run.clear();
             if (collapsed.empty()) return;
 
-            const bool rtl = detect_rtl(collapsed);
+            const bool rtl = (own_dir == Direction::Rtl);
             auto fragments = break_into_lines(
                 collapsed, family, own_font_size, content_w, measurer);
             if (fragments.empty()) return;
@@ -308,7 +311,7 @@ LayoutBox layout_element(const dom::Element& el,
             if (!run_text.empty()) run_text += ' ';
             run_text += w.text;
         }
-        const bool rtl = detect_rtl(run_text);
+        const bool rtl = (own_dir == Direction::Rtl);
 
         auto styled_lines =
             break_styled_words_into_lines(words, content_w, measurer);
@@ -358,7 +361,8 @@ LayoutBox layout_element(const dom::Element& el,
             flush_inline_run();
             auto child_box = std::make_unique<LayoutBox>(
                 layout_element(child_el, styles, measurer, content_x, cursor_y,
-                               content_w, own_font_size, root_font_size));
+                               content_w, own_font_size, root_font_size,
+                               own_dir));
             cursor_y = child_box->y + child_box->height + child_box->margin[2];
             box.children.push_back(std::move(child_box));
         } else if (child->type() == dom::NodeType::Text) {
@@ -397,6 +401,18 @@ Display display_of(const css::ComputedStyle* style) {
     return Display::Block;
 }
 
+Direction resolve_direction(const dom::Element& el, Direction parent_dir) {
+    const auto dir_attr = el.get_attribute("dir");
+    if (dir_attr == "ltr") return Direction::Ltr;
+    if (dir_attr == "rtl") return Direction::Rtl;
+    if (dir_attr == "auto") {
+        std::string flat;
+        flatten_inline_text(el, flat);
+        return detect_rtl(flat) ? Direction::Rtl : Direction::Ltr;
+    }
+    return parent_dir;
+}
+
 LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,
@@ -409,7 +425,7 @@ LayoutBox layout(const dom::Document& doc,
         font_size_of(root_style, kDefaultFontSize, kDefaultFontSize);
 
     return layout_element(*root, styles, measurer, 0.0f, 0.0f, viewport_width,
-                          kDefaultFontSize, root_fs);
+                          kDefaultFontSize, root_fs, Direction::Ltr);
 }
 
 } // namespace honeybee::renderer::layout

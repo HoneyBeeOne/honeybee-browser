@@ -81,25 +81,26 @@ cascade working as designed.
 
 The [demo page](demo.html) is HoneyBee's honest smoke test. It uses only supported properties, so it renders exactly as its CSS specifies.
 
-## Known behavior: RTL direction heuristic
+## Text direction (resolved in ADR-016)
 
-ADR-015 applies a first-strong-character heuristic to decide
-line direction: if the first strong character in a text node is
-Arabic, Hebrew, Syriac, Thaana, NKo, or Adlam, that text renders
-RTL (lines right-aligned); otherwise it renders LTR.
+Direction is determined by the `dir` attribute on an element or
+its nearest ancestor that sets one. Resolution order:
 
-This diverges from Firefox for **mixed-direction paragraphs**.
-Firefox uses the *inherited* direction (`dir` attribute or
-`direction` CSS property, defaulting to LTR), not a per-text
-heuristic. So a paragraph like `<p>هذا نص عربي. Rendered via
-Pango.</p>` is left-aligned in Firefox (LTR paragraph, RTL
-segment) but right-aligned in HoneyBee (RTL detected by first
-strong character).
+- `dir="ltr"` -> LTR (lines left-aligned)
+- `dir="rtl"` -> RTL (lines right-aligned)
+- `dir="auto"` -> first-strong-character heuristic (opt-in)
+- missing -> inherit from parent, default LTR at `<html>`
 
-This is documented behavior, not a bug. It will be revisited in
-a future ADR when `dir` attribute / `direction` CSS property
-support lands. For pages that rely on Firefox's behavior, an
-explicit `dir="ltr"` will be the eventual escape hatch.
+This matches HTML spec behavior: paragraphs without an explicit
+`dir` inherit LTR and render left-aligned. Arabic pages use
+`<html dir="rtl">` (the standard pattern) to render right-aligned
+throughout.
+
+**Note (superseded)**: before ADR-016, a first-strong heuristic
+was applied unconditionally, causing mixed-direction paragraphs
+to right-align even without a `dir` attribute. That divergence
+from Firefox is resolved by making the heuristic opt-in via
+`dir="auto"`.
 
 ## How to report a visual bug
 

@@ -32,4 +32,11 @@ LayoutBox layout(const dom::Document& doc,
 // used by lookup() in layout.cpp.
 Display display_of(const css::ComputedStyle* style);
 
+// Resolve the text direction for an element (ADR-016).
+// Precedence: dir="ltr" -> Ltr, dir="rtl" -> Rtl,
+// dir="auto" -> heuristic on the element's flattened text,
+// missing -> parent_dir. Default parent_dir is Direction::Ltr
+// at <html>.
+Direction resolve_direction(const dom::Element& el, Direction parent_dir);
+
 } // namespace honeybee::renderer::layout

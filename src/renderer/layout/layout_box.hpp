@@ -40,6 +40,11 @@ struct Color {
 // (flex/grid/table) are deferred; v1 has Block and Inline.
 enum class Display : std::uint8_t { Block, Inline, None };
 
+// Text direction for a block container (ADR-016). Resolved from
+// the dir attribute on the element or its ancestors; defaults to
+// Ltr at <html>.
+enum class Direction : std::uint8_t { Ltr, Rtl };
+
 enum class LayoutKind {
     Box,
     Text,

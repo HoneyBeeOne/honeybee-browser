@@ -623,7 +623,7 @@ TEST_CASE("layout: LTR text rtl flag false", "[layout][text_wrapping]") {
 }
 
 TEST_CASE("layout: Arabic text rtl flag true", "[layout][text_wrapping]") {
-    auto t = run("<p>\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
+    auto t = run("<p dir=\"rtl\">\xd8\xa7\xd9\x84\xd8\xb3\xd9\x84\xd8\xa7\xd9\x85</p>", "");
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
     CHECK(texts[0]->rtl);
@@ -634,7 +634,7 @@ TEST_CASE("layout: RTL lines right-aligned to same edge",
     // 5 identical Arabic words (each 4 chars, 8 UTF-8 bytes, 64px),
     // container 100px. Each word alone on a line (64+8+64 = 136 > 100).
     // Same width per line means same x for all lines (right-aligned).
-    auto t = run("<p>\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
+    auto t = run("<p dir=\"rtl\">\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9 \xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
                  "", 100.0f);
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
@@ -802,7 +802,7 @@ TEST_CASE("layout: anchor color appears in fragment",
 TEST_CASE("layout: RTL fragments reverse left-to-right",
           "[layout][inline]") {
     // "كلمة" (parent, black) + "ثانية" (em, blue) + "كلمة" (parent, black)
-    auto t = run("<p>\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 "
+    auto t = run("<p dir=\"rtl\">\xd9\x83\xd9\x84\xd9\x85\xd8\xa9 "
                  "<em>\xd8\xab\xd8\xa7\xd9\x86\xd9\x8a\xd8\xa9</em> "
                  "\xd9\x83\xd9\x84\xd9\x85\xd8\xa9</p>",
                  "em { display: inline; color: #0000FF }", 800.0f);
@@ -815,4 +815,62 @@ TEST_CASE("layout: RTL fragments reverse left-to-right",
     // lines[0] is the source-order-first word ("كلمة", black) and
     // must have a larger x than the last fragment.
     CHECK(lines[0].x > lines[2].x);
+}
+
+// =============================================================
+// dir attribute (ADR-016, Block D).
+// =============================================================
+
+TEST_CASE("dir: missing attribute defaults to LTR",
+          "[layout][direction]") {
+    auto t = run("<p>Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: explicit rtl on paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"rtl\">Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: explicit ltr overrides natural heuristic",
+          "[layout][direction]") {
+    auto t = run("<p dir=\"ltr\">\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</p>",
+                 "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: inherited from html", "[layout][direction]") {
+    auto t = run("<html dir=\"rtl\"><body><p>Hello</p></body></html>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: auto on Arabic paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"auto\">\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</p>",
+                 "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->rtl);
+}
+
+TEST_CASE("dir: auto on English paragraph", "[layout][direction]") {
+    auto t = run("<p dir=\"auto\">Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
+}
+
+TEST_CASE("dir: mixed paragraph with no dir inherits LTR",
+          "[layout][direction]") {
+    auto t = run("<p>\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7 Hello</p>", "");
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK_FALSE(texts[0]->rtl);
 }
