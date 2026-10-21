@@ -136,7 +136,9 @@ TEST_CASE("paint: text drawer called at text position",
     lt->width = 40.0f;
     lt->height = 16.0f;
     lt->text = "Hi";
-    lt->lines.push_back({20.0f, 20.0f, 40.0f, 16.0f, "Hi"});
+    lt->lines.push_back({
+        .x = 20.0f, .y = 20.0f, .width = 40.0f, .height = 16.0f,
+        .text = "Hi"});
     root.children.push_back(std::move(lt));
 
     paint::paint(c.cr, root, fake_drawer);
@@ -179,8 +181,12 @@ TEST_CASE("paint: multi-line text draws each fragment at its y",
     // Two fragments with a visible gap in between, at distinct
     // x and y. The fake drawer paints a blue rect per fragment;
     // the gap remains white.
-    lt->lines.push_back({10.0f, 10.0f, 10.0f, 10.0f, "AAA"});
-    lt->lines.push_back({20.0f, 40.0f, 10.0f, 10.0f, "BBB"});
+    lt->lines.push_back({
+        .x = 10.0f, .y = 10.0f, .width = 10.0f, .height = 10.0f,
+        .text = "AAA"});
+    lt->lines.push_back({
+        .x = 20.0f, .y = 40.0f, .width = 10.0f, .height = 10.0f,
+        .text = "BBB"});
     root.children.push_back(std::move(lt));
 
     paint::paint(c.cr, root, fake_drawer);

@@ -26,4 +26,10 @@ LayoutBox layout(const dom::Document& doc,
                  TextMeasurer measurer,
                  float viewport_width);
 
+// Read the display property from a computed style (ADR-016).
+// Returns Block when the property is missing, empty, or
+// unrecognized. Takes a nullable pointer to match the pattern
+// used by lookup() in layout.cpp.
+Display display_of(const css::ComputedStyle* style);
+
 } // namespace honeybee::renderer::layout

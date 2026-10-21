@@ -217,6 +217,15 @@ const dom::Element* find_root_element(const dom::Document& doc) {
 
 } // namespace
 
+Display display_of(const css::ComputedStyle* style) {
+    if (!style) return Display::Block;
+    const auto v = style->get("display");
+    if (!v) return Display::Block;
+    if (*v == "inline") return Display::Inline;
+    if (*v == "none") return Display::None;
+    return Display::Block;
+}
+
 LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,

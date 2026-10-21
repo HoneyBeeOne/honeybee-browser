@@ -613,3 +613,75 @@ TEST_CASE("layout: RTL lines right-aligned to same edge",
         CHECK(texts[0]->lines[i].x == texts[0]->lines[0].x);
     }
 }
+
+// =============================================================
+// display_of (ADR-016, Commit 1).
+// =============================================================
+
+TEST_CASE("display_of: null style returns Block",
+          "[layout][display]") {
+    CHECK(layout::display_of(nullptr) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: missing display returns Block",
+          "[layout][display]") {
+    // Use an empty ComputedStyle, which will not have a
+    // "display" declaration.
+    css::ComputedStyle style;
+    CHECK(layout::display_of(&style) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: explicit inline", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: inline }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Inline);
+}
+
+TEST_CASE("display_of: explicit block", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: block }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+}
+
+TEST_CASE("display_of: explicit none", "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: none }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::None);
+}
+
+TEST_CASE("display_of: unknown value falls back to Block",
+          "[layout][display]") {
+    auto doc = run("<p>test</p>", "p { display: grid }");
+    const auto* p = doc.doc->find_element("p");
+    REQUIRE(p != nullptr);
+    auto it = doc.styles.find(p);
+    REQUIRE(it != doc.styles.end());
+    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+}
+
+TEST_CASE("LineFragment: aggregate init still works",
+          "[layout][display]") {
+    // With the new style fields added in ADR-016, aggregate
+    // initialization with just the original five fields must
+    // still compile and leave style defaults intact.
+    layout::LineFragment frag{
+        .x = 10.0f, .y = 20.0f, .width = 30.0f, .height = 16.0f,
+        .text = "text"};
+    CHECK(frag.x == 10.0f);
+    CHECK(frag.y == 20.0f);
+    CHECK(frag.width == 30.0f);
+    CHECK(frag.height == 16.0f);
+    CHECK(frag.text == "text");
+    CHECK(frag.font_family.empty());
+    CHECK(frag.font_size == 16.0f);
+    CHECK(frag.color == layout::Color::black());
+}

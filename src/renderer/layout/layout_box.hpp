@@ -1,16 +1,18 @@
 // =============================================================
 // File: layout_box.hpp
-// Purpose: Layout tree types (ADR-011, ADR-015).
+// Purpose: Layout tree types (ADR-011, ADR-015, ADR-016).
 //
-// Pure types with no external dependencies: no dom, no css,
-// no GTK. LayoutNode is an abstract base; LayoutBox and
-// LayoutText derive from it. LayoutText holds a vector of
-// LineFragment (ADR-015) for line-broken text.
+// LayoutNode is an abstract base; LayoutBox, LayoutText,
+// LayoutInline, and LayoutInlineContext derive from it.
+// LayoutText holds a vector of LineFragment (ADR-015) for
+// line-broken text. LayoutInline and LayoutInlineContext are
+// introduced in ADR-016 for inline formatting.
 // =============================================================
 
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -34,7 +36,16 @@ struct Color {
     bool operator==(const Color&) const = default;
 };
 
-enum class LayoutKind { Box, Text };
+// CSS display value (ADR-016). None and the layout modes
+// (flex/grid/table) are deferred; v1 has Block and Inline.
+enum class Display : std::uint8_t { Block, Inline, None };
+
+enum class LayoutKind {
+    Box,
+    Text,
+    Inline,
+    InlineContext,
+};
 
 struct LayoutNode {
     LayoutKind kind;
@@ -68,30 +79,58 @@ struct LayoutBox final : LayoutNode {
     LayoutBox() : LayoutNode(LayoutKind::Box) {}
 };
 
-// One rendered line of a text node (ADR-015). Position is
-// absolute, in the same coordinate space as the parent
-// LayoutText's bounding box.
+// One rendered line of a text node (ADR-015). Style fields
+// added in ADR-016 so fragments derived from an <em> or a
+// <span style="color:red"> carry their own font and color.
 struct LineFragment {
     float x = 0.0f;
     float y = 0.0f;
     float width = 0.0f;
     float height = 0.0f;
     std::string text;
-};
-
-struct LayoutText final : LayoutNode {
-    std::string text;               // full collapsed text
     std::string font_family;
     float font_size = 16.0f;
     Color color = Color::black();
-    std::vector<LineFragment> lines;  // one entry per rendered line
-    bool rtl = false;                 // first-strong heuristic
+};
+
+struct LayoutText final : LayoutNode {
+    std::string text;
+    std::string font_family;
+    float font_size = 16.0f;
+    Color color = Color::black();
+    std::vector<LineFragment> lines;
+    bool rtl = false;
 
     LayoutText() : LayoutNode(LayoutKind::Text) {}
 };
 
-// Measures a single string at a given font. Called once per
-// word during line breaking, and once per line for height.
+// Structural inline element (ADR-016). Its children are the
+// element's inline descendants (LayoutText and nested
+// LayoutInline). Flattened during inline context construction;
+// not painted directly.
+struct LayoutInline : LayoutNode {
+    const dom::Element* element = nullptr;
+    std::vector<std::unique_ptr<LayoutNode>> children;
+    std::string font_family;
+    float font_size = 16.0f;
+    Color color = Color::black();
+    Display display = Display::Inline;
+
+    LayoutInline() : LayoutNode(LayoutKind::Inline) {}
+};
+
+// A block container's inline run (ADR-016). Collects inline
+// items, flattens them, runs line breaking across the whole
+// sequence, and holds the resulting line fragments.
+struct LayoutInlineContext : LayoutNode {
+    std::vector<std::unique_ptr<LayoutNode>> children;
+    std::vector<LineFragment> lines;
+    bool rtl = false;
+
+    LayoutInlineContext() : LayoutNode(LayoutKind::InlineContext) {}
+};
+
+// Measures a single string at a given font (ADR-015).
 using TextMeasurer = std::function<std::pair<float, float>(
     std::string_view text,
     std::string_view font_family,
