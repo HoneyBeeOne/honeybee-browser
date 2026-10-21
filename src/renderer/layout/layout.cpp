@@ -80,6 +80,69 @@ void flatten_inline_text(const dom::Node& node, std::string& out) {
     }
 }
 
+bool is_ws_byte(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+// Recursively walk an inline subtree, emitting StyledWord tokens.
+// Text nodes inherit the current style parameters. Elements with
+// their own color in ComputedStyle override the color for their
+// descendants. Font family and font size are inherited uniformly
+// (per ADR-016, font-weight/style render is deferred).
+// prev_had_space is threaded through siblings so that whitespace
+// at the boundary between inline elements is preserved.
+void flatten_inline_to_words(
+    const dom::Node& node,
+    const css::ComputedStyleMap& styles,
+    const std::string& family,
+    float size,
+    const Color& default_color,
+    bool& prev_had_space,
+    std::vector<StyledWord>& out) {
+
+    if (node.type() == dom::NodeType::Text) {
+        const auto& tn = static_cast<const dom::TextNode&>(node);
+        const std::string_view data = tn.data();
+        bool pending_ws = false;
+        std::size_t i = 0;
+        while (i < data.size()) {
+            if (is_ws_byte(data[i])) {
+                pending_ws = true;
+                ++i;
+                continue;
+            }
+            const std::size_t start = i;
+            while (i < data.size() && !is_ws_byte(data[i])) ++i;
+            StyledWord w;
+            w.text = std::string(data.substr(start, i - start));
+            w.font_family = family;
+            w.font_size = size;
+            w.color = default_color;
+            w.preceded_by_space =
+                !out.empty() && (prev_had_space || pending_ws);
+            pending_ws = false;
+            prev_had_space = false;
+            out.push_back(std::move(w));
+        }
+        if (pending_ws) prev_had_space = true;
+    } else if (node.type() == dom::NodeType::Element) {
+        const auto& el = static_cast<const dom::Element&>(node);
+        Color color = default_color;
+        auto it = styles.find(&el);
+        if (it != styles.end()) {
+            const auto cv = it->second.get("color");
+            if (cv) {
+                const Color c = parse_color(*cv);
+                if (c.a > 0.0f) color = c;
+            }
+        }
+        for (const auto& child : el.children()) {
+            flatten_inline_to_words(*child, styles, family, size, color,
+                                    prev_had_space, out);
+        }
+    }
+}
+
 LayoutBox layout_element(const dom::Element& el,
                          const css::ComputedStyleMap& styles,
                          const TextMeasurer& measurer,
@@ -174,45 +237,112 @@ LayoutBox layout_element(const dom::Element& el,
     auto flush_inline_run = [&]() {
         if (inline_run.empty()) return;
 
-        std::string raw;
-        for (const auto* n : inline_run) {
-            flatten_inline_text(*n, raw);
-        }
-        std::string collapsed = collapse_whitespace(raw);
-        inline_run.clear();
-        if (collapsed.empty()) return;
-
         const std::string family = font_family_of(style);
-        const bool rtl = detect_rtl(collapsed);
-        auto fragments = break_into_lines(
-            collapsed, family, own_font_size, content_w, measurer);
-        if (fragments.empty()) return;
+        const Color tc = text_color_of(style);
+
+        // Determine whether any inline element (as opposed to only
+        // text nodes) is present in the run.
+        bool has_inline_element = false;
+        for (const auto* n : inline_run) {
+            if (n->type() == dom::NodeType::Element) {
+                has_inline_element = true;
+                break;
+            }
+        }
+
+        if (!has_inline_element) {
+            // Text-only run: LayoutText path (ADR-015).
+            std::string raw;
+            for (const auto* n : inline_run) {
+                flatten_inline_text(*n, raw);
+            }
+            std::string collapsed = collapse_whitespace(raw);
+            inline_run.clear();
+            if (collapsed.empty()) return;
+
+            const bool rtl = detect_rtl(collapsed);
+            auto fragments = break_into_lines(
+                collapsed, family, own_font_size, content_w, measurer);
+            if (fragments.empty()) return;
+
+            float max_line_w = 0.0f;
+            float total_h = 0.0f;
+            for (auto& f : fragments) {
+                f.font_family = family;
+                f.font_size = own_font_size;
+                f.color = tc;
+                f.x = rtl ? content_x + content_w - f.width : content_x;
+                f.y += cursor_y;
+                if (f.width > max_line_w) max_line_w = f.width;
+                total_h += f.height;
+            }
+
+            auto lt = std::make_unique<LayoutText>();
+            lt->x = content_x;
+            lt->y = cursor_y;
+            lt->width = max_line_w;
+            lt->height = total_h;
+            lt->text = std::move(collapsed);
+            lt->font_family = family;
+            lt->font_size = own_font_size;
+            lt->color = tc;
+            lt->rtl = rtl;
+            lt->lines = std::move(fragments);
+            cursor_y += total_h;
+            box.children.push_back(std::move(lt));
+            return;
+        }
+
+        // Inline-element run: LayoutInlineContext path (ADR-016).
+        std::vector<StyledWord> words;
+        bool prev_had_space = false;
+        for (const auto* n : inline_run) {
+            flatten_inline_to_words(*n, styles, family, own_font_size,
+                                    tc, prev_had_space, words);
+        }
+        inline_run.clear();
+        if (words.empty()) return;
+
+        std::string run_text;
+        for (const auto& w : words) {
+            if (!run_text.empty()) run_text += ' ';
+            run_text += w.text;
+        }
+        const bool rtl = detect_rtl(run_text);
+
+        auto styled_lines =
+            break_styled_words_into_lines(words, content_w, measurer);
+        if (styled_lines.empty()) return;
+
+        auto ctx = std::make_unique<LayoutInlineContext>();
+        ctx->x = content_x;
+        ctx->y = cursor_y;
+        ctx->rtl = rtl;
 
         float max_line_w = 0.0f;
         float total_h = 0.0f;
-        for (auto& f : fragments) {
-            f.font_family = family;
-            f.font_size = own_font_size;
-            f.color = text_color_of(style);
-            f.x = rtl ? content_x + content_w - f.width : content_x;
-            f.y += cursor_y;
-            if (f.width > max_line_w) max_line_w = f.width;
-            total_h += f.height;
+        float line_y = cursor_y;
+        for (auto& line : styled_lines) {
+            const float line_start_x =
+                rtl ? content_x + content_w - line.width : content_x;
+            for (auto& frag : line.fragments) {
+                if (rtl) {
+                    frag.x = content_x + content_w - frag.x - frag.width;
+                } else {
+                    frag.x = line_start_x + frag.x;
+                }
+                frag.y = line_y;
+                ctx->lines.push_back(frag);
+            }
+            if (line.width > max_line_w) max_line_w = line.width;
+            line_y += line.height;
+            total_h += line.height;
         }
 
-        auto lt = std::make_unique<LayoutText>();
-        lt->x = content_x;
-        lt->y = cursor_y;
-        lt->width = max_line_w;
-        lt->height = total_h;
-        lt->text = std::move(collapsed);
-        lt->font_family = family;
-        lt->font_size = own_font_size;
-        lt->color = text_color_of(style);
-        lt->rtl = rtl;
-        lt->lines = std::move(fragments);
+        ctx->width = max_line_w;
+        ctx->height = total_h;
         cursor_y += total_h;
-        box.children.push_back(std::move(lt));
+        box.children.push_back(std::move(ctx));
     };
 
     for (const auto& child : el.children()) {

@@ -229,6 +229,7 @@ std::vector<StyledLine> break_styled_words_into_lines(
             last->width += sep + ww;
         } else {
             LineFragment f;
+            f.x = cursor_x + sep;  // relative to line start
             f.text = w.text;
             f.font_family = w.font_family;
             f.font_size = w.font_size;
