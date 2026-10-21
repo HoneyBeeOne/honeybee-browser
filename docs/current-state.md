@@ -32,12 +32,15 @@ To reproduce: clone the repo, build, then load `docs/demo.html` in the browser (
 | Arabic text with correct letter joining (via Pango) | #110 |
 | UA stylesheet: body margin, heading sizes, paragraph gaps | #121 |
 | Text wrapping at word boundaries + whitespace collapsing | #125 |
+| Inline formatting (`<span>`, `<a>`, `<em>` flow with text) | #129 |
+| `display` property (block, inline; other values deferred) | #129 |
+| `dir` attribute (`ltr`, `rtl`, `auto`, inheritance) | #129 |
+| Per-fragment style (inline element colors) | #129 |
 
 ## What does NOT render yet
 
 | Missing | Reason | Planned |
 |---|---|---|
-| Inline formatting (`<span>`, `<a>`, `<em>`) | layout is block-only | future ADR |
 | Pseudo-classes (`:hover`, `:link`, `:visited`) | not in selector parser | future ADR |
 | Pseudo-elements (`::before`, `::after`) | not in selector parser | future ADR |
 | `@media` queries | at-rules skipped by parser | future ADR |
