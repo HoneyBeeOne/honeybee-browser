@@ -675,7 +675,9 @@ TEST_CASE("LineFragment: aggregate init still works",
     // still compile and leave style defaults intact.
     layout::LineFragment frag{
         .x = 10.0f, .y = 20.0f, .width = 30.0f, .height = 16.0f,
-        .text = "text"};
+        .text = "text",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()};
     CHECK(frag.x == 10.0f);
     CHECK(frag.y == 20.0f);
     CHECK(frag.width == 30.0f);

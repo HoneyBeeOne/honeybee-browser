@@ -1,13 +1,12 @@
 // =============================================================
 // File: paint.hpp
-// Purpose: Paint stage (ADR-011, ADR-015).
+// Purpose: Paint stage (ADR-011, ADR-015, ADR-016).
 //
-// Walks a LayoutNode tree in document order. For LayoutText,
-// iterates line fragments (ADR-015) and invokes the injected
-// TextDrawer once per fragment.
-//
-// Raw cairo_t* keeps paint.cpp on the C API. GTK-facing code
-// passes refptr->cobj() at the boundary.
+// Walks a LayoutNode tree in document order. For LayoutText and
+// LayoutInlineContext nodes, iterates line fragments and invokes
+// the LineDrawer once per fragment. Fragments carry their own
+// style (font, size, color) so paint has no need for parent
+// LayoutText context.
 // =============================================================
 
 #pragma once
@@ -20,15 +19,11 @@
 
 namespace honeybee::renderer::paint {
 
-// Draws one line fragment of a LayoutText. The LayoutText
-// provides font family, size, and color; the fragment provides
-// text and position.
-using TextDrawer = std::function<void(
+using LineDrawer = std::function<void(
     cairo_t*,
-    const layout::LineFragment&,
-    const layout::LayoutText&)>;
+    const layout::LineFragment&)>;
 
 void paint(cairo_t* cr, const layout::LayoutNode& root,
-           TextDrawer drawer);
+           LineDrawer drawer);
 
 } // namespace honeybee::renderer::paint
