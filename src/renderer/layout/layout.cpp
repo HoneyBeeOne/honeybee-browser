@@ -69,6 +69,17 @@ Color text_color_of(const css::ComputedStyle* style) {
     return v ? parse_color(*v) : Color::black();
 }
 
+void flatten_inline_text(const dom::Node& node, std::string& out) {
+    if (node.type() == dom::NodeType::Text) {
+        const auto& tn = static_cast<const dom::TextNode&>(node);
+        out += tn.data();
+    } else if (node.type() == dom::NodeType::Element) {
+        for (const auto& child : node.children()) {
+            flatten_inline_text(*child, out);
+        }
+    }
+}
+
 LayoutBox layout_element(const dom::Element& el,
                          const css::ComputedStyleMap& styles,
                          const TextMeasurer& measurer,
@@ -150,51 +161,81 @@ LayoutBox layout_element(const dom::Element& el,
     }
 
     float cursor_y = content_y;
+
+    // ADR-016 Block B: inline runs flow together as one LayoutText.
+    // We collect consecutive inline children (text nodes and
+    // display:inline elements) into inline_run, then flatten them
+    // into a single text when a block child interrupts or when the
+    // loop ends. Per-fragment style (Block C) will need
+    // LayoutInlineContext instead; for uniform style, flattening to
+    // one LayoutText produces the same visual output.
+    std::vector<const dom::Node*> inline_run;
+
+    auto flush_inline_run = [&]() {
+        if (inline_run.empty()) return;
+
+        std::string raw;
+        for (const auto* n : inline_run) {
+            flatten_inline_text(*n, raw);
+        }
+        std::string collapsed = collapse_whitespace(raw);
+        inline_run.clear();
+        if (collapsed.empty()) return;
+
+        const std::string family = font_family_of(style);
+        const bool rtl = detect_rtl(collapsed);
+        auto fragments = break_into_lines(
+            collapsed, family, own_font_size, content_w, measurer);
+        if (fragments.empty()) return;
+
+        float max_line_w = 0.0f;
+        float total_h = 0.0f;
+        for (auto& f : fragments) {
+            f.font_family = family;
+            f.font_size = own_font_size;
+            f.color = text_color_of(style);
+            f.x = rtl ? content_x + content_w - f.width : content_x;
+            f.y += cursor_y;
+            if (f.width > max_line_w) max_line_w = f.width;
+            total_h += f.height;
+        }
+
+        auto lt = std::make_unique<LayoutText>();
+        lt->x = content_x;
+        lt->y = cursor_y;
+        lt->width = max_line_w;
+        lt->height = total_h;
+        lt->text = std::move(collapsed);
+        lt->font_family = family;
+        lt->font_size = own_font_size;
+        lt->color = text_color_of(style);
+        lt->rtl = rtl;
+        lt->lines = std::move(fragments);
+        cursor_y += total_h;
+        box.children.push_back(std::move(lt));
+    };
+
     for (const auto& child : el.children()) {
         if (child->type() == dom::NodeType::Element) {
             const auto& child_el = static_cast<const dom::Element&>(*child);
             if (is_non_rendered_tag(child_el.tag())) continue;
+
+            const css::ComputedStyle* child_style = lookup(styles, child_el);
+            if (display_of(child_style) == Display::Inline) {
+                inline_run.push_back(child.get());
+                continue;
+            }
+            flush_inline_run();
             auto child_box = std::make_unique<LayoutBox>(
                 layout_element(child_el, styles, measurer, content_x, cursor_y,
                                content_w, own_font_size, root_font_size));
             cursor_y = child_box->y + child_box->height + child_box->margin[2];
             box.children.push_back(std::move(child_box));
         } else if (child->type() == dom::NodeType::Text) {
-            const auto& text_node = static_cast<const dom::TextNode&>(*child);
-            std::string collapsed = collapse_whitespace(text_node.data());
-            if (collapsed.empty()) continue;
-
-            const std::string family = font_family_of(style);
-            const bool rtl = detect_rtl(collapsed);
-
-            auto fragments = break_into_lines(
-                collapsed, family, own_font_size, content_w, measurer);
-            if (fragments.empty()) continue;
-
-            float max_line_w = 0.0f;
-            float total_h = 0.0f;
-            for (auto& f : fragments) {
-                f.x = rtl ? content_x + content_w - f.width : content_x;
-                f.y += cursor_y;
-                if (f.width > max_line_w) max_line_w = f.width;
-                total_h += f.height;
-            }
-
-            auto lt = std::make_unique<LayoutText>();
-            lt->x = content_x;
-            lt->y = cursor_y;
-            lt->width = max_line_w;
-            lt->height = total_h;
-            lt->text = std::move(collapsed);
-            lt->font_family = family;
-            lt->font_size = own_font_size;
-            lt->color = text_color_of(style);
-            lt->rtl = rtl;
-            lt->lines = std::move(fragments);
-            cursor_y = lt->y + lt->height;
-            box.children.push_back(std::move(lt));
+            inline_run.push_back(child.get());
         }
     }
+    flush_inline_run();
 
     box.width = content_w
               + box.padding[3] + box.padding[1]

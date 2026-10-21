@@ -687,3 +687,67 @@ TEST_CASE("LineFragment: aggregate init still works",
     CHECK(frag.font_size == 16.0f);
     CHECK(frag.color == layout::Color::black());
 }
+
+// =============================================================
+// Inline formatting (ADR-016, Block B).
+// =============================================================
+
+TEST_CASE("layout: inline em flows with surrounding text",
+          "[layout][inline]") {
+    auto t = run("<p>Hello <em>world</em>!</p>",
+                 "em { display: inline }", 800.0f);
+    const auto ps = find_all_boxes(t.root, "p");
+    REQUIRE(ps.size() == 1);
+    // Exactly one LayoutText child -- the inline run was flattened.
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "Hello world!");
+}
+
+TEST_CASE("layout: adjacent inline elements merge",
+          "[layout][inline]") {
+    auto t = run("<p><em>a</em><em>b</em></p>",
+                 "em { display: inline }", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    // No space between adjacent inline elements.
+    CHECK(texts[0]->text == "ab");
+}
+
+TEST_CASE("layout: space between inline elements preserved",
+          "[layout][inline]") {
+    auto t = run("<p><em>a</em> <em>b</em></p>",
+                 "em { display: inline }", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "a b");
+}
+
+TEST_CASE("layout: block child interrupts inline run",
+          "[layout][inline]") {
+    auto t = run("<div>before<p>middle</p>after</div>", "", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    // Two inline runs (before, after) and one block (middle).
+    REQUIRE(texts.size() == 3);
+    CHECK(texts[0]->text == "before");
+    CHECK(texts[1]->text == "middle");
+    CHECK(texts[2]->text == "after");
+}
+
+TEST_CASE("layout: whitespace between inline elements collapses",
+          "[layout][inline]") {
+    auto t = run("<p>Hello\n   <em>world</em>\n   !</p>",
+                 "em { display: inline }", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "Hello world !");
+}
+
+TEST_CASE("layout: nested inline elements flatten",
+          "[layout][inline]") {
+    auto t = run("<p><em>a<span>b</span>c</em></p>",
+                 "em { display: inline } span { display: inline }", 800.0f);
+    const auto texts = find_all_texts(t.root);
+    REQUIRE(texts.size() == 1);
+    CHECK(texts[0]->text == "abc");
+}
