@@ -335,3 +335,38 @@ TEST_CASE("cascade: :visited resolves relative URL against base",
     const auto result = cascade(Stylesheet{}, author, *doc, state);
     CHECK(result.at(a).get("color").value_or("") == "purple");
 }
+
+TEST_CASE("cascade: :visited resolves sibling relative URL",
+          "[css][cascade][pseudo]") {
+    // ADR-018: href="other.html" with base ".../page.html"
+    // resolves to ".../other.html" (base's last segment is
+    // stripped, trailing slash kept).
+    auto doc = make_anchor_doc("other.html");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://example.com/page.html";
+    state.visited_urls.insert("https://example.com/other.html");
+
+    const auto author = Stylesheet::parse("a:visited { color: purple }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK(result.at(a).get("color").value_or("") == "purple");
+}
+
+TEST_CASE("cascade: :visited on absolute URL ignores base",
+          "[css][cascade][pseudo]") {
+    // Absolute hrefs pass through untouched regardless of
+    // base_url (potentially a different host).
+    auto doc = make_anchor_doc("https://example.com/about");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://other.com/page.html";
+    state.visited_urls.insert("https://example.com/about");
+
+    const auto author = Stylesheet::parse("a:visited { color: purple }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK(result.at(a).get("color").value_or("") == "purple");
+}

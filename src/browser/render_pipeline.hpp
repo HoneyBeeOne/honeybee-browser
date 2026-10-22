@@ -17,6 +17,7 @@
 
 #include "renderer/dom/node.hpp"
 #include "renderer/layout/layout_box.hpp"
+#include "renderer/css/render_state.hpp"
 
 namespace honeybee::browser {
 
@@ -39,9 +40,24 @@ public:
     // True if a page has been rendered.
     bool has_page() const { return doc_ != nullptr; }
 
+    // ADR-018: record a successful navigation. Marks the URL as
+    // visited and sets it as the base URL for resolving the
+    // relative hrefs of the page about to be rendered. Must be
+    // called before render() so :visited matches during cascade.
+    void record_visit(const std::string& absolute_url);
+
+    // ADR-018: hover state. The element under the mouse cursor,
+    // or nullptr. The caller is responsible for triggering a
+    // repaint via queue_draw() when it changes.
+    void set_hovered_element(const renderer::dom::Element* el);
+
+    // Read-only access for tests and diagnostics.
+    const renderer::css::RenderState& state() const { return state_; }
+
 private:
     std::unique_ptr<renderer::dom::Document> doc_;
     renderer::layout::LayoutBox layout_root_;
+    renderer::css::RenderState state_;
 };
 
 } // namespace honeybee::browser

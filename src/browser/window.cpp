@@ -250,6 +250,13 @@ void HoneyBeeWindow::on_url_activated() {
         // لاستخدامه في إعادة التحميل لاحقاً.
         m_current_url = url;
 
+        // ADR-018: mark this URL as visited and set it as the
+        // base URL for the page about to be rendered. This
+        // makes :visited match correctly during cascade, and
+        // resolves the page's relative hrefs against the page
+        // URL rather than against an empty base.
+        m_pipeline.record_visit(url);
+
         // Run the full render pipeline (HTML -> layout -> paint).
         render_html(r.body);
 

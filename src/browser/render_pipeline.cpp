@@ -54,7 +54,7 @@ void RenderPipeline::relayout(float viewport_width) {
     const std::string css = extract_inline_css(*doc_);
     auto sheet = renderer::css::Stylesheet::parse(css);
     auto styles = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet, *doc_);
+        renderer::css::ua_stylesheet(), sheet, *doc_, state_);
 
     layout_root_ = renderer::layout::layout(
         *doc_, styles, &measure_with_pango, viewport_width);
@@ -66,6 +66,16 @@ void RenderPipeline::paint(cairo_t* cr) const {
 
 std::string RenderPipeline::title() const {
     return doc_ ? doc_->title() : std::string{};
+}
+
+void RenderPipeline::record_visit(const std::string& absolute_url) {
+    state_.base_url = absolute_url;
+    state_.visited_urls.insert(absolute_url);
+}
+
+void RenderPipeline::set_hovered_element(
+    const renderer::dom::Element* el) {
+    state_.hovered_element = el;
 }
 
 } // namespace honeybee::browser
