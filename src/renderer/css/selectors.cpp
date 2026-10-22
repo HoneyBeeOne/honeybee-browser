@@ -1,4 +1,5 @@
 #include "renderer/css/selectors.hpp"
+#include "base/url.hpp"
 #include "renderer/css/render_state.hpp"
 #include "renderer/dom/node.hpp"
 
@@ -352,38 +353,6 @@ bool matches_attribute(const SimpleSelector& s, const dom::Element& el) {
     return false;
 }
 
-// Resolve href relative to the current page's base URL (ADR-018).
-// Absolute URLs pass through; relative URLs prepend the base
-// directory (base with its last path segment stripped).
-// Simplified resolution -- not full RFC 3986 -- but correct for
-// the common cases: "/path" and "sibling.html".
-std::string resolve_url(const std::string& href, const std::string& base) {
-    // Absolute URLs: pass through.
-    if (href.size() >= 7 && href.compare(0, 7, "http://") == 0) return href;
-    if (href.size() >= 8 && href.compare(0, 8, "https://") == 0) return href;
-    if (href.size() >= 7 && href.compare(0, 7, "file://") == 0) return href;
-    if (base.empty()) return href;
-    if (href.empty()) return base;
-
-    // Compute base directory: strip query/fragment, strip the
-    // last path segment (keep the trailing '/').
-    std::string dir = base;
-    const auto q = dir.find_first_of("?#");
-    if (q != std::string::npos) dir.resize(q);
-    const auto scheme_end = dir.find("://");
-    const auto last_slash = dir.rfind('/');
-    if (last_slash != std::string::npos
-        && (scheme_end == std::string::npos
-            || last_slash > scheme_end + 2)) {
-        dir.resize(last_slash + 1);  // keep trailing '/'
-    } else if (scheme_end != std::string::npos) {
-        dir.push_back('/');  // "http://example.com" -> "...com/"
-    }
-
-    if (href[0] == '/') return dir + href.substr(1);
-    return dir + href;
-}
-
 bool matches_simple(const SimpleSelector& s, const dom::Element& el,
                     const RenderState& state) {
     switch (s.kind) {
@@ -406,14 +375,14 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el,
             if (el.tag() != "a") return false;
             const std::string href = el.get_attribute("href");
             if (href.empty()) return false;
-            const std::string resolved = resolve_url(href, state.base_url);
+            const std::string resolved = honeybee::resolve_url(href, state.base_url);
             return state.visited_urls.find(resolved) == state.visited_urls.end();
         }
         case SimpleKind::PseudoVisited: {
             if (el.tag() != "a") return false;
             const std::string href = el.get_attribute("href");
             if (href.empty()) return false;
-            const std::string resolved = resolve_url(href, state.base_url);
+            const std::string resolved = honeybee::resolve_url(href, state.base_url);
             return state.visited_urls.find(resolved) != state.visited_urls.end();
         }
         case SimpleKind::PseudoHover: {

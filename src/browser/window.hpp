@@ -142,6 +142,11 @@ private:
     // the :hover pseudo-class updates as the cursor moves.
     Glib::RefPtr<Gtk::EventControllerMotion> m_motion_controller;
 
+    // ADR-018 Commit 5: click controller. Attached to
+    // m_drawing_area; turns single-clicks on <a href> into
+    // navigations via on_link_clicked.
+    Glib::RefPtr<Gtk::GestureClick> m_click_controller;
+
     // Width used in the last layout pass. -1 forces relayout.
     int m_last_width = -1;
 
@@ -153,6 +158,17 @@ private:
     // hovered_element, and re-styles; on_mouse_leave clears it.
     void on_mouse_motion(double x, double y);
     void on_mouse_leave();
+
+    // ADR-018 Commit 5: click handler. Hit-tests the click,
+    // walks to the nearest <a> ancestor, resolves its href,
+    // and calls navigate_to.
+    void on_link_clicked(double x, double y);
+
+    // Shared fetch path. Called by on_url_activated (URL bar)
+    // and on_link_clicked (link click). Validates, updates
+    // status and URL bar, disables the bar during fetch, and
+    // records the visit on success.
+    void navigate_to(const std::string& url);
 
     // Run the full pipeline and repaint.
     void render_html(const std::string& html);

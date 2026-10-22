@@ -40,6 +40,14 @@ std::string extract_inline_css(const renderer::dom::Document& doc) {
 
 void RenderPipeline::render(const std::string& html,
                             float viewport_width) {
+    // ADR-018: hovered_element is a raw pointer into doc_. When
+    // doc_ is replaced (below), the old DOM is destroyed and
+    // hovered_element becomes dangling. The next relayout()
+    // would then dereference it during cascade (PseudoHover
+    // walks the parent chain), causing a segfault. Clear it
+    // before replacing the document.
+    state_.hovered_element = nullptr;
+
     doc_ = renderer::html::parse(html);
     if (!doc_) {
         layout_root_ = renderer::layout::LayoutBox{};

@@ -42,4 +42,32 @@ bool is_valid_url(const std::string& url) {
     return true;
 }
 
+std::string resolve_url(const std::string& href,
+                         const std::string& base) {
+    // Absolute URLs: pass through.
+    if (href.size() >= 7 && href.compare(0, 7, "http://") == 0) return href;
+    if (href.size() >= 8 && href.compare(0, 8, "https://") == 0) return href;
+    if (href.size() >= 7 && href.compare(0, 7, "file://") == 0) return href;
+    if (base.empty()) return href;
+    if (href.empty()) return base;
+
+    // Compute base directory: strip query/fragment, strip the
+    // last path segment (keep the trailing '/').
+    std::string dir = base;
+    const auto q = dir.find_first_of("?#");
+    if (q != std::string::npos) dir.resize(q);
+    const auto scheme_end = dir.find("://");
+    const auto last_slash = dir.rfind('/');
+    if (last_slash != std::string::npos
+        && (scheme_end == std::string::npos
+            || last_slash > scheme_end + 2)) {
+        dir.resize(last_slash + 1);  // keep trailing '/'
+    } else if (scheme_end != std::string::npos) {
+        dir.push_back('/');  // "http://example.com" -> "...com/"
+    }
+
+    if (href[0] == '/') return dir + href.substr(1);
+    return dir + href;
+}
+
 }  // namespace honeybee
