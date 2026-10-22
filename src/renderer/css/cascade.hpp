@@ -22,6 +22,9 @@
 
 namespace honeybee::renderer::css {
 
+// Forward declaration from render_state.hpp (ADR-018).
+struct RenderState;
+
 // Cascade origin per CSS 2.1 section 6.4.1. For normal
 // declarations, Author wins over UserAgent regardless of
 // specificity. For important declarations, the order inverts
@@ -57,6 +60,14 @@ bool is_inherited(std::string_view property);
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc);
+
+// ADR-018: two-sheet form with presentation state for
+// :link / :visited / :hover matching. Commit 1 delegates to the
+// state-free version above.
+ComputedStyleMap cascade(const Stylesheet& ua_sheet,
+                         const Stylesheet& author_sheet,
+                         const dom::Document& doc,
+                         const RenderState& state);
 
 // Single-sheet form: equivalent to the two-sheet form with an
 // empty UA stylesheet. Kept so existing tests and any future

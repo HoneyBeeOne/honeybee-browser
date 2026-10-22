@@ -132,4 +132,14 @@ ComputedStyleMap cascade(const Stylesheet& author_sheet,
     return cascade(empty_ua, author_sheet, doc);
 }
 
+// ADR-018 Commit 1: state-aware overload. Delegates to the
+// state-free version; Commit 2 will thread state into
+// apply_rule / compute_styles so matcher can use it.
+ComputedStyleMap cascade(const Stylesheet& ua_sheet,
+                         const Stylesheet& author_sheet,
+                         const dom::Document& doc,
+                         const RenderState& /*state*/) {
+    return cascade(ua_sheet, author_sheet, doc);
+}
+
 } // namespace honeybee::renderer::css

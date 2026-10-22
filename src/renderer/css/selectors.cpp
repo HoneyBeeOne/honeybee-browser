@@ -415,4 +415,18 @@ SelectorList::matches(const dom::Node& node) const {
     return best;
 }
 
+// ADR-018 Commit 1: state-aware overloads. Delegate to the
+// state-free versions; Commit 2 will use `state` for
+// :link / :visited / :hover matching.
+bool Selector::matches(const dom::Node& node,
+                       const RenderState& /*state*/) const {
+    return matches(node);
+}
+
+std::optional<Specificity>
+SelectorList::matches(const dom::Node& node,
+                      const RenderState& /*state*/) const {
+    return matches(node);
+}
+
 } // namespace honeybee::renderer::css
