@@ -398,3 +398,58 @@ TEST_CASE("matcher: SelectorList returns nullopt when nothing matches",
     REQUIRE(list);
     CHECK_FALSE(list->matches(*div).has_value());
 }
+
+// =============================================================
+// Pseudo-class parsing and specificity (ADR-018).
+// =============================================================
+
+TEST_CASE("parse: :link pseudo-class", "[css][selectors]") {
+    auto s = Selector::parse("a:link");
+    REQUIRE(s);
+    REQUIRE(s->parts.size() == 1);
+    REQUIRE(s->parts[0].compound.simples.size() == 2);
+    CHECK(s->parts[0].compound.simples[0].kind == SimpleKind::Type);
+    CHECK(s->parts[0].compound.simples[1].kind == SimpleKind::PseudoLink);
+}
+
+TEST_CASE("parse: :visited pseudo-class", "[css][selectors]") {
+    auto s = Selector::parse("a:visited");
+    REQUIRE(s);
+    REQUIRE(s->parts[0].compound.simples.size() == 2);
+    CHECK(s->parts[0].compound.simples[1].kind == SimpleKind::PseudoVisited);
+}
+
+TEST_CASE("parse: :hover pseudo-class", "[css][selectors]") {
+    auto s = Selector::parse("a:hover");
+    REQUIRE(s);
+    REQUIRE(s->parts[0].compound.simples.size() == 2);
+    CHECK(s->parts[0].compound.simples[1].kind == SimpleKind::PseudoHover);
+}
+
+TEST_CASE("parse: unknown pseudo-class is a parse error",
+          "[css][selectors]") {
+    CHECK_FALSE(Selector::parse("a:focus").has_value());
+    CHECK_FALSE(Selector::parse("a:first-child").has_value());
+    CHECK_FALSE(Selector::parse("a:active").has_value());
+    CHECK_FALSE(Selector::parse(":not(.x)").has_value());
+}
+
+TEST_CASE("specificity: :link adds class weight", "[css][selectors][specificity]") {
+    auto s = Selector::parse("a:link");
+    REQUIRE(s);
+    CHECK(s->specificity() == Specificity{0, 1, 1});
+}
+
+TEST_CASE("specificity: :hover combines with class",
+          "[css][selectors][specificity]") {
+    auto s = Selector::parse(".x:hover");
+    REQUIRE(s);
+    CHECK(s->specificity() == Specificity{0, 2, 0});
+}
+
+TEST_CASE("specificity: :visited combines with id",
+          "[css][selectors][specificity]") {
+    auto s = Selector::parse("#id:visited");
+    REQUIRE(s);
+    CHECK(s->specificity() == Specificity{1, 1, 0});
+}

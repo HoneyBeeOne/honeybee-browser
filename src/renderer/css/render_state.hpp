@@ -22,6 +22,10 @@ struct RenderState {
     const dom::Element* hovered_element = nullptr;
     float pointer_x = 0.0f;
     float pointer_y = 0.0f;
+
+    // URL of the currently-loaded page, used to resolve relative
+    // hrefs against visited_urls. Empty when no page is loaded.
+    std::string base_url;
 };
 
 } // namespace honeybee::renderer::css

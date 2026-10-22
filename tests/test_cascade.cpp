@@ -4,6 +4,7 @@
 // =============================================================
 
 #include "renderer/css/cascade.hpp"
+#include "renderer/css/render_state.hpp"
 #include "renderer/css/stylesheet.hpp"
 #include "renderer/dom/node.hpp"
 
@@ -251,4 +252,86 @@ TEST_CASE("cascade: single-sheet overload still works",
     const auto result = cascade(
         Stylesheet::parse("p { color: red }"), *doc);
     CHECK(result.at(p).get("color").value_or("") == "red");
+}
+
+namespace css = honeybee::renderer::css;
+
+namespace {
+
+std::unique_ptr<dom::Document> make_anchor_doc(const std::string& href) {
+    auto doc = std::make_unique<dom::Document>();
+    auto html = std::make_unique<dom::Element>("html");
+    auto body = std::make_unique<dom::Element>("body");
+    auto a = std::make_unique<dom::Element>("a");
+    a->set_attribute("href", href);
+    a->append_child(std::make_unique<dom::TextNode>("link"));
+    body->append_child(std::move(a));
+    html->append_child(std::move(body));
+    doc->append_child(std::move(html));
+    return doc;
+}
+
+} // namespace
+
+// =============================================================
+// Pseudo-class matching in cascade (ADR-018).
+// =============================================================
+
+TEST_CASE("cascade: :link matches unvisited anchor", "[css][cascade][pseudo]") {
+    auto doc = make_anchor_doc("https://example.com/page");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://example.com";
+    // visited_urls empty -> :link matches
+
+    const auto author = Stylesheet::parse("a:link { color: red }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK(result.at(a).get("color").value_or("") == "red");
+}
+
+TEST_CASE("cascade: :link does not match visited anchor",
+          "[css][cascade][pseudo]") {
+    auto doc = make_anchor_doc("https://example.com/page");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://example.com";
+    state.visited_urls.insert("https://example.com/page");
+
+    const auto author = Stylesheet::parse("a:link { color: red }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK_FALSE(result.at(a).has("color"));
+}
+
+TEST_CASE("cascade: :visited matches visited anchor",
+          "[css][cascade][pseudo]") {
+    auto doc = make_anchor_doc("https://example.com/page");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://example.com";
+    state.visited_urls.insert("https://example.com/page");
+
+    const auto author = Stylesheet::parse("a:visited { color: purple }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK(result.at(a).get("color").value_or("") == "purple");
+}
+
+TEST_CASE("cascade: :visited resolves relative URL against base",
+          "[css][cascade][pseudo]") {
+    auto doc = make_anchor_doc("/about");
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    css::RenderState state;
+    state.base_url = "https://example.com";
+    state.visited_urls.insert("https://example.com/about");
+
+    const auto author = Stylesheet::parse("a:visited { color: purple }");
+    const auto result = cascade(Stylesheet{}, author, *doc, state);
+    CHECK(result.at(a).get("color").value_or("") == "purple");
 }

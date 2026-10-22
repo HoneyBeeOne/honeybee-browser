@@ -1,4 +1,5 @@
 #include "renderer/css/cascade.hpp"
+#include "renderer/css/render_state.hpp"
 
 #include <cstddef>
 #include <string_view>
@@ -35,8 +36,8 @@ bool beats(const CascadeValue& a, const CascadeValue& b) {
 
 void apply_rule(const Rule& rule, const dom::Element& el,
                 Origin origin, std::size_t& counter,
-                ComputedStyle& style) {
-    auto spec = rule.selectors.matches(el);
+                const RenderState& state, ComputedStyle& style) {
+    auto spec = rule.selectors.matches(el, state);
     if (!spec) return;
 
     for (const auto& d : rule.declarations) {
@@ -59,21 +60,22 @@ void apply_rule(const Rule& rule, const dom::Element& el,
 void compute_styles(const dom::Node& node,
                     const Stylesheet& ua_sheet,
                     const Stylesheet& author_sheet,
+                    const RenderState& state,
                     ComputedStyleMap& out) {
     if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
         ComputedStyle style;
         std::size_t counter = 0;
         for (const auto& rule : ua_sheet.rules) {
-            apply_rule(rule, el, Origin::UserAgent, counter, style);
+            apply_rule(rule, el, Origin::UserAgent, counter, state, style);
         }
         for (const auto& rule : author_sheet.rules) {
-            apply_rule(rule, el, Origin::Author, counter, style);
+            apply_rule(rule, el, Origin::Author, counter, state, style);
         }
         out[&el] = std::move(style);
     }
     for (const auto& child : node.children()) {
-        compute_styles(*child, ua_sheet, author_sheet, out);
+        compute_styles(*child, ua_sheet, author_sheet, state, out);
     }
 }
 
@@ -120,10 +122,7 @@ ComputedStyle::get(const std::string& property) const {
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc) {
-    ComputedStyleMap out;
-    compute_styles(doc, ua_sheet, author_sheet, out);
-    propagate_inheritance(doc, out);
-    return out;
+    return cascade(ua_sheet, author_sheet, doc, RenderState{});
 }
 
 ComputedStyleMap cascade(const Stylesheet& author_sheet,
@@ -132,14 +131,14 @@ ComputedStyleMap cascade(const Stylesheet& author_sheet,
     return cascade(empty_ua, author_sheet, doc);
 }
 
-// ADR-018 Commit 1: state-aware overload. Delegates to the
-// state-free version; Commit 2 will thread state into
-// apply_rule / compute_styles so matcher can use it.
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc,
-                         const RenderState& /*state*/) {
-    return cascade(ua_sheet, author_sheet, doc);
+                         const RenderState& state) {
+    ComputedStyleMap out;
+    compute_styles(doc, ua_sheet, author_sheet, state, out);
+    propagate_inheritance(doc, out);
+    return out;
 }
 
 } // namespace honeybee::renderer::css
