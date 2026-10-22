@@ -40,6 +40,11 @@ public:
     // True if a page has been rendered.
     bool has_page() const { return doc_ != nullptr; }
 
+    // ADR-018 Commit 4b: hit-test against the current layout tree.
+    // Delegates to renderer::layout::hit_test. Returns the deepest
+    // dom::Element containing (x, y), or nullptr.
+    const renderer::dom::Element* hit_test(float x, float y) const;
+
     // ADR-018: record a successful navigation. Marks the URL as
     // visited and sets it as the base URL for resolving the
     // relative hrefs of the page about to be rendered. Must be

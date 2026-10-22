@@ -168,6 +168,16 @@ HoneyBeeWindow::HoneyBeeWindow()
             on_draw(cr, w, h);
         });
 
+    // ADR-018 Commit 4b: mouse motion drives :hover. GTK4
+    // reports motion events in logical pixels, same units the
+    // layout tree uses, so no scale-factor conversion needed.
+    m_motion_controller = Gtk::EventControllerMotion::create();
+    m_motion_controller->signal_motion().connect(
+        [this](double x, double y) { on_mouse_motion(x, y); });
+    m_motion_controller->signal_leave().connect(
+        [this]() { on_mouse_leave(); });
+    m_drawing_area.add_controller(m_motion_controller);
+
     const std::string welcome =
         "<html><head><title>HoneyBee Browser</title>"
         "<style>"
@@ -350,4 +360,44 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
 
     // Paint the layout tree.
     m_pipeline.paint(cr->cobj());
+}
+
+// =============================================================
+// ADR-018 Commit 4b: mouse motion handlers.
+//
+// On every motion event, hit-test the cursor position, compare
+// against the current hovered_element, and if it changed:
+// update the pipeline's RenderState, re-run cascade + layout
+// (v1 cost — a restyle-only path is a future optimization),
+// and queue a repaint.
+//
+// on_mouse_leave fires when the cursor exits the drawing area.
+// =============================================================
+
+void HoneyBeeWindow::on_mouse_motion(double x, double y) {
+    if (!m_pipeline.has_page()) return;
+
+    const auto* el = m_pipeline.hit_test(
+        static_cast<float>(x), static_cast<float>(y));
+
+    // No change: skip relayout (avoids churn on intra-element motion).
+    if (el == m_pipeline.state().hovered_element) return;
+
+    m_pipeline.set_hovered_element(el);
+
+    if (m_last_width > 0) {
+        m_pipeline.relayout(static_cast<float>(m_last_width));
+    }
+    m_drawing_area.queue_draw();
+}
+
+void HoneyBeeWindow::on_mouse_leave() {
+    if (!m_pipeline.has_page()) return;
+    if (m_pipeline.state().hovered_element == nullptr) return;
+
+    m_pipeline.set_hovered_element(nullptr);
+    if (m_last_width > 0) {
+        m_pipeline.relayout(static_cast<float>(m_last_width));
+    }
+    m_drawing_area.queue_draw();
 }

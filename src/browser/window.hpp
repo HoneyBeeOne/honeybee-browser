@@ -137,11 +137,22 @@ private:
     // Pipeline: HTML -> layout tree (owns the parsed DOM).
     honeybee::browser::RenderPipeline m_pipeline;
 
+    // ADR-018 Commit 4b: mouse motion controller. Attached to
+    // m_drawing_area; drives RenderState::hovered_element so
+    // the :hover pseudo-class updates as the cursor moves.
+    Glib::RefPtr<Gtk::EventControllerMotion> m_motion_controller;
+
     // Width used in the last layout pass. -1 forces relayout.
     int m_last_width = -1;
 
     // Draw handler for the view area (Gtk::DrawingArea).
     void on_draw(const Cairo::RefPtr<Cairo::Context>& cr, int width, int height);
+
+    // ADR-018 Commit 4b: mouse motion handlers. on_mouse_motion
+    // hit-tests the cursor position, updates the pipeline's
+    // hovered_element, and re-styles; on_mouse_leave clears it.
+    void on_mouse_motion(double x, double y);
+    void on_mouse_leave();
 
     // Run the full pipeline and repaint.
     void render_html(const std::string& html);

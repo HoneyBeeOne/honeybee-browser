@@ -92,7 +92,8 @@ void flatten_inline_to_words(
     float size,
     const Color& default_color,
     bool& prev_had_space,
-    std::vector<StyledWord>& out) {
+    std::vector<StyledWord>& out,
+    const dom::Element* current_element) {
 
     if (node.type() == dom::NodeType::Text) {
         const auto& tn = static_cast<const dom::TextNode&>(node);
@@ -114,6 +115,7 @@ void flatten_inline_to_words(
             w.color = default_color;
             w.preceded_by_space =
                 !out.empty() && (prev_had_space || pending_ws);
+            w.element = current_element;
             pending_ws = false;
             prev_had_space = false;
             out.push_back(std::move(w));
@@ -132,7 +134,7 @@ void flatten_inline_to_words(
         }
         for (const auto& child : el.children()) {
             flatten_inline_to_words(*child, styles, family, size, color,
-                                    prev_had_space, out);
+                                    prev_had_space, out, &el);
         }
     }
 }
@@ -270,6 +272,7 @@ LayoutBox layout_element(const dom::Element& el,
                 f.color = tc;
                 f.x = rtl ? content_x + content_w - f.width : content_x;
                 f.y += cursor_y;
+                f.element = &el;
                 if (f.width > max_line_w) max_line_w = f.width;
                 total_h += f.height;
             }
@@ -295,7 +298,7 @@ LayoutBox layout_element(const dom::Element& el,
         bool prev_had_space = false;
         for (const auto* n : inline_run) {
             flatten_inline_to_words(*n, styles, family, own_font_size,
-                                    tc, prev_had_space, words);
+                                    tc, prev_had_space, words, &el);
         }
         inline_run.clear();
         if (words.empty()) return;
@@ -421,4 +424,68 @@ LayoutBox layout(const dom::Document& doc,
                           kDefaultFontSize, root_fs, Direction::Ltr);
 }
 
+
+namespace {
+
+const dom::Element* hit_test_node(const LayoutNode& node,
+                                  float x, float y) {
+    // Point must be inside this node's half-open box.
+    if (x < node.x || x >= node.x + node.width ||
+        y < node.y || y >= node.y + node.height) {
+        return nullptr;
+    }
+    switch (node.kind) {
+        case LayoutKind::Box: {
+            const auto& box = static_cast<const LayoutBox&>(node);
+            for (const auto& child : box.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            return box.element;
+        }
+        case LayoutKind::Inline: {
+            const auto& inl = static_cast<const LayoutInline&>(node);
+            for (const auto& child : inl.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            return inl.element;
+        }
+        case LayoutKind::InlineContext: {
+            const auto& ctx =
+                static_cast<const LayoutInlineContext&>(node);
+            for (const auto& child : ctx.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            // ADR-018 Commit 4b: flattened inline text lives as
+            // LineFragments with per-fragment element identity.
+            // Return the element of the fragment containing the
+            // point; nullptr (falls through to containing Box)
+            // if the point is in the inline run's whitespace.
+            for (const auto& frag : ctx.lines) {
+                if (x >= frag.x && x < frag.x + frag.width &&
+                    y >= frag.y && y < frag.y + frag.height) {
+                    return frag.element;
+                }
+            }
+            return nullptr;
+        }
+        case LayoutKind::Text:
+            // LayoutText has no element; containing LayoutInline
+            // or LayoutBox provides it.
+            return nullptr;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+const dom::Element* hit_test(const LayoutNode& root,
+                             float x, float y) {
+    return hit_test_node(root, x, y);
+}
 } // namespace honeybee::renderer::layout

@@ -78,4 +78,9 @@ void RenderPipeline::set_hovered_element(
     state_.hovered_element = el;
 }
 
+const renderer::dom::Element* RenderPipeline::hit_test(
+    float x, float y) const {
+    return renderer::layout::hit_test(layout_root_, x, y);
+}
+
 } // namespace honeybee::browser

@@ -39,4 +39,11 @@ Display display_of(const css::ComputedStyle* style);
 // at <html>.
 Direction resolve_direction(const dom::Element& el, Direction parent_dir);
 
+
+// ADR-018 Commit 4b: hit-test. Returns the deepest dom::Element
+// whose layout box contains (x, y), or nullptr if the point is
+// outside the root. "Deepest" = the LayoutInline or LayoutBox
+// closest to a leaf; text nodes with no element bubble their
+// containing block back up to the caller.
+const dom::Element* hit_test(const LayoutNode& root, float x, float y);
 } // namespace honeybee::renderer::layout
