@@ -22,11 +22,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 017 | [Display None](017-display-none.md) | Hide `head`, `style`, `script`, `title`, `meta`, `link`, `base`, `template` |
 | 018 | [State Pseudo-Classes](018-pseudo-classes.md) | `:link`, `:visited`, `:hover` with a state-tracking model |
 | 019 | [Back and Forward Navigation](019-back-forward-navigation.md) | Session-scoped history stack in the browser layer |
+| 020 | [Page Caching for Back/Forward](020-page-cache.md) | Session-scoped URL to HTML cache; Back/Forward instant |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 019 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 020 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
