@@ -1,6 +1,6 @@
 # ADR-019: Back and Forward Navigation
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-22
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-018 (state pseudo-classes), ADR-007 (DOM ownership)
@@ -284,3 +284,33 @@ ADR-019 is complete when:
 - [ ] Visual verification (screenshots) confirms the above in
       the running browser
 - [ ] `main` is green: 237 + N cases, all pass, zero warnings
+
+## Implementation
+
+Implemented on `feat/back-forward-navigation` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `da392e3` | `NavigationHistory` class + 8 unit tests (push/back/forward/truncate/clear). Header-only, no GTK dependency. |
+| `add3090` | `HoneyBeeWindow` integration: `NavKind` enum, extended `navigate_to(url, kind)`, real `on_back_clicked` / `on_forward_clicked` / `on_reload_clicked`, `update_nav_buttons()`, Back/Forward start disabled, nav buttons disabled during fetch, failure rollback |
+| (this commit) | Docs: ADR-019 status -> Implemented, README features row, CHANGELOG entries |
+
+**Verified behavior** (7 manual tests, all pass):
+
+1. Launch: Back grey, Forward grey, Reload enabled (history empty)
+2. After first navigation: Back and Forward still grey (one entry, no traversal possible)
+3. After second navigation: Back blue, Forward grey; return link rendered purple (`:visited` integration)
+4. Click Back: previous page loads; Back grey, Forward blue
+5. Click Forward: second page loads; Back blue, Forward grey (no duplicate history entry)
+6. Back to A, then navigate to C: Forward truncated (disabled) -- the branching test
+7. Reload on C, then Back: lands on A (one Back click from C) -- Reload did not push a history entry
+
+**Deferred** (unchanged from Decision section):
+
+- Page caching (back re-fetches from server)
+- Scroll position restoration
+- History persistence across sessions
+- History length cap
+- History UI (dropdown, right-click)
+- Keyboard shortcuts (Alt+Left / Alt+Right)
+

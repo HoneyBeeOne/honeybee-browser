@@ -21,6 +21,7 @@
 #include "renderer/html/preview.hpp"
 
 namespace dom = honeybee::renderer::dom;
+using honeybee::browser::NavKind;
 
 // =============================================================
 // المُنشئ: بناء الواجهة
@@ -67,8 +68,11 @@ HoneyBeeWindow::HoneyBeeWindow()
     // إعادة التحميل تعمل فعلياً.
     // أما الرجوع والتقدم، فيعرضان رسالة فقط، حتى
     // يُبنى سجل التنقل في مهمة لاحقة.
-    m_back_button.set_sensitive(true);
-    m_forward_button.set_sensitive(true);
+    // ADR-019: Back/Forward start disabled -- history empty.
+    // Reload stays enabled but shows a status message if no URL
+    // has been loaded yet.
+    m_back_button.set_sensitive(false);
+    m_forward_button.set_sensitive(false);
     m_reload_button.set_sensitive(true);
 
     // ربط إشارة الضغط بمعالج كل زر.
@@ -230,10 +234,10 @@ HoneyBeeWindow::HoneyBeeWindow()
 void HoneyBeeWindow::on_url_activated() {
     // Delegate to navigate_to so the fetch path is shared with
     // on_link_clicked (Commit 5, ADR-018).
-    navigate_to(m_url_bar.get_text());
+    navigate_to(m_url_bar.get_text(), NavKind::New);
 }
 
-void HoneyBeeWindow::navigate_to(const std::string& url) {
+void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
 
     // الخطوة الثانية: التحقق من الرابط.
     if (!honeybee::is_valid_url(url)) {
@@ -253,6 +257,12 @@ void HoneyBeeWindow::navigate_to(const std::string& url) {
     // جلبتين متزامنتين.
     m_url_bar.set_sensitive(false);
 
+    // ADR-019: disable nav buttons during in-flight fetch to
+    // prevent racing with the async navigation. update_nav_buttons()
+    // restores them in the fetch callback.
+    m_back_button.set_sensitive(false);
+    m_forward_button.set_sensitive(false);
+
     // الخطوة الرابعة: بدء الجلب في الخيط الخلفي.
     //
     // الدالة الداخلية تلتقط هذا الكائن، للوصول إلى
@@ -262,7 +272,7 @@ void HoneyBeeWindow::navigate_to(const std::string& url) {
     // ملاحظة مهمة: هذا الرد يُنفَّذ في الخيط الرئيسي،
     // بفضل الموزِّع داخل الجالب اللاتزامني. لذا تحديث
     // الواجهة هنا آمن تماماً.
-    m_async_fetcher.fetch(url, [this, url](honeybee::net::Response r) {
+    m_async_fetcher.fetch(url, [this, url, kind](honeybee::net::Response r) {
 
         // إعادة تفعيل حقل الإدخال، لتمكين جلب جديد.
         m_url_bar.set_sensitive(true);
@@ -271,9 +281,23 @@ void HoneyBeeWindow::navigate_to(const std::string& url) {
 
         // حالة الفشل: رمز الحالة ليس في نطاق النجاح.
         if (!r.success()) {
+            // ADR-019: on Back/Forward failure, roll the cursor
+            // back so the user isn't stranded on a page they
+            // didn't navigate to. New failures don't touch
+            // history (push is deferred to success). Reload
+            // never touched history in the first place.
+            if (kind == NavKind::Back)    (void)m_history.forward();
+            if (kind == NavKind::Forward) (void)m_history.back();
+
+            // Restore the URL bar to the current (unchanged)
+            // URL -- the user is still on the previous page.
+            if (!m_current_url.empty()) {
+                m_url_bar.set_text(m_current_url);
+            }
             m_status_label.set_text(
                 "فشل الجلب، رمز الحالة: " +
                 std::to_string(r.status_code));
+            update_nav_buttons();
             return;
         }
 
@@ -287,6 +311,15 @@ void HoneyBeeWindow::navigate_to(const std::string& url) {
         // resolves the page's relative hrefs against the page
         // URL rather than against an empty base.
         m_pipeline.record_visit(url);
+
+        // ADR-019: history bookkeeping. New pushes; Back/Forward
+        // cursor was already moved by the caller; Reload doesn't
+        // touch history. update_nav_buttons() runs after to
+        // reflect the new can_back/can_forward state.
+        if (kind == NavKind::New) {
+            m_history.push(url);
+        }
+        update_nav_buttons();
 
         // Run the full render pipeline (HTML -> layout -> paint).
         render_html(r.body);
@@ -308,7 +341,9 @@ void HoneyBeeWindow::navigate_to(const std::string& url) {
 // =============================================================
 
 void HoneyBeeWindow::on_back_clicked() {
-    m_status_label.set_text("الرجوع غير مُفعَّل بعد، سيُضاف لاحقاً");
+    auto target = m_history.back();
+    if (!target) return;  // button should be disabled if !can_back
+    navigate_to(*target, NavKind::Back);
 }
 
 // =============================================================
@@ -320,7 +355,9 @@ void HoneyBeeWindow::on_back_clicked() {
 // =============================================================
 
 void HoneyBeeWindow::on_forward_clicked() {
-    m_status_label.set_text("التقدم غير مُفعَّل بعد، سيُضاف لاحقاً");
+    auto target = m_history.forward();
+    if (!target) return;  // button should be disabled if !can_forward
+    navigate_to(*target, NavKind::Forward);
 }
 
 // =============================================================
@@ -333,17 +370,18 @@ void HoneyBeeWindow::on_forward_clicked() {
 // =============================================================
 
 void HoneyBeeWindow::on_reload_clicked() {
-    // التحقق من وجود رابط محفوظ.
     if (m_current_url.empty()) {
         m_status_label.set_text("لا يوجد رابط لإعادة تحميله");
         return;
     }
+    // ADR-019: NavKind::Reload so history is untouched -- pressing
+    // Reload N times must not create N history entries.
+    navigate_to(m_current_url, NavKind::Reload);
+}
 
-    // نضع الرابط في شريط العنوان، ليراه المستخدم.
-    m_url_bar.set_text(m_current_url);
-
-    // نعيد معالجة الرابط، فيبدأ الجلب من جديد.
-    on_url_activated();
+void HoneyBeeWindow::update_nav_buttons() {
+    m_back_button.set_sensitive(m_history.can_back());
+    m_forward_button.set_sensitive(m_history.can_forward());
 }
 
 // =============================================================
@@ -458,5 +496,5 @@ void HoneyBeeWindow::on_link_clicked(double x, double y) {
         return;
     }
 
-    navigate_to(resolved);
+    navigate_to(resolved, NavKind::New);
 }

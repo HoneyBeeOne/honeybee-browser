@@ -1,6 +1,7 @@
 add_executable(honeybee_tests
   test_version.cpp
   test_url.cpp
+  test_navigation_history.cpp
   test_net.cpp
   test_dom.cpp
   test_selectors.cpp

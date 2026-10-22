@@ -33,7 +33,21 @@
 // استيراد إعلان الجالب اللاتزامني، لأن النافذة
 // تحتوي عليه كعضو.
 #include "browser/async_fetcher.hpp"
+#include "browser/navigation_history.hpp"
 #include "browser/render_pipeline.hpp"
+
+namespace honeybee::browser {
+
+// ADR-019: discriminator for navigate_to. Each kind has
+// different history semantics -- see window.cpp::navigate_to.
+enum class NavKind {
+    New,      // push on success (URL bar, link click)
+    Back,     // cursor already moved by caller; rollback on failure
+    Forward,  // cursor already moved by caller; rollback on failure
+    Reload,   // never touch history
+};
+
+} // namespace honeybee::browser
 
 // الصنف: نافذة هَني بي.
 // يرث من نافذة الواجهة، فيرث كل خصائص النافذة العادية:
@@ -129,6 +143,9 @@ private:
     // يبدأ فارغاً، ويُحدَّث بعد كل جلب ناجح.
     std::string m_current_url;
 
+    // ADR-019: session-scoped back/forward history.
+    honeybee::browser::NavigationHistory m_history;
+
     // الجالب اللاتزامني: يُشغّل جلب الشبكة في خيط منفصل،
     // ويُبلِّغ الخيط الرئيسي عند الانتهاء.
     // هذا يمنع تجمّد الواجهة أثناء الجلب.
@@ -168,7 +185,12 @@ private:
     // and on_link_clicked (link click). Validates, updates
     // status and URL bar, disables the bar during fetch, and
     // records the visit on success.
-    void navigate_to(const std::string& url);
+    void navigate_to(const std::string& url,
+                     honeybee::browser::NavKind kind =
+                         honeybee::browser::NavKind::New);
+
+    // ADR-019: sync Back/Forward button sensitivity to history.
+    void update_nav_buttons();
 
     // Run the full pipeline and repaint.
     void render_html(const std::string& html);

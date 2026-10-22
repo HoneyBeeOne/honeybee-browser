@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/fixtures/` not yet introduced; manual test HTML files
   currently live in `docs/` (see `docs/README.md`).
 
+- **Back and forward navigation** (ADR-019): toolbar `<-` and `->`
+  buttons are now functional. History is session-scoped: every
+  successful navigation pushes a URL, Back/Forward move a cursor
+  through the list, and a new navigation truncates any forward
+  history (the branching case). Reload does not create history
+  entries -- pressing it N times still requires one Back to leave.
+- **`honeybee::browser::NavigationHistory`** in
+  `src/browser/navigation_history.hpp` -- header-only history
+  stack with `push` / `back` / `forward` / `can_back` /
+  `can_forward`. No GTK dependency; unit-tested.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -53,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `resolve_url` relocated from `selectors.cpp`'s anonymous namespace
   to `base/url.cpp` so both the CSS layer and the browser layer share
   one implementation.
+
+- Back/Forward buttons start disabled (history empty) and
+  transition to enabled/disabled as the history cursor moves.
+  Previously both were enabled but non-functional (stubs that
+  printed "غير مُفعَّل بعد" to the status bar).
+- Reload button now calls `navigate_to(url, NavKind::Reload)`
+  rather than re-dispatching through `on_url_activated()`, so
+  history is preserved.
 
 ## [0.4.0]
 
