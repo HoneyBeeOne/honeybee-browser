@@ -20,6 +20,9 @@ namespace honeybee::renderer::dom { class Node; }
 
 namespace honeybee::renderer::css {
 
+// Forward declaration from render_state.hpp (ADR-018).
+struct RenderState;
+
 // Specificity per CSS 2.1: (a, b, c) = (ids, classes+attrs, types).
 // Compared lexicographically. Universal selector contributes 0.
 struct Specificity {
@@ -37,6 +40,9 @@ enum class SimpleKind {
     Class,
     Id,
     Attribute,
+    PseudoLink,     // :link    (ADR-018)
+    PseudoVisited,  // :visited (ADR-018)
+    PseudoHover,    // :hover   (ADR-018)
 };
 
 enum class AttributeMatch {
@@ -81,6 +87,11 @@ struct Selector {
     // then walk backwards through parents/siblings per combinator.
     bool matches(const dom::Node& node) const;
 
+    // ADR-018: state-aware match. Delegates to the state-free
+    // version in Commit 1; Commit 2 will use state for
+    // :link / :visited / :hover.
+    bool matches(const dom::Node& node, const RenderState& state) const;
+
     Specificity specificity() const;
 };
 
@@ -92,6 +103,10 @@ struct SelectorList {
     // Specificity of the highest-specificity selector in the list
     // that matches `node`, or nullopt if none match.
     std::optional<Specificity> matches(const dom::Node& node) const;
+
+    // ADR-018: state-aware match. Delegates in Commit 1.
+    std::optional<Specificity> matches(const dom::Node& node,
+                                       const RenderState& state) const;
 };
 
 } // namespace honeybee::renderer::css

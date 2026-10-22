@@ -96,6 +96,13 @@ struct LineFragment {
     std::string font_family;
     float font_size = 16.0f;
     Color color = Color::black();
+
+    // ADR-018 Commit 4b: source element for hit-testing. Text
+    // directly inside a block gets the block element; text
+    // inside an inline element (e.g. <a>) gets the inline
+    // element. Nullptr for legacy fragments created before
+    // this field existed (tests, future code paths).
+    const dom::Element* element = nullptr;
 };
 
 struct LayoutText final : LayoutNode {

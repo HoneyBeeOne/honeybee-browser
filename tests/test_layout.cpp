@@ -3,6 +3,7 @@
 // Uses a fake TextMeasurer for deterministic, GTK-free tests.
 // =============================================================
 
+#include <cstdio>
 #include "renderer/css/cascade.hpp"
 #include "renderer/css/stylesheet.hpp"
 #include "renderer/css/ua_stylesheet.hpp"
@@ -936,4 +937,125 @@ TEST_CASE("layout: template does not render (UA display:none)",
     const auto texts = find_all_texts(t.root);
     REQUIRE(texts.size() == 1);
     CHECK(texts[0]->text == "visible");
+}
+
+// =============================================================
+// ADR-018 Commit 4b: hit-test.
+// =============================================================
+
+namespace {
+
+const layout::LineFragment* find_fragment_for_element(
+    const layout::LayoutNode& n, const dom::Element* el) {
+    if (n.kind == layout::LayoutKind::Box) {
+        const auto& b = static_cast<const layout::LayoutBox&>(n);
+        for (const auto& c : b.children) {
+            if (const auto* r = find_fragment_for_element(*c, el)) return r;
+        }
+    } else if (n.kind == layout::LayoutKind::Inline) {
+        const auto& i = static_cast<const layout::LayoutInline&>(n);
+        for (const auto& c : i.children) {
+            if (const auto* r = find_fragment_for_element(*c, el)) return r;
+        }
+    } else if (n.kind == layout::LayoutKind::InlineContext) {
+        const auto& c = static_cast<const layout::LayoutInlineContext&>(n);
+        for (const auto& f : c.lines) {
+            if (f.element == el) return &f;
+        }
+    }
+    return nullptr;
+}
+
+std::pair<float, float> ht_measure(std::string_view text,
+                                   std::string_view,
+                                   float fs) {
+    return { static_cast<float>(text.size()) * fs * 0.5f, fs };
+}
+
+const layout::LayoutNode* find_element_node(
+    const layout::LayoutNode& n, const dom::Element* el) {
+    if (n.kind == layout::LayoutKind::Box) {
+        const auto& b = static_cast<const layout::LayoutBox&>(n);
+        if (b.element == el) return &b;
+        for (const auto& c : b.children) {
+            if (const auto* r = find_element_node(*c, el)) return r;
+        }
+    } else if (n.kind == layout::LayoutKind::Inline) {
+        const auto& i = static_cast<const layout::LayoutInline&>(n);
+        if (i.element == el) return &i;
+        for (const auto& c : i.children) {
+            if (const auto* r = find_element_node(*c, el)) return r;
+        }
+    } else if (n.kind == layout::LayoutKind::InlineContext) {
+        const auto& c =
+            static_cast<const layout::LayoutInlineContext&>(n);
+        for (const auto& child : c.children) {
+            if (const auto* r = find_element_node(*child, el)) return r;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("hit_test: finds inline element under point",
+          "[layout][hit-test]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>before <a href=\"#\">link</a> after</p>"
+        "</body></html>");
+    REQUIRE(doc);
+    const auto* a = doc->find_element("a");
+    REQUIRE(a);
+
+    auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    auto root = layout::layout(*doc, styles, ht_measure, 800.0f);
+
+    const auto* frag = find_fragment_for_element(root, a);
+    REQUIRE(frag);
+    REQUIRE(frag->width > 0.0f);
+
+    const float cx = frag->x + frag->width / 2.0f;
+    const float cy = frag->y + frag->height / 2.0f;
+
+    CHECK(layout::hit_test(root, cx, cy) == a);
+}
+
+TEST_CASE("hit_test: empty space in block returns block",
+          "[layout][hit-test]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p><a href=\"#\">link</a></p></body></html>");
+    REQUIRE(doc);
+    const auto* a = doc->find_element("a");
+    const auto* p = doc->find_element("p");
+    REQUIRE(a);
+    REQUIRE(p);
+
+    auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    auto root = layout::layout(*doc, styles, ht_measure, 800.0f);
+
+    const auto* p_node = find_element_node(root, p);
+    REQUIRE(p_node);
+    REQUIRE(p_node->width > 100.0f);
+
+    // Hit far right of <p> block, past the <a> inline.
+    const float far_x = p_node->x + p_node->width - 5.0f;
+    const float cy = p_node->y + p_node->height / 2.0f;
+
+    CHECK(layout::hit_test(root, far_x, cy) == p);
+}
+
+TEST_CASE("hit_test: point outside root returns nullptr",
+          "[layout][hit-test]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>text</p></body></html>");
+    REQUIRE(doc);
+
+    auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    auto root = layout::layout(*doc, styles, ht_measure, 800.0f);
+
+    CHECK(layout::hit_test(root, -10.0f, -10.0f) == nullptr);
+    CHECK(layout::hit_test(root, 10000.0f, 10000.0f) == nullptr);
 }

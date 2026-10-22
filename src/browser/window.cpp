@@ -20,6 +20,8 @@
 #include "base/url.hpp"
 #include "renderer/html/preview.hpp"
 
+namespace dom = honeybee::renderer::dom;
+
 // =============================================================
 // المُنشئ: بناء الواجهة
 //
@@ -168,6 +170,27 @@ HoneyBeeWindow::HoneyBeeWindow()
             on_draw(cr, w, h);
         });
 
+    // ADR-018 Commit 4b: mouse motion drives :hover. GTK4
+    // reports motion events in logical pixels, same units the
+    // layout tree uses, so no scale-factor conversion needed.
+    m_motion_controller = Gtk::EventControllerMotion::create();
+    m_motion_controller->signal_motion().connect(
+        [this](double x, double y) { on_mouse_motion(x, y); });
+    m_motion_controller->signal_leave().connect(
+        [this]() { on_mouse_leave(); });
+    m_drawing_area.add_controller(m_motion_controller);
+
+    // ADR-018 Commit 5: click navigation. A GestureClick on the
+    // drawing area navigates when the release point is over an
+    // <a href>. n_press == 1 skips the second release of a
+    // double-click (which fires n_press == 2).
+    m_click_controller = Gtk::GestureClick::create();
+    m_click_controller->signal_released().connect(
+        [this](int n_press, double x, double y) {
+            if (n_press == 1) on_link_clicked(x, y);
+        });
+    m_drawing_area.add_controller(m_click_controller);
+
     const std::string welcome =
         "<html><head><title>HoneyBee Browser</title>"
         "<style>"
@@ -205,8 +228,12 @@ HoneyBeeWindow::HoneyBeeWindow()
 // =============================================================
 
 void HoneyBeeWindow::on_url_activated() {
-    // الخطوة الأولى: أخذ النص من الحقل.
-    const std::string url = m_url_bar.get_text();
+    // Delegate to navigate_to so the fetch path is shared with
+    // on_link_clicked (Commit 5, ADR-018).
+    navigate_to(m_url_bar.get_text());
+}
+
+void HoneyBeeWindow::navigate_to(const std::string& url) {
 
     // الخطوة الثانية: التحقق من الرابط.
     if (!honeybee::is_valid_url(url)) {
@@ -216,6 +243,10 @@ void HoneyBeeWindow::on_url_activated() {
     }
 
     // الخطوة الثالثة: تجهيز الواجهة للجلب.
+    // When called from on_link_clicked, the URL bar hasn't been
+    // updated -- show the destination. When called from
+    // on_url_activated, this is a no-op (same text).
+    m_url_bar.set_text(url);
     m_status_label.set_text("جارٍ الجلب...");
 
     // تعطيل الحقل، لأن الجالب اللاتزامني لا يدعم
@@ -249,6 +280,13 @@ void HoneyBeeWindow::on_url_activated() {
         // حالة النجاح: نحفظ الرابط في العضو المخصص،
         // لاستخدامه في إعادة التحميل لاحقاً.
         m_current_url = url;
+
+        // ADR-018: mark this URL as visited and set it as the
+        // base URL for the page about to be rendered. This
+        // makes :visited match correctly during cascade, and
+        // resolves the page's relative hrefs against the page
+        // URL rather than against an empty base.
+        m_pipeline.record_visit(url);
 
         // Run the full render pipeline (HTML -> layout -> paint).
         render_html(r.body);
@@ -343,4 +381,82 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
 
     // Paint the layout tree.
     m_pipeline.paint(cr->cobj());
+}
+
+// =============================================================
+// ADR-018 Commit 4b: mouse motion handlers.
+//
+// On every motion event, hit-test the cursor position, compare
+// against the current hovered_element, and if it changed:
+// update the pipeline's RenderState, re-run cascade + layout
+// (v1 cost — a restyle-only path is a future optimization),
+// and queue a repaint.
+//
+// on_mouse_leave fires when the cursor exits the drawing area.
+// =============================================================
+
+void HoneyBeeWindow::on_mouse_motion(double x, double y) {
+    if (!m_pipeline.has_page()) return;
+
+    const auto* el = m_pipeline.hit_test(
+        static_cast<float>(x), static_cast<float>(y));
+
+    // No change: skip relayout (avoids churn on intra-element motion).
+    if (el == m_pipeline.state().hovered_element) return;
+
+    m_pipeline.set_hovered_element(el);
+
+    if (m_last_width > 0) {
+        m_pipeline.relayout(static_cast<float>(m_last_width));
+    }
+    m_drawing_area.queue_draw();
+}
+
+void HoneyBeeWindow::on_mouse_leave() {
+    if (!m_pipeline.has_page()) return;
+    if (m_pipeline.state().hovered_element == nullptr) return;
+
+    m_pipeline.set_hovered_element(nullptr);
+    if (m_last_width > 0) {
+        m_pipeline.relayout(static_cast<float>(m_last_width));
+    }
+    m_drawing_area.queue_draw();
+}
+
+// =============================================================
+// ADR-018 Commit 5: link-click navigation.
+//
+// Hit-tests the click, walks up the DOM to find the nearest
+// <a> ancestor (hit_test may return <strong>/<em> inside the
+// <a>), extracts href, resolves it against the current page's
+// base URL, and navigates via navigate_to.
+// =============================================================
+
+void HoneyBeeWindow::on_link_clicked(double x, double y) {
+    if (!m_pipeline.has_page()) return;
+
+    const auto* el = m_pipeline.hit_test(
+        static_cast<float>(x), static_cast<float>(y));
+    if (!el) return;
+
+    const dom::Element* a = el;
+    while (a && a->tag() != "a") {
+        const dom::Node* p = a->parent();
+        a = (p && p->type() == dom::NodeType::Element)
+            ? static_cast<const dom::Element*>(p)
+            : nullptr;
+    }
+    if (!a) return;
+
+    const std::string href = a->get_attribute("href");
+    if (href.empty()) return;
+
+    const std::string resolved =
+        honeybee::resolve_url(href, m_pipeline.state().base_url);
+    if (!honeybee::is_valid_url(resolved)) {
+        m_status_label.set_text("رابط غير صالح");
+        return;
+    }
+
+    navigate_to(resolved);
 }

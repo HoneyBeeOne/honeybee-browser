@@ -1,4 +1,6 @@
 #include "renderer/css/selectors.hpp"
+#include "base/url.hpp"
+#include "renderer/css/render_state.hpp"
 #include "renderer/dom/node.hpp"
 
 #include <utility>
@@ -156,6 +158,16 @@ private:
             out.name = std::move(*name);
             return out;
         }
+        if (c == ':') {
+            advance();
+            auto name = parse_ident();
+            if (!name) { failed_ = true; return std::nullopt; }
+            if (*name == "link")    { out.kind = SimpleKind::PseudoLink;    return out; }
+            if (*name == "visited") { out.kind = SimpleKind::PseudoVisited; return out; }
+            if (*name == "hover")   { out.kind = SimpleKind::PseudoHover;   return out; }
+            failed_ = true;  // unknown pseudo-class
+            return std::nullopt;
+        }
         return std::nullopt;
     }
 
@@ -258,7 +270,10 @@ Specificity Selector::specificity() const {
             switch (s.kind) {
                 case SimpleKind::Id:        ++out.a; break;
                 case SimpleKind::Class:
-                case SimpleKind::Attribute: ++out.b; break;
+                case SimpleKind::Attribute:
+                case SimpleKind::PseudoLink:
+                case SimpleKind::PseudoVisited:
+                case SimpleKind::PseudoHover: ++out.b; break;
                 case SimpleKind::Type:      ++out.c; break;
                 case SimpleKind::Universal: break;
             }
@@ -338,7 +353,8 @@ bool matches_attribute(const SimpleSelector& s, const dom::Element& el) {
     return false;
 }
 
-bool matches_simple(const SimpleSelector& s, const dom::Element& el) {
+bool matches_simple(const SimpleSelector& s, const dom::Element& el,
+                    const RenderState& state) {
     switch (s.kind) {
         case SimpleKind::Universal:
             return true;
@@ -355,23 +371,51 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el) {
         }
         case SimpleKind::Attribute:
             return matches_attribute(s, el);
+        case SimpleKind::PseudoLink: {
+            if (el.tag() != "a") return false;
+            const std::string href = el.get_attribute("href");
+            if (href.empty()) return false;
+            const std::string resolved = honeybee::resolve_url(href, state.base_url);
+            return state.visited_urls.find(resolved) == state.visited_urls.end();
+        }
+        case SimpleKind::PseudoVisited: {
+            if (el.tag() != "a") return false;
+            const std::string href = el.get_attribute("href");
+            if (href.empty()) return false;
+            const std::string resolved = honeybee::resolve_url(href, state.base_url);
+            return state.visited_urls.find(resolved) != state.visited_urls.end();
+        }
+        case SimpleKind::PseudoHover: {
+            if (state.hovered_element == nullptr) return false;
+            // :hover matches the hovered element AND all its
+            // ancestors. Walk up from the hovered element,
+            // checking if we pass through &el.
+            const dom::Node* n = state.hovered_element;
+            while (n) {
+                if (n == &el) return true;
+                n = n->parent();
+            }
+            return false;
+        }
     }
     return false;
 }
 
-bool matches_compound(const CompoundSelector& c, const dom::Element& el) {
+bool matches_compound(const CompoundSelector& c, const dom::Element& el,
+                      const RenderState& state) {
     for (const auto& s : c.simples) {
-        if (!matches_simple(s, el)) return false;
+        if (!matches_simple(s, el, state)) return false;
     }
     return true;
 }
 
-bool matches_from(const Selector& sel, const dom::Node* node, size_t index) {
+bool matches_from(const Selector& sel, const dom::Node* node, size_t index,
+                  const RenderState& state) {
     if (!node || index >= sel.parts.size()) return false;
     if (node->type() != dom::NodeType::Element) return false;
 
     const auto* el = static_cast<const dom::Element*>(node);
-    if (!matches_compound(sel.parts[index].compound, *el)) return false;
+    if (!matches_compound(sel.parts[index].compound, *el, state)) return false;
 
     if (index == 0) return true;
 
@@ -379,18 +423,18 @@ bool matches_from(const Selector& sel, const dom::Node* node, size_t index) {
         case Combinator::None:
             return false;
         case Combinator::Child:
-            return matches_from(sel, node->parent(), index - 1);
+            return matches_from(sel, node->parent(), index - 1, state);
         case Combinator::Descendant:
             for (const dom::Node* p = node->parent(); p; p = p->parent()) {
-                if (matches_from(sel, p, index - 1)) return true;
+                if (matches_from(sel, p, index - 1, state)) return true;
             }
             return false;
         case Combinator::Adjacent:
-            return matches_from(sel, previous_sibling(node), index - 1);
+            return matches_from(sel, previous_sibling(node), index - 1, state);
         case Combinator::Sibling:
             for (const dom::Node* p = previous_sibling(node); p;
                  p = previous_sibling(p)) {
-                if (matches_from(sel, p, index - 1)) return true;
+                if (matches_from(sel, p, index - 1, state)) return true;
             }
             return false;
     }
@@ -400,15 +444,26 @@ bool matches_from(const Selector& sel, const dom::Node* node, size_t index) {
 } // namespace
 
 bool Selector::matches(const dom::Node& node) const {
-    if (parts.empty()) return false;
-    return matches_from(*this, &node, parts.size() - 1);
+    return matches(node, RenderState{});
 }
 
 std::optional<Specificity>
 SelectorList::matches(const dom::Node& node) const {
+    return matches(node, RenderState{});
+}
+
+bool Selector::matches(const dom::Node& node,
+                       const RenderState& state) const {
+    if (parts.empty()) return false;
+    return matches_from(*this, &node, parts.size() - 1, state);
+}
+
+std::optional<Specificity>
+SelectorList::matches(const dom::Node& node,
+                      const RenderState& state) const {
     std::optional<Specificity> best;
     for (const auto& sel : selectors) {
-        if (!sel.matches(node)) continue;
+        if (!sel.matches(node, state)) continue;
         const auto spec = sel.specificity();
         if (!best || *best < spec) best = spec;
     }

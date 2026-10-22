@@ -40,6 +40,14 @@ std::string extract_inline_css(const renderer::dom::Document& doc) {
 
 void RenderPipeline::render(const std::string& html,
                             float viewport_width) {
+    // ADR-018: hovered_element is a raw pointer into doc_. When
+    // doc_ is replaced (below), the old DOM is destroyed and
+    // hovered_element becomes dangling. The next relayout()
+    // would then dereference it during cascade (PseudoHover
+    // walks the parent chain), causing a segfault. Clear it
+    // before replacing the document.
+    state_.hovered_element = nullptr;
+
     doc_ = renderer::html::parse(html);
     if (!doc_) {
         layout_root_ = renderer::layout::LayoutBox{};
@@ -54,7 +62,7 @@ void RenderPipeline::relayout(float viewport_width) {
     const std::string css = extract_inline_css(*doc_);
     auto sheet = renderer::css::Stylesheet::parse(css);
     auto styles = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet, *doc_);
+        renderer::css::ua_stylesheet(), sheet, *doc_, state_);
 
     layout_root_ = renderer::layout::layout(
         *doc_, styles, &measure_with_pango, viewport_width);
@@ -66,6 +74,21 @@ void RenderPipeline::paint(cairo_t* cr) const {
 
 std::string RenderPipeline::title() const {
     return doc_ ? doc_->title() : std::string{};
+}
+
+void RenderPipeline::record_visit(const std::string& absolute_url) {
+    state_.base_url = absolute_url;
+    state_.visited_urls.insert(absolute_url);
+}
+
+void RenderPipeline::set_hovered_element(
+    const renderer::dom::Element* el) {
+    state_.hovered_element = el;
+}
+
+const renderer::dom::Element* RenderPipeline::hit_test(
+    float x, float y) const {
+    return renderer::layout::hit_test(layout_root_, x, y);
 }
 
 } // namespace honeybee::browser

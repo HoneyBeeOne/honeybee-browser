@@ -33,3 +33,30 @@ TEST_CASE("is_valid_url rejects invalid URLs", "[url]") {
     // شرطة مائلة مباشرة بعد المخطط (في http/https).
     REQUIRE_FALSE(honeybee::is_valid_url("https:///path"));
 }
+
+TEST_CASE("resolve_url passes absolute URLs through", "[url][resolve]") {
+    CHECK(honeybee::resolve_url("https://example.com/x",
+                                "https://other.com/y")
+          == "https://example.com/x");
+    CHECK(honeybee::resolve_url("http://a.com", "https://b.com")
+          == "http://a.com");
+    CHECK(honeybee::resolve_url("file:///home/x", "https://b.com")
+          == "file:///home/x");
+}
+
+TEST_CASE("resolve_url resolves root-relative", "[url][resolve]") {
+    CHECK(honeybee::resolve_url("/about",
+                                "https://example.com/page.html")
+          == "https://example.com/about");
+}
+
+TEST_CASE("resolve_url resolves sibling-relative", "[url][resolve]") {
+    CHECK(honeybee::resolve_url("other.html",
+                                "https://example.com/page.html")
+          == "https://example.com/other.html");
+}
+
+TEST_CASE("resolve_url returns href when base is empty",
+          "[url][resolve]") {
+    CHECK(honeybee::resolve_url("other.html", "") == "other.html");
+}

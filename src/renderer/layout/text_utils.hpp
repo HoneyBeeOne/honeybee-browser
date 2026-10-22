@@ -17,6 +17,8 @@
 
 #include "renderer/layout/layout_box.hpp"
 
+namespace honeybee::renderer::dom { class Element; }
+
 namespace honeybee::renderer::layout {
 
 std::string collapse_whitespace(std::string_view text);
@@ -39,6 +41,11 @@ struct StyledWord {
     float font_size = 16.0f;
     Color color = Color::black();
     bool preceded_by_space = false;
+
+    // ADR-018 Commit 4b: which element this word came from.
+    // Carried through line breaking so LineFragment::element
+    // can be populated.
+    const dom::Element* element = nullptr;
 };
 
 // One visual line of styled fragments. fragments are ordered

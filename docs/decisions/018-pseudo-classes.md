@@ -1,6 +1,6 @@
 # ADR-018: State Pseudo-Classes
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-21
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-008 (selector matching), ADR-010 (cascade), ADR-014 (UA stylesheet)
@@ -286,3 +286,32 @@ Full cascade recompute on every hover change is O(rules × elements). For a 100-
 ## Record of Changes
 
 - **2026-10-21:** Initial decision.
+
+## Implementation
+
+Implemented on `feat/pseudo-classes` across six commits:
+
+| Commit | Scope |
+|---|---|
+| `59d2042` | RenderState plumbing: `visited_urls`, `hovered_element`, `pointer_x/y`, `base_url` threaded through `cascade()` as an unused parameter |
+| `c1c4dbc` | Parser recognizes `:link`, `:visited`, `:hover`; matcher uses `RenderState`; specificity counts each as class weight |
+| `92143bf` | UA stylesheet replaces `a { color: #0000EE }` with `a:link` / `a:visited` / `a:hover` rules |
+| `1ff7f9e` | `RenderPipeline::record_visit` populates `visited_urls`; relative href resolution against base URL for `:visited` matching |
+| `834be39` | `layout::hit_test` walks the layout tree; `LineFragment::element` carries source-element identity; `Gtk::EventControllerMotion` drives `hovered_element` from mouse motion |
+| `a50e202` | Click-navigation via `Gtk::GestureClick`; `honeybee::resolve_url` public API; clear `hovered_element` on DOM replacement to prevent a use-after-free |
+
+**Verified behavior** (screenshots confirmed):
+
+- `:link` renders `#0000EE` blue for unvisited anchors
+- `:visited` renders `#551A8B` purple for visited anchors
+- `:hover` renders `#0055EE` lighter blue for the element under the mouse cursor
+- Clicking a rendered `<a href>` navigates; the destination becomes `:visited` on return
+- `:hover` fires from live mouse motion and clears via `signal_leave`
+- Full test suite: 237 cases, 905 assertions, all pass
+
+**Deferred to future ADRs:**
+
+- Other pseudo-class categories: structural (`:first-child`), logical (`:not()`, `:is()`), remaining state (`:focus`, `:active`, `:target`)
+- `:visited` link privacy (real browsers restrict getComputedStyle on `:visited` to prevent history leaks; out of scope for a local browser)
+- Back/forward navigation buttons (still stubs; not part of ADR-018 scope)
+

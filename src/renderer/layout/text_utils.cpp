@@ -221,21 +221,41 @@ std::vector<StyledLine> break_styled_words_into_lines(
         const bool same_style = last &&
             last->font_family == w.font_family &&
             last->font_size == w.font_size &&
-            last->color == w.color;
+            last->color == w.color &&
+            last->element == w.element;
 
         if (same_style) {
             if (sep > 0.0f) last->text += ' ';
             last->text += w.text;
             last->width += sep + ww;
         } else {
+            // ADR-018 Commit 4b: this branch now fires more often
+            // (element barriers prevent merging across inline
+            // element boundaries -- e.g. "a</em> <em>b" yields
+            // two fragments). When a space separates this new
+            // fragment from the previous one, include it in
+            // frag.text so text extraction stays correct. Visual
+            // position is unchanged: leading space advances by
+            // sep pixels, word starts at cursor_x + sep -- same
+            // pixel span as the previous f.x = cursor_x + sep
+            // convention. Keeps fragment text self-contained
+            // (concatenating all fragments reconstructs the
+            // original line text verbatim).
             LineFragment f;
-            f.x = cursor_x + sep;  // relative to line start
-            f.text = w.text;
+            if (sep > 0.0f) {
+                f.text = " ";
+                f.text += w.text;
+                f.width = sep + ww;
+            } else {
+                f.text = w.text;
+                f.width = ww;
+            }
+            f.x = cursor_x;
             f.font_family = w.font_family;
             f.font_size = w.font_size;
             f.color = w.color;
-            f.width = ww;
             f.height = wh;
+            f.element = w.element;
             current.fragments.push_back(std::move(f));
         }
 
