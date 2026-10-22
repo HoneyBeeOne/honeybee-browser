@@ -246,6 +246,33 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
         return;
     }
 
+    // ADR-020: cache short-circuit for Back/Forward. On a hit,
+    // we bypass the fetch entirely -- no "جارٍ الجلب..." state,
+    // no button disable. Back feels instant because it is.
+    // New and Reload always fetch (see the ADR: without HTTP
+    // cache headers, serving stale content on an explicit
+    // navigation would be surprising).
+    if (kind == NavKind::Back || kind == NavKind::Forward) {
+        if (auto cached = m_cache.get(url)) {
+            m_current_url = url;
+            m_url_bar.set_text(url);
+            // record_visit must still fire: RenderState::base_url
+            // is used for relative-href resolution during cascade,
+            // and visited_urls re-insertion is idempotent.
+            m_pipeline.record_visit(url);
+            update_nav_buttons();
+            render_html(*cached);
+            // Distinct message from a real fetch -- on localhost
+            // a hit and a fetch are both instantaneous, so the
+            // status text is the only reliable visual signal
+            // that the cache was consulted.
+            m_status_label.set_text(
+                "من الذاكرة، الحجم: " +
+                std::to_string(cached->size()) + " بايت");
+            return;
+        }
+    }
+
     // الخطوة الثالثة: تجهيز الواجهة للجلب.
     // When called from on_link_clicked, the URL bar hasn't been
     // updated -- show the destination. When called from
@@ -311,6 +338,12 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
         // resolves the page's relative hrefs against the page
         // URL rather than against an empty base.
         m_pipeline.record_visit(url);
+
+        // ADR-020: cache the freshly-fetched body. Runs for
+        // every success -- New (pushes history + caches), Back
+        // (miss, defensive), Forward (miss, defensive), Reload
+        // (overwrites the previous entry with the fresh body).
+        m_cache.put(url, r.body);
 
         // ADR-019: history bookkeeping. New pushes; Back/Forward
         // cursor was already moved by the caller; Reload doesn't
