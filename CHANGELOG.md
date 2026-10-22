@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stack with `push` / `back` / `forward` / `can_back` /
   `can_forward`. No GTK dependency; unit-tested.
 
+- **Page caching for Back/Forward** (ADR-020): the browser now
+  caches HTML per URL in a session-scoped in-memory store.
+  Back/Forward serve from cache without a network round-trip;
+  the status bar shows "من الذاكرة" (from memory) to distinguish
+  cache hits from fetches. New navigations and Reload always
+  fetch fresh -- Reload additionally refreshes the cache entry.
+- **`honeybee::browser::PageCache`** in
+  `src/browser/page_cache.hpp` -- header-only URL -> HTML map
+  with O(1) `bytes()` via an incrementally-maintained counter.
+  No GTK dependency; unit-tested.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -72,6 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reload button now calls `navigate_to(url, NavKind::Reload)`
   rather than re-dispatching through `on_url_activated()`, so
   history is preserved.
+
+- Back/Forward are effectively instantaneous in normal use.
+  On localhost the improvement is invisible (a fetch was
+  already milliseconds), but on any real network the difference
+  between a round-trip and a re-parse is significant.
+- Session integrity: killing the HTTP server mid-session
+  leaves Back/Forward functional for any page already visited.
+  Reload and New correctly fail (they must fetch).
 
 ## [0.4.0]
 
