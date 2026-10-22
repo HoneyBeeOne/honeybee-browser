@@ -22,7 +22,9 @@ em, i, cite, var, address { font-style: italic }
 strong, b { font-weight: bold }
 code, pre, kbd, samp, tt { font-family: monospace }
 ul, ol { margin: 1em 0; padding-left: 40px }
-a { color: #0000EE }
+a:link    { color: #0000EE }
+a:visited { color: #551A8B }
+a:hover   { color: #0055EE }
 
 span, a, em, i, strong, b, code, kbd, samp, var, small, sub, sup,
 abbr, cite, q, s, u, time, mark { display: inline }
