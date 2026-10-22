@@ -2,6 +2,8 @@
 
 #include <curl/curl.h>
 
+#include "base/version.hpp"
+
 #include <cstddef>
 #include <memory>
 
@@ -99,6 +101,17 @@ Response fetch(const std::string& url) {
 
     // ضبط الرابط، والـ callbacks، ووجهاتها.
     curl_easy_setopt(handle.get(), CURLOPT_URL, url.c_str());
+
+    // A proper, identifying User-Agent. libcurl's default is
+    // "curl/8.x", which many sites (including Wikipedia) block
+    // with a 403 per their UA policies. Format follows the
+    // convention: product/version + (URL to the project).
+    const std::string user_agent =
+        "HoneyBee/" + honeybee::version_string() +
+        " (https://github.com/HoneyBeeOne/honeybee-browser)";
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT,
+                     user_agent.c_str());
+
     curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION,
                      write_callback);
     curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA,
