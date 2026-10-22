@@ -34,6 +34,7 @@
 // تحتوي عليه كعضو.
 #include "browser/async_fetcher.hpp"
 #include "browser/navigation_history.hpp"
+#include "browser/page_cache.hpp"
 #include "browser/render_pipeline.hpp"
 
 namespace honeybee::browser {
@@ -145,6 +146,10 @@ private:
 
     // ADR-019: session-scoped back/forward history.
     honeybee::browser::NavigationHistory m_history;
+
+    // ADR-020: session-scoped URL -> HTML cache. Populated on
+    // every successful fetch; consulted for Back/Forward only.
+    honeybee::browser::PageCache m_cache;
 
     // الجالب اللاتزامني: يُشغّل جلب الشبكة في خيط منفصل،
     // ويُبلِّغ الخيط الرئيسي عند الانتهاء.

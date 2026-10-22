@@ -35,6 +35,7 @@ HoneyBee is at **v0.1.0 (first paint)**. It parses HTML, cascades CSS, lays out 
 | UA stylesheet (default `<h1>`, `<p>` margins) | :white_check_mark: |
 | Pseudo-classes (`:link`, `:visited`, `:hover`) | :white_check_mark: |
 | Back / forward navigation | :white_check_mark: |
+| Instant Back/Forward (session cache) | :white_check_mark: |
 | `@media` queries | :x: |
 | `border-radius`, `box-shadow` | :x: |
 

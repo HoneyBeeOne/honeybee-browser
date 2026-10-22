@@ -1,6 +1,6 @@
 # ADR-020: Page Caching for Back/Forward Navigation
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-22
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-019 (back/forward navigation), ADR-018 (pseudo-classes)
@@ -313,3 +313,39 @@ ADR-020 is complete when:
 - [ ] Kill-server test: Back works with server down; Reload fails
 - [ ] `main` is green: 245 + N cases, all pass, zero warnings
 - [ ] Screenshots confirm all the above in the running browser
+
+## Implementation
+
+Implemented on `feat/page-cache` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `533162f` | `PageCache` class + 8 unit tests (header-only, no GTK). `bytes_` counter maintained incrementally so `bytes()` is O(1). |
+| `7dc6d38` | `HoneyBeeWindow` integration: `m_cache` member, cache short-circuit for `NavKind::Back`/`Forward` at top of `navigate_to`, cache populate in fetch success callback, distinct "من الذاكرة" status message for the cache-hit path |
+| (this commit) | Docs: ADR-020 status -> Implemented, README features row, CHANGELOG entry |
+
+**Verified behavior** (9-step kill-server test, all pass):
+
+| # | Test | Status message | Verdict |
+|---|---|---|---|
+| 1 | Fetch A (cache miss) | `تم الجلب، 363 بايت` | fetch |
+| 2 | Fetch B (cache miss) | `تم الجلب، 150 بايت` | fetch |
+| 3 | Kill HTTP server | (curl confirms down) | — |
+| 4 | **Back to A** (server DOWN) | `من الذاكرة، 363 بايت` | **cache hit** |
+| 5 | **Forward to B** (server DOWN) | `من الذاكرة، 150 بايت` | **cache hit** (per-URL keying proven by byte count) |
+| 6 | **Reload on B** (server DOWN) | `فشل الجلب، رمز الحالة: 0` | **cache bypassed** (fetch failed) |
+| 7 | **New nav to A via URL bar** (server DOWN) | `فشل الجلب، رمز الحالة: 0`; URL bar restored to B | **cache bypassed** on New |
+| 8 | Restart server, Reload on B | `تم الجلب، 150 بايت` | fetch + cache refresh |
+| 9 | **Back to A** (server UP) | `من الذاكرة، 363 بايت` | **cache preferred** over fetch |
+
+**Key insight from Steps 4 and 9**: Step 4 proves the cache works when the server is unreachable (the "server down" case). Step 9 proves the cache is *preferred* when the server is reachable (the "cache-first for Back/Forward" case). Together they rule out "cache works only as a fetch fallback" -- the policy is unconditional cache-first for Back/Forward, matching the ADR's Decision section.
+
+**Deferred** (unchanged from Decision section):
+
+- Eviction / LRU / size cap (interacts with the "Back always hits" invariant -- its own ADR)
+- Persistence across sessions
+- HTTP cache semantics (`Cache-Control`, `ETag`, `Vary`)
+- Conditional GETs (`If-Modified-Since`, `If-None-Match`)
+- Bfcache-style page state (form values, JS state, scroll)
+- Cache invalidation on POST (no POST in v1)
+
