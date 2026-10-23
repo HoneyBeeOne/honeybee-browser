@@ -14,6 +14,12 @@ add_library(honeybee_lib
   renderer/paint/paint.cpp
   renderer/html/convert.cpp
   renderer/html/preview.cpp
+  # ADR-021: moved from honeybee executable so tests can link
+  # against RenderPipeline and PangoText. Both are GTK-free
+  # (Pango is text shaping, not UI). The whole point of
+  # honeybee_lib -- see comment at top of file.
+  browser/pango_text.cpp
+  browser/render_pipeline.cpp
 )
 
 target_include_directories(honeybee_lib PUBLIC
@@ -24,6 +30,7 @@ target_include_directories(honeybee_lib PUBLIC
 target_link_libraries(honeybee_lib PUBLIC
   PkgConfig::CURL
   PkgConfig::CAIRO
+  PkgConfig::PANGOCAIRO
 )
 
 # lexbor is a private implementation detail of the HTML parser.
@@ -39,8 +46,6 @@ add_executable(honeybee
   browser/app.cpp
   browser/window.cpp
   browser/async_fetcher.cpp
-  browser/pango_text.cpp
-  browser/render_pipeline.cpp
 )
 
 target_include_directories(honeybee PRIVATE

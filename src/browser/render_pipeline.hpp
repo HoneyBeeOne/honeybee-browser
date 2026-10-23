@@ -64,6 +64,15 @@ public:
 
     // Read-only access for tests and diagnostics.
     const renderer::css::RenderState& state() const { return state_; }
+    const renderer::layout::LayoutBox& layout() const { return layout_root_; }
+
+    // ADR-021: incremental restyle. Re-runs the cascade against
+    // the current RenderState, then updates paint-only color
+    // fields in the existing layout tree in place. Skips layout
+    // entirely -- dimensions (x/y/width/height) are unchanged.
+    // Called on hover changes; on a Wikipedia-sized page this is
+    // ~10ms vs ~1s for relayout().
+    void restyle();
 
 private:
     std::unique_ptr<renderer::dom::Document> doc_;

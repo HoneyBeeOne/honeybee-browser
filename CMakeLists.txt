@@ -47,6 +47,11 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM4 REQUIRED IMPORTED_TARGET gtkmm-4.0)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
+# ADR-021: pangocairo is used by browser/pango_text.cpp, which
+# lives in honeybee_lib after this commit. Previously it came
+# in transitively via GTKMM4 on the executable target; moving
+# the file requires explicit declaration.
+pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
 
 # ----------------------------------------------------------------------------
 # lexbor: vendored HTML parser (submodule in third_party/lexbor)

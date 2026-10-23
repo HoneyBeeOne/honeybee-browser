@@ -512,14 +512,14 @@ void HoneyBeeWindow::on_mouse_motion(double x, double y) {
     const auto* el = m_pipeline.hit_test(
         static_cast<float>(x), static_cast<float>(y));
 
-    // No change: skip relayout (avoids churn on intra-element motion).
+    // No change: skip restyle (avoids churn on intra-element motion).
     if (el == m_pipeline.state().hovered_element) return;
 
     m_pipeline.set_hovered_element(el);
-
-    if (m_last_width > 0) {
-        m_pipeline.relayout(static_cast<float>(m_last_width));
-    }
+    // ADR-021: restyle instead of relayout. Re-cascades and
+    // updates colors in place; skips layout entirely. Hover
+    // becomes sub-frame-latency regardless of page size.
+    m_pipeline.restyle();
     m_drawing_area.queue_draw();
 }
 
@@ -528,9 +528,8 @@ void HoneyBeeWindow::on_mouse_leave() {
     if (m_pipeline.state().hovered_element == nullptr) return;
 
     m_pipeline.set_hovered_element(nullptr);
-    if (m_last_width > 0) {
-        m_pipeline.relayout(static_cast<float>(m_last_width));
-    }
+    // ADR-021: restyle, not relayout.
+    m_pipeline.restyle();
     m_drawing_area.queue_draw();
 }
 
