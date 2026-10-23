@@ -127,6 +127,13 @@ void RenderPipeline::render(const std::string& html,
     // before replacing the document.
     state_.hovered_element = nullptr;
 
+    // ADR-022: same for prev_hovered_ (also a raw pointer into
+    // doc_) and the cached styles (keyed by DOM element pointers,
+    // stale once the DOM is replaced).
+    prev_hovered_ = nullptr;
+    styles_cache_.clear();
+    sheet_cache_ = renderer::css::Stylesheet{};
+
     doc_ = renderer::html::parse(html);
     if (!doc_) {
         layout_root_ = renderer::layout::LayoutBox{};
@@ -138,13 +145,21 @@ void RenderPipeline::render(const std::string& html,
 void RenderPipeline::relayout(float viewport_width) {
     if (!doc_) return;
 
+    // ADR-022: cache the parsed author sheet and the full cascade
+    // result. Subsequent restyle() calls mutate styles_cache_ in
+    // place rather than re-cascading from scratch.
     const std::string css = extract_inline_css(*doc_);
-    auto sheet = renderer::css::Stylesheet::parse(css);
-    auto styles = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet, *doc_, state_);
+    sheet_cache_ = renderer::css::Stylesheet::parse(css);
+    styles_cache_ = renderer::css::cascade(
+        renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
 
     layout_root_ = renderer::layout::layout(
-        *doc_, styles, &measure_with_pango, viewport_width);
+        *doc_, styles_cache_, &measure_with_pango, viewport_width);
+
+    // The cache now reflects state_.hovered_element (relayout used
+    // the current state_). Sync prev_hovered_ so the next restyle's
+    // diff correctly identifies what changed.
+    prev_hovered_ = state_.hovered_element;
 }
 
 void RenderPipeline::paint(cairo_t* cr) const {
@@ -161,11 +176,62 @@ float RenderPipeline::layout_height() const {
 
 void RenderPipeline::restyle() {
     if (!doc_) return;
-    const std::string css = extract_inline_css(*doc_);
-    auto sheet = renderer::css::Stylesheet::parse(css);
-    auto styles = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet, *doc_, state_);
-    restyle_walk(layout_root_, styles);
+
+    // Fallback path: cache empty (never rendered, or cleared by a
+    // failed render()). Full cascade, same cost as ADR-021.
+    if (styles_cache_.empty()) {
+        const std::string css = extract_inline_css(*doc_);
+        sheet_cache_ = renderer::css::Stylesheet::parse(css);
+        styles_cache_ = renderer::css::cascade(
+            renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
+        restyle_walk(layout_root_, styles_cache_);
+        prev_hovered_ = state_.hovered_element;
+        return;
+    }
+
+    // ADR-022 targeted path: re-cascade only the elements whose
+    // hover state changed. Erase first, then cascade -- the erased
+    // entries have no inherited properties, so the subsequent full
+    // propagate_inheritance refills them from the (possibly-changed)
+    // parent's style.
+    //
+    // Known limitation (documented in ADR-022): ancestor :hover
+    // rules (e.g. `p:hover { color: red }` with `<a>` inside <p>)
+    // are not re-cascaded, because only prev/current hovered
+    // elements are marked dirty, not their ancestors. Current
+    // stylesheets (UA: `a:hover { color }`; Wikipedia: no :hover
+    // author rules) don't trigger this. Deferred to a future ADR.
+    bool did_work = false;
+    if (prev_hovered_ && prev_hovered_ != state_.hovered_element) {
+        renderer::css::erase_subtree(*prev_hovered_, styles_cache_);
+        renderer::css::cascade_subtree(
+            *prev_hovered_, renderer::css::ua_stylesheet(),
+            sheet_cache_, state_, styles_cache_);
+        did_work = true;
+    }
+    if (state_.hovered_element) {
+        renderer::css::erase_subtree(*state_.hovered_element, styles_cache_);
+        renderer::css::cascade_subtree(
+            *state_.hovered_element, renderer::css::ua_stylesheet(),
+            sheet_cache_, state_, styles_cache_);
+        did_work = true;
+    }
+
+    if (!did_work) {
+        // Neither side changed (both null, or same pointer).
+        // Nothing to re-cascade.
+        return;
+    }
+
+    // Full propagate: refill inherited properties for erased entries
+    // from their (possibly-changed) parents.
+    renderer::css::propagate_inheritance(*doc_, styles_cache_);
+
+    // Full walk: update paint-only colors on all fragments. ~5ms on
+    // Wikipedia; targetable in a future ADR.
+    restyle_walk(layout_root_, styles_cache_);
+
+    prev_hovered_ = state_.hovered_element;
 }
 
 void RenderPipeline::record_visit(const std::string& absolute_url) {

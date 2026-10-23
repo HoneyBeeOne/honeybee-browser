@@ -1085,3 +1085,89 @@ TEST_CASE("RenderPipeline::restyle preserves layout dimensions",
     p.restyle();
     CHECK(p.layout_height() == h0);
 }
+
+// =============================================================
+// ADR-022: targeted cascade cache-equality invariant.
+//
+// The critical correctness test: after a targeted restyle, the
+// pipeline's styles_cache_ must equal what a fresh full cascade
+// would produce with the same state. If they diverge, hover
+// colors will be subtly wrong somewhere and hard to reproduce.
+// =============================================================
+
+namespace {
+
+// Recursively check that two ComputedStyleMaps are equivalent
+// for every element in `expected`.
+void assert_maps_equal(const css::ComputedStyleMap& expected,
+                       const css::ComputedStyleMap& actual) {
+    REQUIRE(expected.size() == actual.size());
+    for (const auto& [el, style] : expected) {
+        auto it = actual.find(el);
+        REQUIRE(it != actual.end());
+        // Every property in expected should be present and equal
+        // in actual.
+        for (const auto& [prop, val] : style.declarations) {
+            const auto t = it->second.get(prop);
+            REQUIRE(t.has_value());
+            CHECK(*t == val.value);
+        }
+        // And no extra properties in actual that aren't in expected.
+        for (const auto& [prop, _] : it->second.declarations) {
+            CHECK(style.get(prop).has_value());
+        }
+    }
+}
+
+} // namespace
+
+TEST_CASE("RenderPipeline::restyle targeted cache equals full cascade",
+          "[render-pipeline][targeted-cache]") {
+    honeybee::browser::RenderPipeline p;
+    p.render(
+        "<html><body><p>before <a href=\"#\">link</a> after</p>"
+        "</body></html>",
+        800.0f);
+
+    // Prime the cache: render() did a full cascade with hover=null.
+    REQUIRE_FALSE(p.styles().empty());
+
+    const auto* a = p.doc()->find_element("a");
+    REQUIRE(a);
+
+    // Set hover on <a> and trigger targeted restyle.
+    p.set_hovered_element(a);
+    p.restyle();
+
+    // Fresh full cascade with the same state -- the ground truth.
+    auto sheet = css::Stylesheet::parse("");
+    auto fresh = css::cascade(
+        css::ua_stylesheet(), sheet, *p.doc(), p.state());
+
+    // Targeted result must equal fresh full-cascade result.
+    assert_maps_equal(fresh, p.styles());
+}
+
+TEST_CASE("RenderPipeline::restyle targeted cache matches after un-hover",
+          "[render-pipeline][targeted-cache]") {
+    honeybee::browser::RenderPipeline p;
+    p.render(
+        "<html><body><p>before <a href=\"#\">link</a> after</p>"
+        "</body></html>",
+        800.0f);
+
+    const auto* a = p.doc()->find_element("a");
+    REQUIRE(a);
+
+    // Hover, then un-hover. Two targeted transitions.
+    p.set_hovered_element(a);
+    p.restyle();
+    p.set_hovered_element(nullptr);
+    p.restyle();
+
+    // Final state: hover=null. Must equal fresh full cascade with null hover.
+    auto sheet = css::Stylesheet::parse("");
+    auto fresh = css::cascade(
+        css::ua_stylesheet(), sheet, *p.doc(), p.state());
+    assert_maps_equal(fresh, p.styles());
+}
