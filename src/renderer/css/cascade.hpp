@@ -101,4 +101,12 @@ void erase_subtree(const dom::Element& el, ComputedStyleMap& out);
 void propagate_inheritance(const dom::Node& doc,
                            ComputedStyleMap& out);
 
+// ADR-022 test-only: number of apply_rule() invocations since the
+// last reset. Used by algorithmic regression guards to assert that
+// targeted restyle re-cascades O(subtree * rules) elements rather
+// than O(elements * rules). Unconditional (thread_local increment
+// per apply_rule call; ~0.02% overhead on a full Wikipedia cascade).
+std::size_t apply_rule_call_count();
+void reset_apply_rule_call_count();
+
 } // namespace honeybee::renderer::css

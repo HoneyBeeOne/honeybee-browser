@@ -1171,3 +1171,66 @@ TEST_CASE("RenderPipeline::restyle targeted cache matches after un-hover",
         css::ua_stylesheet(), sheet, *p.doc(), p.state());
     assert_maps_equal(fresh, p.styles());
 }
+
+// =============================================================
+// ADR-022: algorithmic regression guard.
+//
+// Asserts targeted restyle is O(dirty), not O(document). A future
+// change accidentally reverting restyle() to full cascade would
+// still pass all correctness tests (result is identical) but
+// silently regress performance by 30-50x. This test catches that.
+//
+// Timing tests would be flaky (CI noise, thermal, debug-vs-release);
+// this asserts the underlying algorithmic property deterministically.
+// =============================================================
+
+TEST_CASE("RenderPipeline::restyle re-cascades only dirty subtrees",
+          "[render-pipeline][algorithmic]") {
+    // ~100 sibling <p> elements + one <a> inside one of them.
+    // Full cascade: ~102 elements x ~20 rules ~= 2040 apply_rule calls.
+    // Targeted: 1 element (<a>) x ~20 rules ~= 20 calls.
+    std::string html = "<html><body>";
+    for (int i = 0; i < 100; ++i) {
+        html += "<p>paragraph " + std::to_string(i) + "</p>";
+    }
+    html += "<p><a href=\"#\">link</a></p>";
+    html += "</body></html>";
+
+    honeybee::browser::RenderPipeline p;
+    p.render(html, 800.0f);
+
+    const auto* a = p.doc()->find_element("a");
+    REQUIRE(a);
+
+    // Hover transition 1: null -> <a>. Only <a> is dirty.
+    css::reset_apply_rule_call_count();
+    p.set_hovered_element(a);
+    p.restyle();
+    const auto hover_calls = css::apply_rule_call_count();
+
+    // Hover transition 2: <a> -> null. Again only <a> is dirty.
+    css::reset_apply_rule_call_count();
+    p.set_hovered_element(nullptr);
+    p.restyle();
+    const auto unhover_calls = css::apply_rule_call_count();
+
+    // Threshold logic (measured baseline: 17 calls per transition --
+    // exactly one element x 17 UA rules). Full cascade on this
+    // document would be ~1,734 (102 elements x 17 rules).
+    //
+    // < 100 gives 5.9x headroom over the baseline (catches 5x
+    // regressions like accidental double-cascade) while remaining
+    // robust to legitimate UA-stylesheet growth: false positives
+    // would require UA rules to exceed ~100, which is a UA-sheet
+    // overhaul that would come with its own ADR. Full-cascade
+    // reversion (17 -> 1,734) fails at any threshold, and this one
+    // fails fast and unmistakably.
+    INFO("hover_calls = " << hover_calls
+         << ", unhover_calls = " << unhover_calls);
+    CHECK(hover_calls < 100);
+    CHECK(unhover_calls < 100);
+
+    // Sanity: at least one call happened (counter actually incremented).
+    CHECK(hover_calls > 0);
+    CHECK(unhover_calls > 0);
+}
