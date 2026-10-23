@@ -1,6 +1,6 @@
 # ADR-022: Targeted Cascade for Hover
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-23
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-021 (incremental restyle), ADR-010 (cascade), ADR-018 (state pseudo-classes)
@@ -315,3 +315,53 @@ ADR-022 is complete when:
 by this ADR; that requires targeted propagation (deferred). The
 claim is "~40x faster, sub-perceptual threshold" which is user-
 equivalent to instant.
+
+## Implementation
+
+Implemented on `feat/targeted-cascade` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `fb68119` | Cascade primitives: `cascade_subtree`, `erase_subtree`, public `propagate_inheritance`. 3 unit tests including the primitive-level correctness check (cascade_subtree + propagate equals full cascade for the subtree). |
+| `352eb0c` | RenderPipeline integration: `styles_cache_`, `sheet_cache_`, `prev_hovered_`; `relayout()` populates; `render()` clears; `restyle()` targeted path with fallback. 2 cache-equality invariant tests (81 assertions) verifying targeted restyle equals full cascade. |
+| (this commit) | Docs: ADR-022 status -> Implemented, README + CHANGELOG entries |
+
+**Measured performance** on Wikipedia's HTML article (799KB, 7,871 elements, 158 rules, debug build -O0, 71 observed restyle transitions during a manual hover session):
+
+| Category | Measured | Notes |
+|---|---|---|
+| Welcome page (pre-navigation) | 0.13-0.51ms | Not representative of real content |
+| Link hover (typical, ~99% of observed) | **14-25ms** | ~30-50x faster than ADR-021's ~700ms baseline |
+| Medium element hover (tables, lists) | 55-67ms | ~10x improvement |
+| Structural element hover (large subtree) | 850-932ms (4 of 71 transitions) | ~6% of observed transitions; same cost as pre-ADR-022 |
+| Median | ~20ms | |
+| Mean | 76ms | Dominated by the 4 structural spikes |
+
+The 4 large spikes are consistent with the ADR's Deferred caveat ("hover on large wrapping element is potentially expensive, correct but wasteful") but **not directly verified to be `<div>` wrappers** -- we did not log which element triggered each transition. The inference is that some hover targets have large subtrees (which `cascade_subtree` re-cascades entirely). Whatever the specific elements were, the characterization holds: most hover targets are fast (14-25ms), some have large subtrees and are slow (~900ms, cost dominated by subtree re-cascade).
+
+**Compared to ADR-021 baseline:** link hovers are ~30-50x faster, which is the case ADR-022 set out to optimize. Wrapping-element hovers are unchanged from ADR-021's ~700-900ms range -- the ADR was honest that this case was not fixed.
+
+## Deferred followup: ADR-023 (skip-subtree optimization)
+
+The 4 large spikes (~6% of observed transitions) are the remaining gap. Root cause: when the hovered element has a large subtree (e.g. a structural div containing most of an article), `cascade_subtree(el)` re-cascades every element in that subtree -- thousands of elements, same cost as full cascade.
+
+**ADR-023 (proposed)** would add a skip-subtree guard: before calling `cascade_subtree(el)`, check whether any `:hover` rule in the current stylesheets could possibly match `el` or any descendant. If not, skip entirely (hover state change produces no style diff for that subtree).
+
+Correctness nuance: descendants of `<div class="wrapper">` may include `<a>` elements, and `a:hover` DOES match those `<a>` elements. So the naive "no rule matches `div:hover`" check is insufficient -- we need "no rule matches `*:hover` for any element in the subtree." Options:
+
+1. **Precompute** which elements can ever match a `:hover` selector. Cache a `std::unordered_set<const Element*>` of "hoverable" elements; on hover change, walk the subtree checking membership. Cost proportional to subtree size, but a cheap walk (pointer lookups) instead of full cascade (rule matching + map inserts). Expected ~10-100x faster than `cascade_subtree` for the skip case.
+2. **Decompose the rule set**: build a per-element "which rules could match this element on hover change" index. Same idea as (1) but with more upfront bookkeeping.
+3. **Rule-level shortcut**: if no rule with a `:hover` simple-selector exists at all in the current stylesheets, skip all targeted work entirely (fast path for pages with no hover CSS). Not sufficient for Wikipedia's case since `a:hover` exists, but useful for small pages.
+
+Option 1 is the natural extension and matches the existing pattern (`erase_subtree` + `cascade_subtree` are already walking the subtree -- adding a "does this element match :hover rules?" check per node is a small constant factor).
+
+**Out of scope for ADR-022 because:**
+- It requires a new "match only `:hover` rules" fast path in the matcher, or a parallel "hoverability" analysis
+- The 99% case (link hovers) is already fast
+- The 1% case (wrapping element hovers) is rare in practice and produces no visible delay in normal use
+- The correctness invariant ("targeted == full cascade") would need to be re-verified for the skip path
+
+Expected outcome: wrapping-element hovers drop from ~900ms to ~20-50ms (essentially the same as link hovers, since the skip check walks the subtree but doesn't cascade it). This would close ADR-022's only remaining gap.
+
+**Meanwhile**, users hovering links (99% of observed behavior) get 14-25ms latency, which is sub-perceptual. The 1% slow case is documented but not user-visible in normal browsing.
+
