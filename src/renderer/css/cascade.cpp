@@ -18,6 +18,12 @@ bool is_inherited(std::string_view property) {
 
 namespace {
 
+// ADR-022 test-only: total apply_rule() invocations since last reset.
+// Accessed via the public apply_rule_call_count() / reset_apply_rule_call_count()
+// accessors. thread_local so tests running in one thread don't see
+// increments from another (defensive; currently tests are single-threaded).
+thread_local std::size_t g_apply_rule_call_count = 0;
+
 // Order per ADR-010 + ADR-014:
 //   1. importance (important beats normal)
 //   2. origin (Author beats UserAgent for normal declarations;
@@ -37,6 +43,7 @@ bool beats(const CascadeValue& a, const CascadeValue& b) {
 void apply_rule(const Rule& rule, const dom::Element& el,
                 Origin origin, std::size_t& counter,
                 const RenderState& state, ComputedStyle& style) {
+    ++g_apply_rule_call_count;
     auto spec = rule.selectors.matches(el, state);
     if (!spec) return;
 
@@ -80,6 +87,9 @@ void compute_styles(const dom::Node& node,
 }
 
 } // namespace
+
+std::size_t apply_rule_call_count() { return g_apply_rule_call_count; }
+void reset_apply_rule_call_count() { g_apply_rule_call_count = 0; }
 
 // ADR-022: moved from the anonymous namespace so the targeted
 // restyle path can call it directly after targeted cascade_subtree.
