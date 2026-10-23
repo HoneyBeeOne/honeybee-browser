@@ -76,4 +76,29 @@ ComputedStyleMap cascade(const Stylesheet& ua_sheet,
 ComputedStyleMap cascade(const Stylesheet& author_sheet,
                          const dom::Document& doc);
 
+// ADR-022: targeted cascade primitives.
+
+// Re-run compute_styles scoped to `el`'s subtree, writing explicit
+// (non-inherited) styles into `out`. Existing entries in `out` for
+// elements in the subtree are overwritten. Inherited properties are
+// NOT filled -- call propagate_inheritance() after to complete them.
+void cascade_subtree(const dom::Element& el,
+                     const Stylesheet& ua_sheet,
+                     const Stylesheet& author_sheet,
+                     const RenderState& state,
+                     ComputedStyleMap& out);
+
+// Remove `el` and all its element descendants from `out`. Used
+// before cascade_subtree so stale inherited properties from a prior
+// restyle don't linger (propagate_inheritance only fills MISSING
+// properties, so without erasure it would skip descendants whose
+// entries survived from the previous cascade).
+void erase_subtree(const dom::Element& el, ComputedStyleMap& out);
+
+// Propagate inherited properties from parents to children across
+// `doc`, filling in missing declarations in `out`. Previously an
+// internal helper; exposed for ADR-022's targeted restyle.
+void propagate_inheritance(const dom::Node& doc,
+                           ComputedStyleMap& out);
+
 } // namespace honeybee::renderer::css
