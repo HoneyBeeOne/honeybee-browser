@@ -76,6 +76,10 @@ std::string RenderPipeline::title() const {
     return doc_ ? doc_->title() : std::string{};
 }
 
+float RenderPipeline::layout_height() const {
+    return layout_root_.height;
+}
+
 void RenderPipeline::record_visit(const std::string& absolute_url) {
     state_.base_url = absolute_url;
     state_.visited_urls.insert(absolute_url);

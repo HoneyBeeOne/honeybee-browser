@@ -40,6 +40,12 @@ public:
     // True if a page has been rendered.
     bool has_page() const { return doc_ != nullptr; }
 
+    // ADR-021: current layout tree height in CSS pixels. Used by
+    // the window to set the DrawingArea's size request so
+    // ScrolledWindow shows a scrollbar when content exceeds the
+    // viewport. Returns 0 before the first render.
+    float layout_height() const;
+
     // ADR-018 Commit 4b: hit-test against the current layout tree.
     // Delegates to renderer::layout::hit_test. Returns the deepest
     // dom::Element containing (x, y), or nullptr.

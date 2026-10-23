@@ -13,6 +13,8 @@
 // استيراد إعلان الصنف نفسه.
 #include "window.hpp"
 
+#include <cmath>
+
 // استيراد دالة الإصدار لعرض رقم الإصدار.
 #include "base/version.hpp"
 
@@ -163,11 +165,34 @@ HoneyBeeWindow::HoneyBeeWindow()
     // ---------------------------------------------------------
 
     m_root_box.append(m_toolbar_box);
-    m_root_box.append(m_drawing_area);
+
+    // ADR-021: wrap the drawing area in a ScrolledWindow so
+    // content taller than the viewport is scrollable. The
+    // DrawingArea's size request grows to the full layout
+    // height (set by sync_drawing_area_size after every
+    // relayout); ScrolledWindow then provides vertical scroll.
+    // Horizontal scroll is disabled -- v1 lays out at viewport
+    // width, no horizontal overflow.
+    // Pointer coordinates remain in layout space: GDK
+    // translates via the widget hierarchy, so hit-test and
+    // hover from ADR-018/019/020 need no changes.
+    m_scroll_window.set_child(m_drawing_area);
+    m_scroll_window.set_policy(Gtk::PolicyType::NEVER,
+                               Gtk::PolicyType::AUTOMATIC);
+    // ADR-021: non-overlay scrollbar takes real space on the
+    // right and is visibly present when content overflows.
+    // Overlay scrollbars are ~4px semi-transparent and auto-hide
+    // between gestures -- easy to miss, and harder to drag.
+    m_scroll_window.set_overlay_scrolling(false);
+    m_scroll_window.set_vexpand(true);
+
+    m_root_box.append(m_scroll_window);
+
     m_root_box.append(m_status_bar);
 
     // نُعيّن الحاوية الرئيسية كالابن الوحيد للنافذة.
     // View area setup: draw callback and welcome page.
+    m_drawing_area.set_hexpand(true);
     m_drawing_area.set_vexpand(true);
     m_drawing_area.set_draw_func(
         [this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
@@ -194,6 +219,7 @@ HoneyBeeWindow::HoneyBeeWindow()
             if (n_press == 1) on_link_clicked(x, y);
         });
     m_drawing_area.add_controller(m_click_controller);
+
 
     const std::string welcome =
         "<html><head><title>HoneyBee Browser</title>"
@@ -424,6 +450,7 @@ void HoneyBeeWindow::update_nav_buttons() {
 
 void HoneyBeeWindow::render_html(const std::string& html) {
     m_pipeline.render(html, static_cast<float>(m_drawing_area.get_width()));
+    sync_drawing_area_size();
 
     const std::string title = m_pipeline.title();
     if (!title.empty()) {
@@ -438,12 +465,16 @@ void HoneyBeeWindow::render_html(const std::string& html) {
 // =============================================================
 
 void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
-                             int width, int height) {
-    (void)height;
-
+                             int width, int /*height*/) {
+    // ADR-021: width is the DrawingArea's allocated width (which
+    // shrinks if a vertical scrollbar appears); height is the
+    // full DrawingArea height (= layout height), not the
+    // viewport. We paint the entire layout tree; Cairo clips to
+    // the visible viewport region automatically.
     if (width != m_last_width) {
         m_last_width = width;
         m_pipeline.relayout(static_cast<float>(width));
+        sync_drawing_area_size();
     }
 
     // White background.
@@ -452,6 +483,15 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
 
     // Paint the layout tree.
     m_pipeline.paint(cr->cobj());
+}
+
+void HoneyBeeWindow::sync_drawing_area_size() {
+    if (!m_pipeline.has_page()) return;
+    if (m_last_width <= 0) return;
+    const float h = m_pipeline.layout_height();
+    if (h <= 0.0f) return;
+    const int h_px = static_cast<int>(std::ceil(h));
+    m_drawing_area.set_size_request(-1, h_px);
 }
 
 // =============================================================
