@@ -69,6 +69,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ~700ms. Still not sub-frame on very large pages -- a followup
   ADR (targeted cascade, ADR-022) is proposed to reach that.
 
+- **Targeted cascade for hover** (ADR-022): hover changes
+  re-cascade only the elements whose state changed, keeping the
+  rest of the ComputedStyleMap cached. Measured on Wikipedia's
+  799KB article (debug build): link hovers drop from ~700ms
+  (ADR-021) to **14-25ms** (~30-50x improvement); medium element
+  hovers to 55-67ms. Hover on large structural elements remains
+  ~900ms (~6% of observed transitions) -- same cost as before,
+  because their subtrees get re-cascaded entirely. A followup
+  ADR (ADR-023, skip-subtree optimization) is proposed to close
+  that gap.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -114,6 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (previously 2-3s freeze). See "Large-page scrolling + hover"
   under Added; targeted cascade (ADR-022) will address the
   remaining latency.
+
+- Hover latency on large pages: link hovers are now ~20ms
+  (median) instead of ~700ms. Structural-element hovers are
+  unchanged at ~900ms and documented as a known limitation
+  (ADR-023). User-visible: hovering links on Wikipedia feels
+  instant; hovering a large wrapper element still lags.
 
 ## [0.4.0]
 

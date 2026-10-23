@@ -79,6 +79,11 @@ void compute_styles(const dom::Node& node,
     }
 }
 
+} // namespace
+
+// ADR-022: moved from the anonymous namespace so the targeted
+// restyle path can call it directly after targeted cascade_subtree.
+// Body unchanged.
 void propagate_inheritance(const dom::Node& node,
                            ComputedStyleMap& out) {
     if (node.type() == dom::NodeType::Element) {
@@ -105,8 +110,6 @@ void propagate_inheritance(const dom::Node& node,
         propagate_inheritance(*child, out);
     }
 }
-
-} // namespace
 
 bool ComputedStyle::has(const std::string& property) const {
     return declarations.find(property) != declarations.end();
@@ -139,6 +142,30 @@ ComputedStyleMap cascade(const Stylesheet& ua_sheet,
     compute_styles(doc, ua_sheet, author_sheet, state, out);
     propagate_inheritance(doc, out);
     return out;
+}
+
+// ADR-022: targeted cascade primitives.
+
+void cascade_subtree(const dom::Element& el,
+                     const Stylesheet& ua_sheet,
+                     const Stylesheet& author_sheet,
+                     const RenderState& state,
+                     ComputedStyleMap& out) {
+    // compute_styles already traverses the element's subtree;
+    // starting from `el` scopes it correctly. Inherited properties
+    // are intentionally left unfilled -- the caller runs
+    // propagate_inheritance after erasing + re-cascading all dirty
+    // subtrees, so inheritance is computed once for the whole tree.
+    compute_styles(el, ua_sheet, author_sheet, state, out);
+}
+
+void erase_subtree(const dom::Element& el, ComputedStyleMap& out) {
+    out.erase(&el);
+    for (const auto& child : el.children()) {
+        if (child->type() == dom::NodeType::Element) {
+            erase_subtree(static_cast<const dom::Element&>(*child), out);
+        }
+    }
 }
 
 } // namespace honeybee::renderer::css

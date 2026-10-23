@@ -3,6 +3,8 @@
 // ordering). Inheritance tests arrive in Commit 2.
 // =============================================================
 
+#include "renderer/html/convert.hpp"
+#include "renderer/css/ua_stylesheet.hpp"
 #include "renderer/css/cascade.hpp"
 #include "renderer/css/render_state.hpp"
 #include "renderer/css/stylesheet.hpp"
@@ -369,4 +371,93 @@ TEST_CASE("cascade: :visited on absolute URL ignores base",
     const auto author = Stylesheet::parse("a:visited { color: purple }");
     const auto result = cascade(Stylesheet{}, author, *doc, state);
     CHECK(result.at(a).get("color").value_or("") == "purple");
+}
+
+// =============================================================
+// ADR-022: targeted cascade primitives.
+// =============================================================
+
+TEST_CASE("erase_subtree: removes leaf element only",
+          "[cascade][targeted]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>before <a href=\"#\">x</a> after</p>"
+        "</body></html>");
+    REQUIRE(doc);
+    const auto* a = doc->find_element("a");
+    const auto* p = doc->find_element("p");
+    REQUIRE(a);
+    REQUIRE(p);
+
+    const auto ua = css::ua_stylesheet();
+    const auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(ua, sheet, *doc);
+
+    REQUIRE(styles.count(a) == 1);
+    REQUIRE(styles.count(p) == 1);
+
+    css::erase_subtree(*a, styles);
+
+    CHECK(styles.count(a) == 0);        // erased
+    CHECK(styles.count(p) == 1);        // parent untouched
+}
+
+TEST_CASE("erase_subtree: recursively removes descendants",
+          "[cascade][targeted]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><div><span>x</span></div></body></html>");
+    REQUIRE(doc);
+    const auto* div = doc->find_element("div");
+    const auto* span = doc->find_element("span");
+    REQUIRE(div);
+    REQUIRE(span);
+
+    const auto ua = css::ua_stylesheet();
+    const auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(ua, sheet, *doc);
+
+    REQUIRE(styles.count(div) == 1);
+    REQUIRE(styles.count(span) == 1);
+
+    css::erase_subtree(*div, styles);
+
+    CHECK(styles.count(div) == 0);      // erased
+    CHECK(styles.count(span) == 0);     // descendant also erased
+}
+
+TEST_CASE("cascade_subtree + propagate matches full cascade for subtree",
+          "[cascade][targeted]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>before <a href=\"#\">x</a> after</p>"
+        "</body></html>");
+    REQUIRE(doc);
+    const auto* body = doc->find_element("body");
+    const auto* p = doc->find_element("p");
+    const auto* a = doc->find_element("a");
+    REQUIRE(body);
+    REQUIRE(p);
+    REQUIRE(a);
+
+    const auto ua = css::ua_stylesheet();
+    const auto sheet = css::Stylesheet::parse("");
+
+    // Full cascade: what the pipeline currently uses.
+    const auto full = css::cascade(ua, sheet, *doc);
+
+    // Recompose <body>'s subtree from scratch via targeted primitives,
+    // then propagate inheritance for the full document.
+    css::ComputedStyleMap targeted;
+    css::cascade_subtree(*body, ua, sheet, css::RenderState{}, targeted);
+    css::propagate_inheritance(*doc, targeted);
+
+    // Every element in <body>'s subtree should have the same
+    // declarations as the full cascade produced.
+    for (const auto* el : {body, p, a}) {
+        REQUIRE(full.count(el) == 1);
+        REQUIRE(targeted.count(el) == 1);
+        for (const auto& [prop, val] : full.at(el).declarations) {
+            const auto t = targeted.at(el).get(prop);
+            REQUIRE(t.has_value());
+            CHECK(*t == val.value);
+        }
+    }
 }
