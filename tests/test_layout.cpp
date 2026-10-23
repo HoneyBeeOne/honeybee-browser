@@ -9,6 +9,7 @@
 #include "renderer/css/ua_stylesheet.hpp"
 #include "renderer/html/convert.hpp"
 #include "renderer/layout/layout.hpp"
+#include "browser/render_pipeline.hpp"
 #include "renderer/layout/style_values.hpp"
 #include "renderer/layout/text_utils.hpp"
 
@@ -1058,4 +1059,29 @@ TEST_CASE("hit_test: point outside root returns nullptr",
 
     CHECK(layout::hit_test(root, -10.0f, -10.0f) == nullptr);
     CHECK(layout::hit_test(root, 10000.0f, 10000.0f) == nullptr);
+}
+
+// =============================================================
+// ADR-021: incremental restyle.
+// =============================================================
+
+TEST_CASE("RenderPipeline::restyle preserves layout dimensions",
+          "[render-pipeline][restyle]") {
+    honeybee::browser::RenderPipeline p;
+    p.render(
+        "<html><body><p>before <a href=\"#\">link</a> after</p>"
+        "</body></html>",
+        800.0f);
+
+    const float h0 = p.layout_height();
+    REQUIRE(h0 > 0.0f);
+
+    // Restyle with no hover: dimensions must not change.
+    p.restyle();
+    CHECK(p.layout_height() == h0);
+
+    // Restyle is idempotent on dimensions -- call again to
+    // ensure no accumulation error.
+    p.restyle();
+    CHECK(p.layout_height() == h0);
 }

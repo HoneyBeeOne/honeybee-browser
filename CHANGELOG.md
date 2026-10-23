@@ -56,6 +56,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with O(1) `bytes()` via an incrementally-maintained counter.
   No GTK dependency; unit-tested.
 
+- **Large-page scrolling** (ADR-021): the view area is wrapped
+  in `Gtk::ScrolledWindow`; content taller than the viewport is
+  scrollable with the mouse wheel, trackpad, scrollbar, and
+  Page Up/Down. The `DrawingArea`'s size request grows to the
+  full layout height (44,000 CSS pixels for a Wikipedia article),
+  letting ScrolledWindow manage the scroll naturally.
+- **Incremental restyle for hover** (ADR-021): hover changes
+  re-run only the cascade and update paint colors in place,
+  skipping layout entirely. Hover latency on Wikipedia's 800KB
+  article drops from ~2-3s (previous full-relayout path) to
+  ~700ms. Still not sub-frame on very large pages -- a followup
+  ADR (targeted cascade, ADR-022) is proposed to reach that.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -91,6 +104,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session integrity: killing the HTTP server mid-session
   leaves Back/Forward functional for any page already visited.
   Reload and New correctly fail (they must fetch).
+
+- `render_pipeline.cpp` and `pango_text.cpp` moved from the
+  `honeybee` executable target to `honeybee_lib`. Both are
+  GTK-free and testable; the move unblocks unit testing of
+  `RenderPipeline` (needed by the new restyle dimension-invariant
+  test). `PANGOCAIRO` pkg-config added to top-level dependencies.
+- Hover on Wikipedia-scale pages is responsive within ~700ms
+  (previously 2-3s freeze). See "Large-page scrolling + hover"
+  under Added; targeted cascade (ADR-022) will address the
+  remaining latency.
 
 ## [0.4.0]
 

@@ -124,6 +124,13 @@ private:
     // عرض حقيقي.
     Gtk::DrawingArea m_drawing_area;
 
+    // ADR-021: wraps m_drawing_area so content taller than the
+    // viewport is scrollable. Set vexpand on this widget instead
+    // of m_drawing_area; the DrawingArea's size request grows to
+    // layout height, and the ScrolledWindow provides the vertical
+    // scrollbar.
+    Gtk::ScrolledWindow m_scroll_window;
+
     // شريط الحالة: تخطيط أفقي.
     // يحتوي على رسالة الحالة ورقم الإصدار.
     Gtk::Box m_status_bar;
@@ -196,6 +203,11 @@ private:
 
     // ADR-019: sync Back/Forward button sensitivity to history.
     void update_nav_buttons();
+
+    // ADR-021: after any layout change, set the DrawingArea's
+    // size request to the current layout height so ScrolledWindow
+    // shows a scrollbar when content overflows the viewport.
+    void sync_drawing_area_size();
 
     // Run the full pipeline and repaint.
     void render_html(const std::string& html);

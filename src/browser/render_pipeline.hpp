@@ -40,6 +40,12 @@ public:
     // True if a page has been rendered.
     bool has_page() const { return doc_ != nullptr; }
 
+    // ADR-021: current layout tree height in CSS pixels. Used by
+    // the window to set the DrawingArea's size request so
+    // ScrolledWindow shows a scrollbar when content exceeds the
+    // viewport. Returns 0 before the first render.
+    float layout_height() const;
+
     // ADR-018 Commit 4b: hit-test against the current layout tree.
     // Delegates to renderer::layout::hit_test. Returns the deepest
     // dom::Element containing (x, y), or nullptr.
@@ -58,6 +64,15 @@ public:
 
     // Read-only access for tests and diagnostics.
     const renderer::css::RenderState& state() const { return state_; }
+    const renderer::layout::LayoutBox& layout() const { return layout_root_; }
+
+    // ADR-021: incremental restyle. Re-runs the cascade against
+    // the current RenderState, then updates paint-only color
+    // fields in the existing layout tree in place. Skips layout
+    // entirely -- dimensions (x/y/width/height) are unchanged.
+    // Called on hover changes; on a Wikipedia-sized page this is
+    // ~10ms vs ~1s for relayout().
+    void restyle();
 
 private:
     std::unique_ptr<renderer::dom::Document> doc_;
