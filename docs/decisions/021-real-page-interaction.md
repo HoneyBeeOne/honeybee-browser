@@ -1,6 +1,6 @@
 # ADR-021: Real-Page Interaction (Scrolling + Incremental Restyle)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-22
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-018 (hit-test + hover), ADR-019 (navigation), ADR-020 (cache)
@@ -326,3 +326,53 @@ ADR-021 is complete when:
 - [ ] Restyle tests confirm dimensions unchanged
 - [ ] `main` is green: 253 + N cases, all pass, zero warnings
 - [ ] Screenshots confirm all the above in the running browser
+
+## Implementation
+
+Implemented on `feat/real-page-interaction` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `473f00e` | ScrolledWindow wrap + `RenderPipeline::layout_height()` accessor + `HoneyBeeWindow::sync_drawing_area_size()`. `set_overlay_scrolling(false)` was the actual fix for the missing scrollbar (see diagnostic corrections below). |
+| `728bc89` | `RenderPipeline::restyle()` + `restyle_walk()`; window wiring (hover uses `restyle()` instead of `relayout()`); CMake restructuring (pipeline + pango moved to `honeybee_lib`); dimension-preservation test |
+| (this commit) | Docs: ADR-021 status -> Implemented, README features row, CHANGELOG entries |
+
+**Verified behavior** (visual, on Wikipedia's HTML article, 799KB, ~44,000 CSS px tall):
+
+1. Non-overlay scrollbar visible on the right side of the window
+2. Article body reachable by scrolling (previously clipped at viewport height, inaccessible)
+3. References section reachable at the bottom
+4. Hover on article-body links changes color (`#0000EE` -> `#0055EE`), reverts on un-hover
+5. Hover on sidebar links also works
+6. No multi-second UI freeze (previous behavior) -- see "Measured performance"
+
+**Measured performance (honest):**
+
+Restyle on the Wikipedia article takes ~700ms per hover transition in debug build. Breakdown: extract CSS ~2ms, parse stylesheet ~4ms, cascade ~690ms (10,000 elements x 17 UA rules + Wikipedia's inline style rules), restyle_walk ~5ms. Previous implementation (full `relayout()` on every hover) took 2-3 seconds on the same page. So restyle is 3-5x faster and eliminates the multi-second freeze, but does NOT reach the "instant" (sub-frame) latency hypothesized in the Implementation plan above.
+
+**Diagnostic corrections to the plan:**
+
+1. **`LayoutText::element` backfill was not needed.** Reading `paint.cpp` revealed that only `LayoutBox::background`, `LayoutBox::border_color`, and `LineFragment::color` are consulted at paint time. `LayoutText::color` and `LayoutInline::color` are dead state -- inline nodes are flattened during layout and `LayoutText` is not drawn directly (only its `LineFragment`s are). So `restyle_walk` goes directly from `fragment.element` (already backfilled by ADR-018) to the computed style, with no intermediate `LayoutText::element` pointer needed.
+
+2. **The overlay-scrollbar concern turned out to be the actual bug.** Default GTK4 overlay scrollbars use a `Gtk::Overlay` wrapper that misroutes pointer events to children owning gesture controllers -- the DrawingArea owns `EventControllerMotion` (ADR-018) and `GestureClick` (ADR-019), so scroll events never reached ScrolledWindow. `set_overlay_scrolling(false)` attaches the child directly, restoring normal event routing. An interim explicit `EventControllerScroll` added as a workaround received zero events once overlay mode was off and was removed.
+
+3. **CMake restructuring was necessary for the restyle test.** `render_pipeline.cpp` and `pango_text.cpp` were in the `honeybee` executable target, so unit tests (which link only `honeybee_lib`) could not link against `RenderPipeline`. Moved both to `honeybee_lib` -- they are GTK-free and belong there per the library's own documented intent. Added `pkg_check_modules(PANGOCAIRO ...)` at top-level (previously inherited transitively via `GTKMM4` on the executable target).
+
+## Followup: ADR-022 (targeted cascade)
+
+The measured ~700ms bottleneck is entirely in the cascade phase. Re-cascading every element on every hover transition is wasteful: only two elements (the previously-hovered one and the newly-hovered one) actually changed state.
+
+ADR-022 (proposed) will implement targeted cascade:
+
+- New cascade API: `cascade_one(element, ua_sheet, author_sheet, state, cached_styles) -> ComputedStyle`
+- `restyle()` keeps a `ComputedStyleMap` cache from the previous restyle; on hover change, re-cascade only the two affected elements
+- Inheritance propagation: if the changed element has children, those children's inherited colors must also update -- probably via a "dirty subtree" propagation after the targeted re-cascade
+- Expected result: <5ms per hover transition regardless of page size
+
+Out of scope for ADR-021 because:
+- New cascade API surface (touches ADR-010 territory)
+- Cache invalidation is subtle (what invalidates a cached ComputedStyle? how does inheritance propagate through the cache?)
+- Needs its own test suite to be confident the cache is never stale
+
+Deserves a dedicated ADR rather than being rushed as a tail-end addition to ADR-021.
+
