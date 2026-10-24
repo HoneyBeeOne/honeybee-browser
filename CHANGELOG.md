@@ -93,6 +93,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not the ~10 in the synthetic test. Same scale-estimate failure
   mode as ADR-021 -> ADR-022's prediction miss.
 
+- **Hover-match transition check** (ADR-024): `restyle()` now cascades
+  only elements whose `:hover` match state actually changed
+  between old and new hovered element. Measured on Wikipedia
+  (debug build): wrapper-element hovers drop from ~400ms (ADR-023)
+  to **~8ms** (~50x). Link hovers unchanged at ~18ms. Cumulative
+  across ADR-022 -> 023 -> 024: wrapper hover 900ms -> 8ms (~120x).
+  The measured result beat ADR-024's ~25ms prediction by ~3x,
+  because the pre-existing `did_work` early-return skips propagate
+  and restyle_walk when zero elements cascade. Documented as
+  Meta-lesson-v2: predictions need a complete code-path model,
+  not just component measurements.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -150,6 +162,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but short of the ~20ms ADR-023 predicted. Root cause: real pages
   have far more `<a>` descendants per wrapper div than the synthetic
   test document assumed. ADR-024 proposes the transition-check fix.
+
+- Hover performance final state: link hovers ~18ms, wrapper-element
+  hovers ~8ms on Wikipedia-scale pages. Full hover responsiveness
+  is now sub-perceptual on all element types, closing the thread
+  ADR-021 opened. The three-ADR arc (022 -> 023 -> 024) went from
+  ~900ms to ~8ms on wrapper hovers (~120x total).
 
 ## [0.4.0]
 

@@ -1,6 +1,6 @@
 # ADR-024: Hover-Match Transition Check
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-24
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-023 (skip-subtree), ADR-022 (targeted cascade), ADR-018 (state pseudo-classes)
@@ -291,3 +291,50 @@ ADR-024 is complete when:
 (ADR-023) to ~25ms (measured in Commit 2). This closes ADR-023's
 prediction gap and delivers the "hover is sub-perceptual on all
 element types" claim that ADR-021 originally aspired to.
+
+## Implementation
+
+Implemented on `feat/hover-transition-check` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `6ab55bf` | Extract `matches_any_anchor_hover` and `collect_anchor_hover_selectors` from `compute_hover_sensitive`'s inner loop. Mechanical refactor -- 3 new tests confirm behavior preservation, including the `<span>`-inside-`<a>` subtle case. |
+| `c40e394` | Pipeline transition check in `restyle()` Level 1 path. New correctness test: `<a>`-hover -> `<div>`-hover correctly reverts the `<a>`'s hover style (catches the stale-color bug a per-hovered-element check would produce). Algorithmic guard tightened `<1000` -> `<20`. |
+| (this commit) | Docs: ADR-024 status -> Implemented, README + CHANGELOG, measured numbers. |
+
+**Measured performance** on Wikipedia's HTML article (799KB, 7,871 elements, 158 rules, debug build -O0):
+
+| Hover type | Measured | Notes |
+|---|---|---|
+| Wrapper hover (`<html>`, `<body>`) | **~7.5ms** | collect 6.5ms + check+cascade 0.9ms; `transitioned=0` -> early return skips propagate+walk |
+| Link hover (`<section>` <-> `<a>`) | **~18ms** | collect 0.6ms + check+cascade 0.4ms + propagate 12ms + restyle_walk 5ms; `transitioned=1` |
+| Transition counts (empirical) | wrapper: `flagged=2,191 transitioned=0`; link: `flagged=123 transitioned=1` | Matches ADR-024's predicted distribution exactly |
+| Algorithmic guard (synthetic) | wrapper-hover `apply_rule` count: **0** (was 170 in ADR-023) | Threshold `<1000` -> `<20` |
+
+**Comparison across the three-ADR arc:**
+
+| Hover type | ADR-022 | ADR-023 | ADR-024 |
+|---|---|---|---|
+| Link hover | 14-25ms | 14-25ms | ~18ms |
+| Wrapper hover | 850-932ms | 340-460ms | **~7.5ms** |
+
+Cumulative improvement: 900ms -> 7.5ms on wrapper hover = ~120x over three ADRs.
+
+### Overperformance vs prediction (honest)
+
+ADR-024's Decision section predicted wrapper hover would land at ~25ms. Measured: **~7.5ms**. Off by ~3x in the pleasant direction.
+
+**Root cause**: the ~25ms arithmetic was `walk 5 + check 4 + cascade 0 + propagate 12 + restyle_walk 5`. It assumed **propagate and restyle_walk always run**. But ADR-022's implementation already has a `did_work` early-return: if zero elements cascade, `propagate_inheritance` and `restyle_walk` are skipped entirely. For wrapper hover in the UA-only case, `transitioned=0` -> `did_work=false` -> early return fires -> ~17ms of work is skipped.
+
+Correctness unaffected: with zero cascades, no cache entry changed, so there's nothing to propagate (no inherited refills needed) and nothing to re-paint (colors unchanged). The early-return is safe and pre-existing.
+
+### Meta-lesson-v2: measurement-first predictions need a code model too
+
+ADR-024 followed ADR-023's Meta-lesson: measure the current distribution first, then predict from measured components. Yet the prediction was still 3x off.
+
+**The missing piece**: the arithmetic didn't account for **existing optimizations already in the code**. The `did_work` early-return in `restyle()` was present before ADR-024 but not part of the ADR-024 mental model. A prediction built from component measurements still needs a complete model of which components actually execute.
+
+**Refined rule for future ADRs**: measurement-first predictions should either (a) trace the actual code path per transition type (which branches fire, which are skipped), or (b) include a small "structural prediction" step: enumerate the phases that will run vs. skip, then sum only the ones that run. ADR-024's overperformance is instructive: the arithmetic was right about the components, wrong about which ones fire.
+
+This refines the Meta-lesson from ADR-023, not a refutation. Both failure modes -- "didn't measure the scale" (ADR-021 -> 022) and "measured the scale but not the code path" (ADR-023 -> 024) -- point to the same principle: **predictions are only as good as the model of reality they're built from**.
+
