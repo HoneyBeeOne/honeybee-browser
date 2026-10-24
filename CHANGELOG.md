@@ -80,6 +80,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR (ADR-023, skip-subtree optimization) is proposed to close
   that gap.
 
+- **Skip-subtree optimization for hover** (ADR-023): wrapper-element hovers
+  now cascade only hover-sensitive descendants, not every element
+  in the subtree. Measured on Wikipedia (debug build): structural-
+  element hovers drop from ~900ms (ADR-022) to **~400ms** (~2.2x
+  faster). Level detection works correctly (all 63 observed
+  transitions were Level 1 -- UA `a:hover` only). Link hovers
+  unchanged at ~20ms. A followup ADR (ADR-024, hover-match
+  transition check) is proposed to close the remaining gap --
+  the ADR-023 spec predicted ~20ms for wrapper hovers; actual is
+  ~400ms because real pages have ~2,500 `<a>` per wrapper div,
+  not the ~10 in the synthetic test. Same scale-estimate failure
+  mode as ADR-021 -> ADR-022's prediction miss.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after
@@ -131,6 +144,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged at ~900ms and documented as a known limitation
   (ADR-023). User-visible: hovering links on Wikipedia feels
   instant; hovering a large wrapper element still lags.
+
+- Hover on Wikipedia-scale pages: link hovers unchanged (~20ms).
+  Structural-element hovers improved from ~900ms to ~400ms (2.2x),
+  but short of the ~20ms ADR-023 predicted. Root cause: real pages
+  have far more `<a>` descendants per wrapper div than the synthetic
+  test document assumed. ADR-024 proposes the transition-check fix.
 
 ## [0.4.0]
 

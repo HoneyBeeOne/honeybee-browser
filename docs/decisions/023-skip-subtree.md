@@ -1,6 +1,6 @@
 # ADR-023: Skip-Subtree Optimization for Hover
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-24
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-022 (targeted cascade), ADR-018 (state pseudo-classes), ADR-010 (cascade)
@@ -382,3 +382,60 @@ ADR-023 is complete when:
 performance gap for the current stylesheet ecosystem (UA `a:hover`
 only, no author `:hover` rules). Level 2 (compound `:hover` in
 author CSS) is documented as deferred.
+
+## Implementation
+
+Implemented on `feat/skip-subtree` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `4061761` | `hover_sensitivity.{hpp,cpp}`: `detect_level` (Level 0/1/2) + `compute_hover_sensitive` (Level 1 precompute). 6 unit tests including production UA-sheet classification. |
+| `65e88a4` | `RenderPipeline` integration: `hover_level_` + `hover_sensitive_` members; detection in `relayout()`; dispatch in `restyle()`. New algorithmic guard: wrapper-div hover on synthetic 1000-`<span>`-100-`<a>` document drops from ~17,187 apply_rule calls to **170** (measured, 5.9x below threshold). |
+| (this commit) | Docs: ADR-023 status -> Implemented, README + CHANGELOG, measured numbers, ADR-024 followup |
+
+**Measured performance** on Wikipedia's HTML article (799KB, 7,871 elements, 158 rules, debug build -O0, 63 observed restyle transitions):
+
+| Category | ADR-022 baseline | ADR-023 measured | Improvement |
+|---|---|---|---|
+| Level detection (all 63 transitions) | — | **`level=1`** (all) | detection works correctly |
+| Link hover (typical, ~30 transitions) | 14-25ms | **14-25ms** | unchanged (no regression) |
+| Medium element (~10 transitions) | 55-67ms | **22-40ms** | ~1.7x faster |
+| Structural element (~23 transitions) | 850-932ms | **340-460ms** | **~2.2-2.5x faster** |
+
+**The prediction miss (honest)**: ADR-023's Decision section predicted wrapper hovers would drop to **~8-20ms**. Measured: **340-460ms**. Off by ~20-40x.
+
+**Root cause**: scale-estimate error, same class as ADR-021 -> ADR-022's prediction miss. The synthetic test document in the algorithmic guard has **10 `<a>` descendants** per wrapper div. Wikipedia's article body has **~2,500 `<a>` elements** per wrapper div (references, section links, nav breadcrumbs, footer links). The filtered walk correctly skips the non-`<a>` descendants -- but then cascades all ~2,500 `<a>`s anyway. Reduction from full cascade (~133,000 apply_rule calls) to filtered (~42,500): ~3x. Matches the observed 2.2-2.5x wall-clock (walk + propagate add ~17ms fixed floor).
+
+**The deeper gap**: in the UA-only case (`a:hover` and nothing else), **none of the `<a>` descendants of a hovered wrapper div actually match `a:hover`**. Per ADR-018's matcher, `a:hover` requires the `<a>` to be the hovered element OR have the hovered element as an ancestor. `<div>` hovered -> no `<a>` matches. So the correct number of elements to re-cascade for a div-hover in UA-only is **zero**. The current implementation cascades ~2,500. Safe (over-cascading preserves cache-equality) but wasteful.
+
+The algorithmic guard (`div_hover_calls < 1000` with measured 170) verifies that **the filtered walk is skipping non-hover-sensitive elements**. It does NOT verify that the filtered walk is skipping elements whose hover match **hasn't changed**. That's a different property, addressed by ADR-024.
+
+## Deferred followup: ADR-024 (hover-match transition check)
+
+The gap: `restyle()` cascades every hover-sensitive element in the dirty subtree, without checking whether its `:hover` match state actually transitioned between old and new `hovered_element`. For div-hover in UA-only case, zero `<a>` elements transition -- but all ~2,500 get re-cascaded.
+
+**ADR-024 (proposed)** would add a per-element transition check:
+
+1. Extract `matches_any_anchor_hover(el, state, sheets)` from `compute_hover_sensitive`'s inner loop (currently inlined). Public helper, used by both the precompute and the transition check.
+2. In `restyle()`'s Level 1 filtered walk, for each flagged element: evaluate `matches_any_anchor_hover(el, old_state)` vs. `matches_any_anchor_hover(el, new_state)`. **Only cascade if they differ.**
+3. Correctness: cache-equality invariant preserved (if match didn't change, style didn't change, prior cache entry still valid). Extended test.
+
+**Expected outcome** (to be measured in ADR-024):
+
+| Hover type | ADR-023 | ADR-024 (target) |
+|---|---|---|
+| Link hover | 14-25ms | 14-25ms (unchanged) |
+| Wrapper hover | 340-460ms | **~17ms** (propagate 12ms + walk 5ms; cascade ~0ms) |
+
+That's the ~20-30x reduction ADR-023 predicted but didn't deliver. ADR-024 closes it.
+
+**Why deferred to ADR-024 rather than extended into ADR-023**: the transition check has subtle cache-invalidation implications (must ensure skipped elements' entries stay valid; must ensure cache-equality test still passes for the skip path). Rushed mid-session, it risks a subtle correctness bug that the existing cache-equality tests might miss for this specific case. Deferred to a clean cycle with dedicated test design.
+
+## Meta-lesson on ADR Followup predictions
+
+Both ADR-022 -> ADR-023 and ADR-021 -> ADR-022 have the same failure mode: **the Followup section predicted a wall-clock number (e.g. "~8-20ms") without measuring the scale of the underlying problem** (how many elements actually get cascaded on real pages). Abstract algorithmic reductions don't translate to wall-clock without knowing the input distribution.
+
+**Going forward**: ADR Followup sections that predict performance should either (a) be written after measuring the current distribution, or (b) explicitly label predictions as unmeasured estimates and include the "how would we measure this first?" step in the implementation plan.
+
+ADR-024's followup will be written *after* this measurement, so its numbers are grounded.
+

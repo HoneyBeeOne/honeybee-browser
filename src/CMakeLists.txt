@@ -7,6 +7,7 @@ add_library(honeybee_lib
   renderer/css/selectors.cpp
   renderer/css/stylesheet.cpp
   renderer/css/cascade.cpp
+  renderer/css/hover_sensitivity.cpp
   renderer/css/ua_stylesheet.cpp
   renderer/layout/style_values.cpp
   renderer/layout/layout.cpp
