@@ -279,7 +279,32 @@ void RenderPipeline::restyle() {
         if (state_.hovered_element) {
             collect_flagged(state_.hovered_element);
         }
+        // ADR-024: transition check. Cascade only elements whose
+        // :hover match state actually changed between old and new
+        // hovered element. ADR-023's measurement showed wrapper
+        // hover flags ~2,191 <a> descendants but transitions zero
+        // (per ADR-018's matcher, none of them match a:hover when
+        // a wrapper is hovered). Without this check, all ~2,191
+        // get re-cascaded for nothing.
+        //
+        // anchor_hover and old_state are constructed once per
+        // transition (not per element): sheet_cache_ doesn't
+        // change during restyle, and old_state differs from state_
+        // only in hovered_element, so one copy suffices.
+        const auto anchor_hover =
+            renderer::css::collect_anchor_hover_selectors(
+                renderer::css::ua_stylesheet(), sheet_cache_);
+        renderer::css::RenderState old_state = state_;
+        old_state.hovered_element = prev_hovered_;
+
         for (const auto* el : dirty) {
+            const bool old_match =
+                renderer::css::matches_any_anchor_hover(
+                    *el, old_state, anchor_hover);
+            const bool new_match =
+                renderer::css::matches_any_anchor_hover(
+                    *el, state_, anchor_hover);
+            if (old_match == new_match) continue;
             renderer::css::erase_subtree(*el, styles_cache_);
             renderer::css::cascade_subtree(
                 *el, renderer::css::ua_stylesheet(),

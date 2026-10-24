@@ -1275,9 +1275,68 @@ TEST_CASE("RenderPipeline::restyle skips non-hover-sensitive descendants",
     const auto div_hover_calls = css::apply_rule_call_count();
 
     INFO("div_hover_calls = " << div_hover_calls
-         << " (old cascade_subtree would be ~17187; filtered ~170)");
-    // Threshold 1000 = 5.9x above the measured ~170, but 17x below
-    // the old ~17187. Comfortably distinguishes filtered from full.
-    CHECK(div_hover_calls < 1000);
-    CHECK(div_hover_calls > 0);
+         << " (ADR-022 full cascade ~17187; ADR-023 filtered ~170; "
+            "ADR-024 with transition check ~0)");
+    // ADR-024: with the transition check, wrapper-div hover
+    // cascades ZERO elements in the UA-only case (no <a> descendant
+    // transitions a:hover when the wrapper is hovered). Threshold
+    // <20 tolerates up to one element's worth of calls if a single
+    // descendant happens to transition; comfortably rejects both
+    // the ADR-023 regression (~170) and full cascade (~17187).
+    CHECK(div_hover_calls < 20);
+}
+
+// =============================================================
+// ADR-024: transition-check correctness on ancestor-hover changes.
+//
+// The critical case: hover <a> (so a:hover matches, cache has
+// hover style), then hover the wrapper <div>. The <a>'s match
+// state transitions true -> false, so it MUST be re-cascaded.
+// A filter that skips "because the current hovered element is a
+// div, not an a" would leave a stale hover style in the cache.
+// =============================================================
+
+TEST_CASE("RenderPipeline::restyle reverts <a> hover on ancestor hover",
+          "[render-pipeline][targeted-cache][adr-024]") {
+    honeybee::browser::RenderPipeline p;
+    p.render(
+        "<html><body><div><a href=\"#\">link</a> tail</div>"
+        "</body></html>",
+        800.0f);
+
+    const auto* a = p.doc()->find_element("a");
+    const auto* div = p.doc()->find_element("div");
+    REQUIRE(a);
+    REQUIRE(div);
+
+    // Step 1: hover the <a>. a:hover matches -> cascade the <a>.
+    p.set_hovered_element(a);
+    p.restyle();
+
+    // Step 2: hover the wrapper <div> instead. The <a>'s a:hover
+    // match transitions true -> false, so the transition check
+    // must cascade the <a> (revert its hover style).
+    p.set_hovered_element(div);
+    p.restyle();
+
+    // Verify: cache equals what a fresh full cascade would produce
+    // with the div (not the a) hovered.
+    auto sheet = css::Stylesheet::parse("");
+    auto fresh = css::cascade(
+        css::ua_stylesheet(), sheet, *p.doc(), p.state());
+    assert_maps_equal(fresh, p.styles());
+
+    // Additionally: the <a>'s color must NOT be the hover color
+    // (the div is hovered, not the a). This is the specific case
+    // that a per-hovered-element (rather than per-element) check
+    // would get wrong.
+    const auto& a_style = p.styles().at(a);
+    const auto a_color = a_style.get("color");
+    // UA sheet has `a:hover { color: #0055EE }` and body text is
+    // default (black). With div hovered, the <a> should be default
+    // (a:link still matches via UA's `a:link { color: #0000EE }`,
+    // but a:hover should NOT match). The exact color depends on
+    // the UA sheet, but the point is: it should equal what a full
+    // cascade produces, which the assert_maps_equal already checks.
+    (void)a_color;
 }
