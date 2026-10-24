@@ -14,12 +14,14 @@
 
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 #include "renderer/dom/node.hpp"
 #include "renderer/layout/layout_box.hpp"
 #include "renderer/css/cascade.hpp"
 #include "renderer/css/render_state.hpp"
 #include "renderer/css/stylesheet.hpp"
+#include "renderer/css/hover_sensitivity.hpp"
 
 namespace honeybee::browser {
 
@@ -71,6 +73,11 @@ public:
     const renderer::css::ComputedStyleMap& styles() const {
         return styles_cache_;
     }
+    const std::unordered_set<const renderer::dom::Element*>&
+    hover_sensitive() const {
+        return hover_sensitive_;
+    }
+    renderer::css::HoverLevel hover_level() const { return hover_level_; }
 
     // ADR-021: incremental restyle. Re-runs the cascade against
     // the current RenderState, then updates paint-only color
@@ -96,6 +103,13 @@ private:
     renderer::css::ComputedStyleMap styles_cache_;
     renderer::css::Stylesheet sheet_cache_;
     const renderer::dom::Element* prev_hovered_ = nullptr;
+
+    // ADR-023: hover-sensitivity state, populated in relayout(),
+    // cleared in render(). `hover_level_` selects the restyle
+    // strategy (None/AnchorOnly/Compound); `hover_sensitive_` is
+    // only populated when `hover_level_ == AnchorOnly`.
+    renderer::css::HoverLevel hover_level_ = renderer::css::HoverLevel::None;
+    std::unordered_set<const renderer::dom::Element*> hover_sensitive_;
 };
 
 } // namespace honeybee::browser

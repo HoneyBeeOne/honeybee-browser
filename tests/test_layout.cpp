@@ -1234,3 +1234,50 @@ TEST_CASE("RenderPipeline::restyle re-cascades only dirty subtrees",
     CHECK(hover_calls > 0);
     CHECK(unhover_calls > 0);
 }
+
+// =============================================================
+// ADR-023: algorithmic regression guard for skip-subtree.
+//
+// Asserts that wrapper-element hover re-cascades only the
+// hover-sensitive descendants (flagged in hover_sensitive_),
+// not the full subtree. A regression to unconditional
+// cascade_subtree would pass correctness (identical results) but
+// silently regress wrapper hover from ~20ms back to ~900ms.
+// =============================================================
+
+TEST_CASE("RenderPipeline::restyle skips non-hover-sensitive descendants",
+          "[render-pipeline][algorithmic][skip-subtree]") {
+    // Wrapper <div> with 1000 <span>s and 10 <a>s inside.
+    //   Old (cascade_subtree(div)): ~1011 elements x 17 rules = ~17187 calls
+    //   New (filtered): ~10 <a>s x 17 rules = ~170 calls
+    std::string html = "<html><body><div>";
+    for (int i = 0; i < 1000; ++i) {
+        html += "<span>s</span>";
+    }
+    for (int i = 0; i < 10; ++i) {
+        html += "<a href=\"#\">x</a>";
+    }
+    html += "</div></body></html>";
+
+    honeybee::browser::RenderPipeline p;
+    p.render(html, 800.0f);
+
+    // Sanity: UA a:hover -> Level 1 (AnchorOnly) -> precompute fired.
+    REQUIRE(p.hover_level() == css::HoverLevel::AnchorOnly);
+    CHECK_FALSE(p.hover_sensitive().empty());
+
+    const auto* div = p.doc()->find_element("div");
+    REQUIRE(div);
+
+    css::reset_apply_rule_call_count();
+    p.set_hovered_element(div);
+    p.restyle();
+    const auto div_hover_calls = css::apply_rule_call_count();
+
+    INFO("div_hover_calls = " << div_hover_calls
+         << " (old cascade_subtree would be ~17187; filtered ~170)");
+    // Threshold 1000 = 5.9x above the measured ~170, but 17x below
+    // the old ~17187. Comfortably distinguishes filtered from full.
+    CHECK(div_hover_calls < 1000);
+    CHECK(div_hover_calls > 0);
+}
