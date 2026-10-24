@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <unordered_set>
+#include <vector>
 
 #include "renderer/css/render_state.hpp"
 #include "renderer/css/stylesheet.hpp"
@@ -62,5 +63,35 @@ std::unordered_set<const dom::Element*> compute_hover_sensitive(
     const Stylesheet& ua,
     const Stylesheet& author,
     const RenderState& state);
+
+// ADR-024: collect anchor-position :hover selectors from both
+// sheets once. Callers (precompute, transition check) reuse the
+// resulting vector across N elements, avoiding a per-element
+// re-scan of every rule in both sheets.
+//
+// Returns pointers into the sheets' `selectors` vectors. The
+// caller must guarantee the sheets outlive the returned vector
+// (true for `ua_stylesheet()`'s static and for a caller-held
+// `Stylesheet` -- both current call sites).
+std::vector<const Selector*> collect_anchor_hover_selectors(
+    const Stylesheet& ua,
+    const Stylesheet& author);
+
+// ADR-024: does `el` match any anchor-position :hover selector
+// under `state`? Extracted from compute_hover_sensitive's inner
+// loop. Two use modes:
+//   Precompute: caller sets state.hovered_element = &el before
+//     calling (answers: "would el match if IT were hovered?").
+//   Transition check: caller passes state as-is with the real
+//     hovered_element (answers: "does el match given the CURRENT
+//     hovered element?").
+//
+// Cost per call: O(anchor_hover.size()) selector.matches() calls.
+// On Wikipedia (~7,871 elements, 1 UA anchor-hover rule), the
+// transition check across all flagged elements measures ~4ms.
+bool matches_any_anchor_hover(
+    const dom::Element& el,
+    const RenderState& state,
+    const std::vector<const Selector*>& anchor_hover);
 
 } // namespace honeybee::renderer::css
