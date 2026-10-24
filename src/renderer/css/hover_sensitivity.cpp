@@ -62,15 +62,16 @@ HoverLevel detect_level(const Stylesheet& ua,
     return overall;
 }
 
-std::unordered_set<const dom::Element*> compute_hover_sensitive(
-    const dom::Document& doc,
+std::vector<const Selector*> collect_anchor_hover_selectors(
     const Stylesheet& ua,
-    const Stylesheet& author,
-    const RenderState& state) {
-    // Collect anchor-hover selectors from both sheets: those whose
-    // last part contains a PseudoHover simple.
-    std::vector<const Selector*> anchor_hover;
-
+    const Stylesheet& author) {
+    // Collect anchor-position hover selectors from both sheets:
+    // those whose rightmost (anchor) compound contains a PseudoHover
+    // simple. Non-anchor hover selectors (Level 2 -- e.g.
+    // `div:hover > a`) are NOT collected; Level 2 falls back to
+    // unconditional cascade before this helper is called, so they
+    // don't belong in the returned set.
+    std::vector<const Selector*> out;
     auto collect = [&](const Stylesheet& sheet) {
         for (const auto& rule : sheet.rules) {
             for (const auto& sel : rule.selectors.selectors) {
@@ -78,7 +79,7 @@ std::unordered_set<const dom::Element*> compute_hover_sensitive(
                 const auto& last = sel.parts.back().compound.simples;
                 for (const auto& simple : last) {
                     if (simple.kind == SimpleKind::PseudoHover) {
-                        anchor_hover.push_back(&sel);
+                        out.push_back(&sel);
                         break;
                     }
                 }
@@ -87,6 +88,25 @@ std::unordered_set<const dom::Element*> compute_hover_sensitive(
     };
     collect(ua);
     collect(author);
+    return out;
+}
+
+bool matches_any_anchor_hover(
+    const dom::Element& el,
+    const RenderState& state,
+    const std::vector<const Selector*>& anchor_hover) {
+    for (const auto* sel : anchor_hover) {
+        if (sel->matches(el, state)) return true;
+    }
+    return false;
+}
+
+std::unordered_set<const dom::Element*> compute_hover_sensitive(
+    const dom::Document& doc,
+    const Stylesheet& ua,
+    const Stylesheet& author,
+    const RenderState& state) {
+    const auto anchor_hover = collect_anchor_hover_selectors(ua, author);
 
     std::unordered_set<const dom::Element*> result;
     if (anchor_hover.empty()) return result;
@@ -101,11 +121,8 @@ std::unordered_set<const dom::Element*> compute_hover_sensitive(
             if (n.type() == dom::NodeType::Element) {
                 const auto& el = static_cast<const dom::Element&>(n);
                 temp.hovered_element = &el;
-                for (const auto* sel : anchor_hover) {
-                    if (sel->matches(el, temp)) {
-                        result.insert(&el);
-                        break;
-                    }
+                if (matches_any_anchor_hover(el, temp, anchor_hover)) {
+                    result.insert(&el);
                 }
             }
             for (const auto& child : n.children()) walk(*child);
