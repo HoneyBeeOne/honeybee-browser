@@ -152,6 +152,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Surfaced by ADR-026's visual verification. One-line fix +
   regression test.
 
+- **@media block support** (ADR-027): @media blocks are
+  now parsed (with simple `calc(Npx ± Mpx)` support) and
+  cascade-filtered by viewport. At viewport 1024, 33 of
+  Wikipedia's 64 @media blocks fire (52%) -- including the
+  `max-width: calc(1120px - 1px)` tablet-layout blocks that
+  calc support specifically unlocks. Unsupported queries
+  (`print`, `prefers-*`, `aspect-ratio`, `orientation`,
+  `resolution`, `hover`, `pointer`, range syntax) drop their
+  rules entirely, per CSS spec.
+
+  **Visible delta over ADR-026: partial.** Wikipedia's bottom
+  navbox now renders with structured section headers and
+  colored backgrounds -- @media `background-color` declarations
+  winning cascade and consumed by paint.
+
+  **Not delivered: sidebar / header / TOC layout transform.**
+  The 106 layout-property declarations inside @media
+  (`grid-template-columns`, `flex-*`, `column-*`, `float`,
+  `position`) enter the cascade correctly but our layout
+  engine ignores those properties (ADR-011 scoped layout to
+  block + inline flow). The structural transform requires a
+  future layout-engine ADR.
+
+  **Meta-lesson-v3 refinement**: predicting visible delta from
+  any CSS subsystem requires tracing three paths -- does it
+  parse, does it win the cascade, does its winning property get
+  consumed by paint/layout? ADR-027 measured all three, so the
+  prediction was closer than ADR-025/026's.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after

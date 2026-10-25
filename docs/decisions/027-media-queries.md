@@ -1,6 +1,6 @@
 # ADR-027: @media Block Support
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-25
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-009 (CSS parser), ADR-010 (cascade), ADR-025 (external CSS loading), ADR-026 (var() resolution)
@@ -418,3 +418,81 @@ ADR-027 is complete when:
 delivering ~200-250 consumed-property declarations into the
 cascade. Visible delta measured in Commit 2 -- if negligible,
 ADR-027 is infrastructure for a future layout-engine ADR.
+
+## Implementation
+
+Implemented on `feat/media-queries` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `26a3078` | `MediaQuery` type + `Rule.media` + `parse_media_prelude` + `parse_length_px` (calc) + `parse_media_block`. 14 tests. Bug caught during testing: naive `find(')')` truncated calc conditions at inner parens; fixed with balanced-paren scan. |
+| `90a5374` | Cascade viewport filtering: `media_matches` + `viewport_width` threaded through `apply_rule`, `compute_styles`, both cascade overloads, `cascade_subtree`. `RenderPipeline::last_viewport_width_` set in `relayout`, used in `restyle` fallback. 7 tests. |
+| (this commit) | Docs: ADR-027 status -> Implemented, README + CHANGELOG, measured delta. |
+
+### What shipped
+
+**@media parser.** `Rule` gains `optional<MediaQuery> media`. `Stylesheet::parse` extracts @media blocks whose prelude classifies as supported (`screen`/`all`/`empty`/`(min-width: Npx)`/`(max-width: Npx)`/`calc(Npx ± Mpx)`/`and`-combinations). Unsupported queries (`print`, `prefers-*`, `aspect-ratio`, `orientation`, `resolution`, `hover`, `pointer`, range syntax, mixed-unit calc) drop their rules entirely -- correct per CSS spec (browser without feature doesn't apply those rules).
+
+**Cascade filtering.** `cascade()` gains a `viewport_width` parameter (default 1024 for backward compat). `apply_rule()` early-returns on media mismatch before running the selector match -- cheap skip. Threaded through `compute_styles`, `cascade_subtree`, and `RenderPipeline::relayout`. `restyle()`'s fallback path uses stored `last_viewport_width_`.
+
+### Measured visible delta on Wikipedia at viewport 1024
+
+Screenshots at three scroll positions vs. ADR-026 baseline:
+
+**Confirmed working (no regression):**
+- CSS text still hidden (ADR-026 display:none fix preserved)
+- Article body still readable
+- References still formatted
+
+**Partial visible win (positive):**
+- Wikipedia's bottom navbox (previously below the scroll depth in prior verification) now shows with **structured section headers** ("MSHTML", "WebKit", "Recommendations", "vte") and **colored backgrounds** (light purple/blue tints on section boxes, tinted list items).
+- This is `@media { background-color: ... }` declarations winning cascade and being consumed by our paint layer.
+- **Navboxes are expanded by default** -- correct behavior for a JS-disabled browser (Wikipedia navboxes are collapsed by JS, which we don't run).
+
+**Prediction miss (honest):**
+- The sidebar remains a **vertical blob**. No grid/column layout.
+- ADR-027's Context section noted 106 layout-property declarations inside @media: `grid-template-columns`, `flex-*`, `column-*`, `float`, `position`. Those declarations now enter the cascade correctly -- but our **layout engine ignores those properties**. Even when @media rules win the cascade, `layout_element` drops grid/flex/column properties because ADR-011 scoped the layout engine to block + inline flow only.
+- This is the same escape-hatch shape as ADR-026: infrastructure ships, visible delta is real but partial, the full structural transform requires a layout-engine ADR.
+
+### The layout-engine gap (explicit)
+
+The @media `grid-template-columns: 16em 1fr` rules for the sidebar `#bodyContent` layout exist and now cascade-win. But `layout.cpp`'s `layout_element` doesn't read `grid-template-columns`. It reads `display`, `margin`, `padding`, `border`, `font-*`, `color`, `background-color`, `width`, `height`, and box-dimension properties. Any layout that requires grid/flex/column resolution is invisible regardless of @media support.
+
+**This is the ADR-027 delta in one sentence**: 106 layout properties entered cascade, 0 are consumed by the layout engine. 953 consumed properties entered cascade -- the ~half that aren't layout properties now render correctly (navbox backgrounds, section styling, some article refinements). The structural transform waits.
+
+### What ADR-027 actually delivered
+
+- **@media parser + cascade filtering** -- fully implemented, 21 tests, works correctly for all supported query types.
+- **Infrastructure for the future layout-engine ADR** -- when `grid-template-columns`, `flex-*`, `column-*`, `float`, `position` become part of `layout_element`'s property consumption, the @media rules that use them will already be in the cascade with correct viewport gating. No further parser work needed.
+- **Partial visible win** -- navbox styling (structural + backgrounds), a modest but real improvement over ADR-026.
+
+### Deferred (unchanged from spec)
+
+- Recursive `@media` (0 nested cases on Wikipedia)
+- `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`
+- `@media print`
+- Complex queries: `aspect-ratio`, `orientation`, `resolution`, `hover`, `pointer`, range syntax
+- `calc()` with mixed units
+- **Grid/flex/column layout engine** -- the follow-up ADR that would fully unlock the Vector structural transform
+
+### The six-ADR arc's honest state
+
+| ADR | Delivered | Visible delta |
+|---|---|---|
+| 025 | External CSS loading | Article content styled (~40-50%) |
+| 026 | var() resolution + display:none fix | Bug fix visible; var() delta negligible |
+| 027 | @media parsing + cascade filtering | Navbox styling visible; **layout transform deferred to grid/flex layout ADR** |
+
+ADR-025 delivered the biggest visible delta (external CSS loading). ADR-026 and ADR-027 both ship real infrastructure whose cascade-visible payoff is gated by other subsystems (ADR-026's = higher-specificity competitor rules; ADR-027's = missing layout-engine property consumption). The next ADR that actually moves the visual needle is either **grid/flex layout** (unlocks ADR-027's infrastructure) or **`:not()` + attribute operators** (unlocks more cascade-winning rules for ADR-026/027 to filter).
+
+### Meta-lesson-v3, again
+
+Same shape as ADR-026: consumed-property coverage is necessary but not sufficient. For @media, "consumed-property" means "the declaration's property is one `layout_element` reads." 953 declarations pass that test. But 106 of them are layout properties (grid/flex/column) that the layout engine doesn't READ. So 106 enter cascade and vanish.
+
+**Refined rule** (progression from earlier Meta-lessons): to predict visible delta from any CSS subsystem, trace **three** paths:
+1. Does it parse?
+2. Does it win the cascade?
+3. Does its winning property get consumed by the paint/layout engine?
+
+ADR-025 measured #1 (27% parse rate) and got surprised by #2 and #3. ADR-026 measured #1 and #2 and got surprised by #3. ADR-027 measured all three and got the prediction closer -- navbox backgrounds render (all three paths satisfied), sidebar layout doesn't (path #3 fails).
+
