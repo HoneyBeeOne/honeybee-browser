@@ -10,6 +10,7 @@ add_executable(honeybee_tests
   test_cascade.cpp
   test_hover_sensitivity.cpp
   test_ua_stylesheet.cpp
+  test_grid_layout.cpp
   test_layout.cpp
   test_paint.cpp
   test_lexbor_smoke.cpp
