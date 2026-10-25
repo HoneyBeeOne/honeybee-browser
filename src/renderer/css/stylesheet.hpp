@@ -16,6 +16,7 @@
 #pragma once
 
 #include <string>
+#include <optional>
 #include <string_view>
 #include <vector>
 #include <unordered_map>
@@ -30,9 +31,30 @@ struct Declaration {
     bool important = false;
 };
 
+// ADR-027: @media query conditions supported by the parser.
+// Unsupported queries (print, prefers-*, complex syntax) cause
+// their rules to be dropped entirely -- they never enter
+// result.rules. Therefore a Rule with media.has_value() always
+// refers to a SUPPORTED query whose width constraints (if any)
+// are populated below.
+struct MediaQuery {
+    // Minimum viewport width in CSS pixels (from min-width
+    // or an "and" combination). Empty = no lower bound.
+    std::optional<float> min_width_px;
+    // Maximum viewport width in CSS pixels (from max-width
+    // or an "and" combination). Empty = no upper bound.
+    std::optional<float> max_width_px;
+};
+
 struct Rule {
     SelectorList selectors;
     std::vector<Declaration> declarations;
+
+    // ADR-027: nullopt for top-level (unconditional) rules;
+    // populated for rules extracted from a supported @media
+    // block. The cascade skips rules whose query doesn't match
+    // the current viewport.
+    std::optional<MediaQuery> media;
 };
 
 struct Stylesheet {

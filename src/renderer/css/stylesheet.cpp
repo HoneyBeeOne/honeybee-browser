@@ -1,6 +1,8 @@
 #include "renderer/css/stylesheet.hpp"
 
 #include <string>
+#include <cctype>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -275,6 +277,231 @@ void add_declaration(std::string_view raw, std::vector<Declaration>& out) {
 
 // Split a declaration block on top-level ';', respecting nested
 // parentheses/brackets and single/double quotes.
+// ADR-027: case-insensitive prefix check at position `i`.
+bool starts_with_ci(std::string_view s, std::size_t i, std::string_view prefix) {
+    if (i + prefix.size() > s.size()) return false;
+    for (std::size_t k = 0; k < prefix.size(); ++k) {
+        if (std::tolower(static_cast<unsigned char>(s[i + k])) !=
+            std::tolower(static_cast<unsigned char>(prefix[k]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ADR-027: parse a length that may be `Npx` or `calc(Npx +/- Mpx)`.
+// Returns nullopt on anything else (mixed units, more than one
+// operation, non-px units, malformed expressions). This narrower
+// parser is intentional: ADR-027 v1 supports exactly the calc
+// patterns Wikipedia uses (`calc(1120px - 1px)`, etc.). Broader
+// calc falls to unsupported -- safe drop, per CSS computed-value
+// semantics.
+std::optional<float> parse_length_px(std::string_view text) {
+    const std::string s = trim(text);
+    if (s.empty()) return std::nullopt;
+
+    if (s.rfind("calc(", 0) == 0 && s.back() == ')') {
+        const std::string inner = s.substr(5, s.size() - 6);
+        // Find first +/- that isn't the leading sign.
+        std::size_t op = std::string::npos;
+        char op_char = 0;
+        for (std::size_t k = 1; k < inner.size(); ++k) {
+            if (inner[k] == '-' || inner[k] == '+') {
+                op = k;
+                op_char = inner[k];
+                break;
+            }
+        }
+        if (op == std::string::npos) return std::nullopt;
+        const auto lhs = parse_length_px(inner.substr(0, op));
+        const auto rhs = parse_length_px(inner.substr(op + 1));
+        if (!lhs || !rhs) return std::nullopt;
+        return (op_char == '-') ? (*lhs - *rhs) : (*lhs + *rhs);
+    }
+
+    if (s.size() >= 3 &&
+        s[s.size() - 2] == 'p' && s[s.size() - 1] == 'x') {
+        const std::string num = s.substr(0, s.size() - 2);
+        try {
+            std::size_t idx = 0;
+            const float v = std::stof(num, &idx);
+            if (idx != num.size()) return std::nullopt;
+            return v;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ADR-027: classify an @media prelude into width constraints.
+// Returns true for supported preludes (populating `out`);
+// returns false for unsupported ones, meaning their rules must
+// NOT enter the stylesheet (safe drop per CSS spec).
+//
+// Supported grammar (lowercased, whitespace tolerant):
+//   [screen|all] [and (min-width: LEN) | and (max-width: LEN)]*
+// where LEN is Npx or calc(Npx +/- Mpx).
+// Anything else -- print, prefers-*, aspect-ratio, orientation,
+// resolution, hover, pointer, range syntax, mixed-unit calc,
+// unsupported keywords -- returns false.
+bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
+    std::string lower;
+    lower.reserve(prelude.size());
+    for (char c : prelude) {
+        lower.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    // Whole-string unsupported keyword check (fast rejection).
+    static const char* kUnsupported[] = {
+        "print", "prefers-", "aspect-ratio", "orientation",
+        "resolution", "hover", "pointer", ">", "<",
+    };
+    for (const char* kw : kUnsupported) {
+        if (lower.find(kw) != std::string::npos) return false;
+    }
+
+    std::size_t i = 0;
+    while (i < lower.size()) {
+        while (i < lower.size() &&
+               std::isspace(static_cast<unsigned char>(lower[i]))) {
+            ++i;
+        }
+        if (i >= lower.size()) break;
+
+        if (lower[i] == '(') {
+            // Find the matching ')' at the same paren depth. Naive
+            // find(')') would hit the inner close of calc(...) and
+            // truncate the condition string.
+            std::size_t close = i + 1;
+            int paren_depth = 1;
+            while (close < lower.size() && paren_depth > 0) {
+                if (lower[close] == '(') ++paren_depth;
+                else if (lower[close] == ')') --paren_depth;
+                ++close;
+            }
+            if (paren_depth > 0) return false;
+            --close;  // back to the ')' character
+            const std::string cond =
+                trim(lower.substr(i + 1, close - i - 1));
+
+            if (cond.rfind("min-width:", 0) == 0) {
+                const auto px = parse_length_px(cond.substr(10));
+                if (!px) return false;
+                out.min_width_px = *px;
+            } else if (cond.rfind("max-width:", 0) == 0) {
+                const auto px = parse_length_px(cond.substr(10));
+                if (!px) return false;
+                out.max_width_px = *px;
+            } else {
+                return false;
+            }
+            i = close + 1;
+        } else if (std::isalpha(static_cast<unsigned char>(lower[i]))) {
+            const std::size_t start = i;
+            while (i < lower.size() &&
+                   std::isalpha(static_cast<unsigned char>(lower[i]))) {
+                ++i;
+            }
+            const std::string word = lower.substr(start, i - start);
+            if (word != "screen" && word != "all" && word != "and" &&
+                word != "only") {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Forward declaration: parse_media_block needs this, but
+// split_declarations is defined below it in the file.
+void split_declarations(std::string_view block,
+                        std::vector<Declaration>& out);
+
+// ADR-027: parse an @media block starting at `i` (which points at
+// '@'). Extracts its body as Rules with a MediaQuery attached. If
+// the prelude is unsupported, the whole block is dropped (no rules
+// added). Mirrors the top-level rule-parsing loop.
+void parse_media_block(std::string_view stripped, std::size_t& i,
+                       Stylesheet& result) {
+    // Skip "@media" (parse() already verified the prefix).
+    i += 6;
+
+    // Read prelude text up to '{'.
+    const std::size_t prelude_start = i;
+    while (i < stripped.size() && stripped[i] != '{') ++i;
+    if (i >= stripped.size()) return;  // malformed: no block
+    const std::string prelude =
+        trim(stripped.substr(prelude_start, i - prelude_start));
+    ++i;  // skip '{'
+
+    // Find the matching '}'.
+    const std::size_t body_start = i;
+    int depth = 1;
+    while (i < stripped.size() && depth > 0) {
+        if (stripped[i] == '{') ++depth;
+        else if (stripped[i] == '}') --depth;
+        ++i;
+    }
+    if (depth > 0) return;  // malformed: unmatched brace
+    const std::string_view body =
+        stripped.substr(body_start, i - 1 - body_start);
+
+    MediaQuery mq;
+    if (!parse_media_prelude(prelude, mq)) return;  // unsupported -> drop
+
+    // Parse rules inside the body.
+    std::size_t j = 0;
+    while (j < body.size()) {
+        while (j < body.size() && is_ws(body[j])) ++j;
+        if (j >= body.size()) break;
+
+        // Nested at-rule: skip (we don't support nested @media).
+        if (body[j] == '@') {
+            std::size_t skip = j;
+            skip_at_rule(body, skip);
+            j = skip;
+            continue;
+        }
+
+        // Selector up to '{' or '}'.
+        const std::size_t selector_start = j;
+        while (j < body.size() && body[j] != '{' && body[j] != '}') ++j;
+        if (j >= body.size()) break;
+        if (body[j] == '}') { ++j; continue; }
+
+        const std::string selector_text =
+            trim(body.substr(selector_start, j - selector_start));
+        ++j;
+
+        // Declarations block.
+        const std::size_t decl_start = j;
+        int decl_depth = 1;
+        while (j < body.size() && decl_depth > 0) {
+            if (body[j] == '{') ++decl_depth;
+            else if (body[j] == '}') --decl_depth;
+            ++j;
+        }
+        if (decl_depth > 0) break;
+        const std::string_view decl_block =
+            body.substr(decl_start, j - 1 - decl_start);
+
+        if (selector_text.empty()) continue;
+        auto selectors = SelectorList::parse(selector_text);
+        if (!selectors) continue;
+
+        Rule rule;
+        rule.selectors = std::move(*selectors);
+        split_declarations(decl_block, rule.declarations);
+        rule.media = mq;
+        result.rules.push_back(std::move(rule));
+    }
+}
+
 void split_declarations(std::string_view block, std::vector<Declaration>& out) {
     size_t start = 0;
     int depth = 0;
@@ -312,7 +539,13 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         if (i >= stripped.size()) break;
 
         if (stripped[i] == '@') {
-            skip_at_rule(stripped, i);
+            // ADR-027: @media blocks are extracted with a MediaQuery;
+            // other at-rules (@import, @charset, etc.) still skip.
+            if (starts_with_ci(stripped, i, "@media")) {
+                parse_media_block(stripped, i, result);
+            } else {
+                skip_at_rule(stripped, i);
+            }
             continue;
         }
 

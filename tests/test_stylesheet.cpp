@@ -77,11 +77,21 @@ TEST_CASE("stylesheet: comment between rules", "[css][stylesheet]") {
     REQUIRE(s.rules.size() == 2);
 }
 
-TEST_CASE("stylesheet: block at-rule skipped", "[css][stylesheet]") {
+TEST_CASE("stylesheet: block at-rule extracted with MediaQuery",
+          "[css][stylesheet]") {
+    // ADR-027: @media screen is now supported (always-match
+    // query); div is extracted as a Rule with media populated,
+    // h1 stays top-level (media nullopt).
     const auto s = Stylesheet::parse("@media screen { div {} } h1 {}");
-    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules.size() == 2);
+    // Rule 0: div inside @media screen
     REQUIRE(s.rules[0].selectors.selectors.size() == 1);
-    CHECK(s.rules[0].selectors.selectors[0].parts.size() == 1);
+    CHECK(s.rules[0].media.has_value());
+    CHECK_FALSE(s.rules[0].media->min_width_px.has_value());
+    CHECK_FALSE(s.rules[0].media->max_width_px.has_value());
+    // Rule 1: h1 top-level
+    REQUIRE(s.rules[1].selectors.selectors.size() == 1);
+    CHECK_FALSE(s.rules[1].media.has_value());
 }
 
 TEST_CASE("stylesheet: semicolon at-rule skipped", "[css][stylesheet]") {
@@ -486,4 +496,141 @@ TEST_CASE("var(): malformed var() dropped",
     auto sheet = Stylesheet::parse("a { color: var(notvar) }");
     REQUIRE(sheet.rules.size() == 1);
     CHECK(sheet.rules[0].declarations.empty());
+}
+
+// =============================================================
+// ADR-027: @media prelude classification + block extraction.
+// =============================================================
+
+TEST_CASE("media: min-width parses to min_width_px",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: 640px) { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    REQUIRE(s.rules[0].media->min_width_px.has_value());
+    CHECK(*s.rules[0].media->min_width_px == 640.0f);
+    CHECK_FALSE(s.rules[0].media->max_width_px.has_value());
+}
+
+TEST_CASE("media: max-width parses to max_width_px",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (max-width: 1399px) { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    REQUIRE(s.rules[0].media->max_width_px.has_value());
+    CHECK(*s.rules[0].media->max_width_px == 1399.0f);
+}
+
+TEST_CASE("media: min-width and max-width combined",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: 640px) and (max-width: 1024px) "
+        "{ a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    CHECK(*s.rules[0].media->min_width_px == 640.0f);
+    CHECK(*s.rules[0].media->max_width_px == 1024.0f);
+}
+
+TEST_CASE("media: calc(Npx - Mpx) evaluated",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (max-width: calc(1120px - 1px)) { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    REQUIRE(s.rules[0].media->max_width_px.has_value());
+    CHECK(*s.rules[0].media->max_width_px == 1119.0f);
+}
+
+TEST_CASE("media: calc(Npx + Mpx) evaluated",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: calc(640px + 10px)) { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    REQUIRE(s.rules[0].media->min_width_px.has_value());
+    CHECK(*s.rules[0].media->min_width_px == 650.0f);
+}
+
+TEST_CASE("media: print query drops its rules",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media print { a { color: red } }");
+    // Unsupported -> rule dropped entirely.
+    CHECK(s.rules.empty());
+}
+
+TEST_CASE("media: prefers-color-scheme query drops its rules",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (prefers-color-scheme: dark) { a { color: red } }");
+    CHECK(s.rules.empty());
+}
+
+TEST_CASE("media: prefers-reduced-motion query drops its rules",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (prefers-reduced-motion: reduce) { a { color: red } }");
+    CHECK(s.rules.empty());
+}
+
+TEST_CASE("media: mixed-unit calc drops its rules",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: calc(50% - 20px)) { a { color: red } }");
+    CHECK(s.rules.empty());
+}
+
+TEST_CASE("media: multiple rules inside one block all get the MediaQuery",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: 640px) { a { color: red } p { color: blue } }");
+    REQUIRE(s.rules.size() == 2);
+    REQUIRE(s.rules[0].media.has_value());
+    REQUIRE(s.rules[1].media.has_value());
+    CHECK(*s.rules[0].media->min_width_px == 640.0f);
+    CHECK(*s.rules[1].media->min_width_px == 640.0f);
+}
+
+TEST_CASE("media: screen and (min-width) parsed correctly",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media screen and (min-width: 1120px) { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    CHECK(*s.rules[0].media->min_width_px == 1120.0f);
+}
+
+TEST_CASE("media: bare 'screen' prelude matches all viewports",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media screen { a { color: red } }");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    CHECK_FALSE(s.rules[0].media->min_width_px.has_value());
+    CHECK_FALSE(s.rules[0].media->max_width_px.has_value());
+}
+
+TEST_CASE("media: declarations inside @media rules are preserved",
+          "[css][stylesheet][adr-027]") {
+    const auto s = Stylesheet::parse(
+        "@media (min-width: 640px) { "
+        "a { color: red; font-size: 16px } "
+        "}");
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].declarations.size() == 2);
+    CHECK(s.rules[0].declarations[0].property == "color");
+    CHECK(s.rules[0].declarations[0].value == "red");
+    CHECK(s.rules[0].declarations[1].property == "font-size");
+    CHECK(s.rules[0].declarations[1].value == "16px");
+}
+
+TEST_CASE("media: @import still skipped",
+          "[css][stylesheet][adr-027]") {
+    // Non-@media at-rules use the original skip_at_rule path.
+    const auto s = Stylesheet::parse("@import url(\"x.css\"); h1 {}");
+    REQUIRE(s.rules.size() == 1);
+    CHECK_FALSE(s.rules[0].media.has_value());
 }
