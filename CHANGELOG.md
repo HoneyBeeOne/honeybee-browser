@@ -181,6 +181,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumed by paint/layout? ADR-027 measured all three, so the
   prediction was closer than ADR-025/026's.
 
+- **CSS grid layout** (ADR-028): `display: grid`
+  now parses and lays out. Fixed, `fr`, and `minmax()` track
+  sizing; named grid areas via `grid-template-areas` and
+  per-child `grid-area`; `column-gap`. On Wikipedia at viewports
+  >= 1120px: sidebar becomes a ~325px left column, article
+  content indents to the right. Article's vertical position
+  within its cell is off by ~660px (deferred).
+
+  **Hidden deliverable**: fixing a root-relative URL resolution
+  bug (`base/url.cpp`) that had been silently 404ing every
+  external CSS fetch since ADR-025. Post-fix, ADR-025's
+  external CSS loading, ADR-026's var() resolution, and
+  ADR-027's @media rules all reach the cascade on Wikipedia
+  for the first time. Their measured deltas were inline-only;
+  post-fix deltas are larger.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after

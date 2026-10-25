@@ -447,3 +447,33 @@ This is the same pattern as ADR-022 → ADR-023: ADR-022 shipped the targeted ca
 - **Cascade-integration diagnostic**: body-position `<style>` reports `display: none` in ComputedStyleMap (confirms the fix targets the right layer).
 - **Visual**: CSS text gone; article body starts cleanly with prose. Var() resolution is visible-neutral on Wikipedia.
 
+## Post-ADR-028 correction (external CSS was silently 404ing)
+
+During ADR-028's verification, a root-relative URL resolution bug
+was discovered in `base/url.cpp`: `/path` hrefs were resolving
+against the base URL's **directory** (including subdirectories)
+instead of its **origin** (scheme + host).
+
+Wikipedia's external CSS is served at root-relative URLs
+(`/w/load.php?...`) with a base URL containing a `/wiki/`
+subdirectory. Fetch URLs became
+`https://en.wikipedia.org/wiki/w/load.php?...` -- a 404.
+
+**Every external CSS fetch on Wikipedia has been silently 404ing
+since ADR-025.** The visible deltas measured in this ADR were
+real, but they came from inline `<style>` tags (Wikipedia's
+TemplateStyles extension emits ~20KB of inline CSS in `<body>`),
+not from the external 222KB of CSS that this ADR was supposed to
+be loading.
+
+Fixed in ADR-028's Commit 2a. Post-fix, this ADR's features
+actually reach the cascade on Wikipedia, and the true visible
+delta is larger than measured at the time.
+
+The four regression tests added with the fix cover subdirectory
+bases (`/wiki/HTML`), multi-level subdirectory bases, host-only
+bases, and bases with ports. The gap in the original test suite
+was that every URL-resolution test used a base without a
+subdirectory -- the dir==origin case produces identical results,
+masking the bug.
+

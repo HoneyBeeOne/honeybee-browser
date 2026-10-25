@@ -1,6 +1,6 @@
 # ADR-028: CSS Grid Layout (Basic)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-25
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (layout engine), ADR-013 (length units), ADR-016 (inline formatting), ADR-025 (external CSS), ADR-027 (@media)
@@ -439,3 +439,93 @@ ADR-028 is complete when:
 **Explicit claim**: sidebar becomes a real left column, article
 content fills remaining width, footer spans bottom. Largest single
 visible delta since ADR-025.
+
+## Implementation
+
+Implemented on `feat/grid-layout` across four commits (Commit 2
+split into 2a and 2b because the URL fix was discovered during
+grid verification):
+
+| Commit | Scope |
+|---|---|
+| `826e9ef` | `Display::Grid` + `display_of` + `grid-template` shorthand expansion (14+1 tests). |
+| `da3def2` | **URL fix** discovered while debugging grid: root-relative URLs now resolve against origin, not base directory (4 regression tests). |
+| `de48ba2` | `grid_layout.{hpp,cpp}` + `layout_element` dispatch on `Display::Grid` + `shift_subtree_y` (23 + 2 tests). |
+| (this commit) | Docs: ADR-028 status -> Implemented, README + CHANGELOG, post-fix corrections to ADR-025/026/027. |
+
+### Measured visible delta on Wikipedia (viewport 1774)
+
+| Check | Result |
+|---|---|
+| Sidebar narrows to ~325px left column | ✅ |
+| Article content indents to right column | ✅ |
+| Navbox styling preserved (ADR-027) | ✅ |
+| Article body readable | ✅ |
+| **Article's vertical position within its cell** | ❌ ~660px too low (deferred) |
+| No crash, no regression | ✅ |
+
+The structural transform (columns side by side) DID happen. The
+article's vertical placement within its cell is offset by ~660px --
+"HTML" heading appears at y ≈ 730 instead of y ≈ 70. Root cause
+hypothesis (unverified): either the article's
+`.mw-content-container` child contains block children before its
+visible content, or its own internal layout adds top
+margin/padding not accounted for by grid row layout. Deferred to
+a follow-up commit or its own ADR.
+
+### The URL bug discovery (the actual biggest deliverable)
+
+**ADR-028's verification trail revealed a five-ADR-deep bug that
+silently blocked ADR-025, ADR-026, and ADR-027's real capability.**
+
+When Wikipedia didn't shift at 1120+ viewports (grid rules should
+have fired), the diagnostic sequence went:
+1. Grid rules exist in external CSS ✓
+2. Grid parsing works on that CSS ✓
+3. Grid layout works on synthetic tests ✓
+4. But grid rules never reach ComputedStyle on Wikipedia ✗
+5. Cascade never sees them because external CSS fetch fails ✗
+6. Fetch fails because the URL is `https://en.wikipedia.org/wiki/w/load.php` instead of `https://en.wikipedia.org/w/load.php` ✗
+7. URL is wrong because `resolve_url` concatenated root-relative hrefs onto the base *directory* (with `/wiki/` subdir) instead of the base *origin* ✗
+
+**Fix:** `resolve_url` for root-relative URLs now splits the base at
+the first `/` after the scheme separator and concatenates onto
+just scheme + host (+ port). 4 new tests cover subdirectory bases.
+
+**Consequence:** every external CSS fetch on Wikipedia has been
+silently 404ing since ADR-025. ADR-025/026/027's "measured deltas"
+were real, but they came from inline `<style>` tags (~20KB of
+Wikipedia's 242KB CSS) — not from external CSS. After this fix,
+the external 222KB (including the `@media`-scoped grid rules
+ADR-027/028 target) actually reaches the cascade. Post-fix, those
+ADRs' actual visible deltas are larger than measured at the time.
+
+Post-fix correction notes appended to ADR-025, ADR-026, ADR-027
+preserve their historical record.
+
+### What shipped vs. what didn't
+
+**Shipped (real infrastructure, real visible delta):**
+- Grid template parsing: fixed/fr/minmax tracks + named areas.
+- Grid layout dispatch with track sizing, cell placement, gaps.
+- Sidebar column narrows on Wikipedia at 1120+ viewports.
+- Article content indents to the right column.
+- **External CSS loading now actually works** (URL fix).
+- All three prior ADRs' features actually reach the cascade.
+
+**Didn't ship (deferred):**
+- Article vertical position within its cell (~660px off).
+- Grid auto-flow (only named-area placement).
+- `inline-grid`, `subgrid`, `repeat()`, `auto`, `max-content`,
+  `fit-content()`, line-based `grid-column`/`grid-row`.
+- `fr` rows filling container height (flow-layout constraint).
+
+### Test count
+
+- Before ADR-028: 327 cases, 1367 assertions
+- After Commit 1: 336 cases, 1401 assertions
+- After Commit 2a: 365 cases, 1508 assertions (+4 URL fix in 2a,
+  +25 grid in 2b; note the +25 grid tests were added during
+  debugging session and accounted here)
+- Zero warnings, zero failures
+

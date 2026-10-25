@@ -496,3 +496,33 @@ Same shape as ADR-026: consumed-property coverage is necessary but not sufficien
 
 ADR-025 measured #1 (27% parse rate) and got surprised by #2 and #3. ADR-026 measured #1 and #2 and got surprised by #3. ADR-027 measured all three and got the prediction closer -- navbox backgrounds render (all three paths satisfied), sidebar layout doesn't (path #3 fails).
 
+## Post-ADR-028 correction (external CSS was silently 404ing)
+
+During ADR-028's verification, a root-relative URL resolution bug
+was discovered in `base/url.cpp`: `/path` hrefs were resolving
+against the base URL's **directory** (including subdirectories)
+instead of its **origin** (scheme + host).
+
+Wikipedia's external CSS is served at root-relative URLs
+(`/w/load.php?...`) with a base URL containing a `/wiki/`
+subdirectory. Fetch URLs became
+`https://en.wikipedia.org/wiki/w/load.php?...` -- a 404.
+
+**Every external CSS fetch on Wikipedia has been silently 404ing
+since ADR-025.** The visible deltas measured in this ADR were
+real, but they came from inline `<style>` tags (Wikipedia's
+TemplateStyles extension emits ~20KB of inline CSS in `<body>`),
+not from the external 222KB of CSS that this ADR was supposed to
+be loading.
+
+Fixed in ADR-028's Commit 2a. Post-fix, this ADR's features
+actually reach the cascade on Wikipedia, and the true visible
+delta is larger than measured at the time.
+
+The four regression tests added with the fix cover subdirectory
+bases (`/wiki/HTML`), multi-level subdirectory bases, host-only
+bases, and bases with ports. The gap in the original test suite
+was that every URL-resolution test used a base without a
+subdirectory -- the dir==origin case produces identical results,
+masking the bug.
+
