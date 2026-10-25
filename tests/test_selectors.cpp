@@ -453,3 +453,26 @@ TEST_CASE("specificity: :visited combines with id",
     REQUIRE(s);
     CHECK(s->specificity() == Specificity{1, 1, 0});
 }
+
+// =============================================================
+// ADR-026: :root selector.
+// =============================================================
+
+TEST_CASE("parse: :root pseudo-class", "[css][selectors][adr-026]") {
+    auto s = Selector::parse(":root");
+    REQUIRE(s);
+    REQUIRE(s->parts.size() == 1);
+    REQUIRE(s->parts[0].compound.simples.size() == 1);
+    CHECK(s->parts[0].compound.simples[0].kind == SimpleKind::PseudoRoot);
+}
+
+TEST_CASE("specificity: :root counts as class weight",
+          "[css][selectors][specificity][adr-026]") {
+    auto s = Selector::parse(":root");
+    REQUIRE(s);
+    CHECK(s->specificity() == Specificity{0, 1, 0});
+
+    auto compound = Selector::parse("html:root");
+    REQUIRE(compound);
+    CHECK(compound->specificity() == Specificity{0, 1, 1});
+}

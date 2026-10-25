@@ -59,6 +59,89 @@ std::string trim(std::string_view s) {
     return std::string(s.substr(b, e - b));
 }
 
+// ADR-026: whole-value var() resolution.
+//
+// Given a declaration value, return one of three states:
+//   NotVar    -- value doesn't start with "var(...)", leave alone
+//   Resolved  -- value is whole-value var(), resolved to `result.value`
+//   Failed    -- value is whole-value var() that can't resolve
+//                (undefined, no fallback, or nested) -- declaration
+//                should be dropped per CSS computed-value-time semantics
+//
+// Whole-value only: partial substitutions (e.g. `1px solid var(--x)`)
+// return NotVar and are left unchanged. ADR-026's measurement showed
+// partial-value declarations target consumed properties only 20% of
+// the time; the 40-line whole-value resolver captures 89% of the
+// visible win at half the complexity of substitution + calc.
+struct VarResult {
+    enum Kind { NotVar, Resolved, Failed };
+    Kind kind;
+    std::string value;  // valid when kind == Resolved
+};
+
+VarResult resolve_var_whole(
+    std::string_view raw,
+    const std::unordered_map<std::string, std::string>& vars) {
+    const std::string value = trim(raw);
+
+    // Fast path: not a var() at all.
+    if (value.size() < 5 ||
+        value.compare(0, 4, "var(") != 0 ||
+        value.back() != ')') {
+        return {VarResult::NotVar, {}};
+    }
+
+    // Extract inside of var(...): strip "var(" prefix and ")" suffix.
+    const std::string inner_full =
+        trim(std::string_view(value).substr(4, value.size() - 5));
+
+    // Find first top-level comma (fallback separation). Commas can
+    // appear inside the fallback expression (e.g. rgb(0, 0, 0)) so
+    // we track paren depth.
+    std::size_t depth = 0;
+    std::size_t comma = std::string::npos;
+    for (std::size_t i = 0; i < inner_full.size(); ++i) {
+        const char c = inner_full[i];
+        if (c == '(') ++depth;
+        else if (c == ')' && depth > 0) --depth;
+        else if (c == ',' && depth == 0) { comma = i; break; }
+    }
+
+    std::string var_name;
+    std::string fallback;
+    bool has_fallback = false;
+    if (comma == std::string::npos) {
+        var_name = trim(inner_full);
+    } else {
+        var_name = trim(inner_full.substr(0, comma));
+        fallback = trim(inner_full.substr(comma + 1));
+        has_fallback = true;
+    }
+
+    // Malformed: name must start with "--".
+    if (var_name.size() < 2 ||
+        var_name[0] != '-' || var_name[1] != '-') {
+        return {VarResult::Failed, {}};
+    }
+
+    // Variable lookup.
+    auto it = vars.find(var_name);
+    if (it != vars.end()) {
+        // Nested var() in the variable's value: single-pass
+        // resolution can't follow it. If a fallback exists, use
+        // it; otherwise drop (same as unresolved).
+        if (it->second.find("var(") != std::string::npos) {
+            if (has_fallback) return {VarResult::Resolved, fallback};
+            return {VarResult::Failed, {}};
+        }
+        return {VarResult::Resolved, it->second};
+    }
+
+    // Variable not defined: use fallback, or fail.
+    if (has_fallback) return {VarResult::Resolved, fallback};
+    return {VarResult::Failed, {}};
+}
+
 bool strip_important(std::string& value) {
     const size_t e = value.size();
     size_t bang = std::string::npos;
@@ -278,7 +361,68 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         Rule rule;
         rule.selectors = std::move(*selectors);
         split_declarations(block, rule.declarations);
+        // ADR-026: extract custom-property declarations from
+        // :root-only rules into the stylesheet's variable map.
+        //
+        // Conservative trigger: exactly one selector, exactly one
+        // simple, that simple is PseudoRoot. This covers the
+        // canonical `:root { --x: val }` case. Multi-selector
+        // rules like `:root, .foo { --x: val }` are NOT extracted
+        // (their variable scoping is more complex than :root-only;
+        // deferred until custom-property inheritance is a v1
+        // feature).
+        if (rule.selectors.selectors.size() == 1) {
+            const auto& sel = rule.selectors.selectors[0];
+            if (sel.parts.size() == 1 &&
+                sel.parts[0].compound.simples.size() == 1 &&
+                sel.parts[0].compound.simples[0].kind ==
+                    SimpleKind::PseudoRoot) {
+                for (const auto& decl : rule.declarations) {
+                    if (decl.property.size() >= 2 &&
+                        decl.property[0] == '-' &&
+                        decl.property[1] == '-') {
+                        result.variables[decl.property] = decl.value;
+                    }
+                }
+            }
+        }
+
         result.rules.push_back(std::move(rule));
+    }
+
+    // ADR-026: resolve var() in all declarations using the
+    // collected variable map. Runs once, after all rules have
+    // been parsed (variables need to be complete).
+    //
+    // Skips custom-property declarations themselves (--x: val);
+    // their values may be recursive or refer to variables defined
+    // later, and single-pass resolution would either miss or
+    // misinterpret. Deferred recursive resolution (ADR-026
+    // Deferred).
+    for (auto& rule : result.rules) {
+        auto decl_it = rule.declarations.begin();
+        while (decl_it != rule.declarations.end()) {
+            const auto& prop = decl_it->property;
+            const bool is_custom_property =
+                prop.size() >= 2 && prop[0] == '-' && prop[1] == '-';
+            if (is_custom_property) {
+                ++decl_it;
+                continue;
+            }
+            auto vr = resolve_var_whole(decl_it->value, result.variables);
+            switch (vr.kind) {
+                case VarResult::NotVar:
+                    ++decl_it;
+                    break;
+                case VarResult::Resolved:
+                    decl_it->value = std::move(vr.value);
+                    ++decl_it;
+                    break;
+                case VarResult::Failed:
+                    decl_it = rule.declarations.erase(decl_it);
+                    break;
+            }
+        }
     }
 
     return result;

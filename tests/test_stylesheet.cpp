@@ -1,8 +1,12 @@
+#include "renderer/css/render_state.hpp"
+#include "renderer/html/convert.hpp"
+#include "renderer/dom/node.hpp"
 #include "renderer/css/stylesheet.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 using honeybee::renderer::css::Stylesheet;
+using honeybee::renderer::css::Selector;
 
 TEST_CASE("stylesheet: empty input yields no rules", "[css][stylesheet]") {
     CHECK(Stylesheet::parse("").rules.empty());
@@ -305,4 +309,181 @@ TEST_CASE("stylesheet: border-width expands",
     CHECK(s.rules[0].declarations[1].value == "2px");
     CHECK(s.rules[0].declarations[2].value == "1px");
     CHECK(s.rules[0].declarations[3].value == "2px");
+}
+
+// =============================================================
+// ADR-026: Stylesheet::variables extraction from :root rules.
+// =============================================================
+
+TEST_CASE("Stylesheet::variables: empty for :root without custom props",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(":root { color: red }");
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: single :root block",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --color-base: #202122; --font-size: 1rem }");
+    REQUIRE(sheet.variables.size() == 2);
+    CHECK(sheet.variables.at("--color-base") == "#202122");
+    CHECK(sheet.variables.at("--font-size") == "1rem");
+    // Rule still in the sheet (declaration semantics preserved).
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: two :root blocks merge, later wins",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --a: red; --b: blue }"
+        ":root { --a: green }");
+    REQUIRE(sheet.variables.size() == 2);
+    CHECK(sheet.variables.at("--a") == "green");   // later wins
+    CHECK(sheet.variables.at("--b") == "blue");
+}
+
+TEST_CASE("Stylesheet::variables: multi-selector :root rule NOT extracted",
+          "[css][stylesheet][adr-026]") {
+    // Conservative: `:root, .foo` doesn't trigger extraction.
+    auto sheet = Stylesheet::parse(":root, .foo { --x: red }");
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: non-:root rule NOT extracted",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        "html { --x: red }"               // Type selector, not :root
+        ".foo { --y: blue }"              // Class selector
+        "html:root { --z: green }");      // Compound, not sole :root
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 3);
+}
+
+TEST_CASE("matches_simple: :root matches <html> not <body>",
+          "[css][selectors][adr-026]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>x</p></body></html>");
+    REQUIRE(doc);
+
+    auto sel = Selector::parse(":root");
+    REQUIRE(sel);
+
+    // Find <html> and <body>.
+    const auto* html = doc->find_element("html");
+    const auto* body = doc->find_element("body");
+    REQUIRE(html);
+    REQUIRE(body);
+
+    honeybee::renderer::css::RenderState state;
+    CHECK(sel->matches(*html, state) == true);
+    CHECK(sel->matches(*body, state) == false);
+}
+
+// =============================================================
+// ADR-026: var() pre-resolution.
+//
+// Whole-value only: `prop: var(--x[, fallback])`. Partial values
+// (e.g. `1px solid var(--x)`) are left unchanged (deferred).
+// =============================================================
+
+TEST_CASE("var(): defined variable resolves to value",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --color-base: #202122 }"
+        "a { color: var(--color-base) }");
+    REQUIRE(sheet.rules.size() == 2);
+    REQUIRE(sheet.rules[1].declarations.size() == 1);
+    CHECK(sheet.rules[1].declarations[0].value == "#202122");
+}
+
+TEST_CASE("var(): undefined variable + fallback uses fallback",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        "a { color: var(--undefined-color, #ff0000) }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].value == "#ff0000");
+}
+
+TEST_CASE("var(): undefined variable + no fallback drops declaration",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        "a { color: var(--undefined-no-fb) }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("var(): partial-value declaration left unchanged (deferred)",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        "a { border: 1px solid var(--border-color, #ccc) }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].value
+          == "1px solid var(--border-color, #ccc)");
+}
+
+TEST_CASE("var(): non-var value unchanged",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse("a { color: #202122 }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].value == "#202122");
+}
+
+TEST_CASE("var(): nested var() in variable uses fallback",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --image-size-standard: 250px;"
+        "        --image-size-user: var(--image-size-standard) }"
+        "img { width: var(--image-size-user, 300px) }");
+    bool found_img = false;
+    for (const auto& rule : sheet.rules) {
+        if (rule.selectors.selectors.size() == 1 &&
+            rule.selectors.selectors[0].parts.size() == 1 &&
+            rule.selectors.selectors[0].parts[0].compound.simples.size() == 1 &&
+            rule.selectors.selectors[0].parts[0].compound.simples[0].kind ==
+                honeybee::renderer::css::SimpleKind::Type &&
+            rule.selectors.selectors[0].parts[0].compound.simples[0].name == "img") {
+            REQUIRE(rule.declarations.size() == 1);
+            CHECK(rule.declarations[0].value == "300px");
+            found_img = true;
+        }
+    }
+    CHECK(found_img);
+}
+
+TEST_CASE("var(): custom-property declarations themselves are NOT resolved",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --y: red; --x: var(--y) }");
+    REQUIRE(sheet.rules.size() == 1);
+    bool found_x = false;
+    for (const auto& decl : sheet.rules[0].declarations) {
+        if (decl.property == "--x") {
+            CHECK(decl.value == "var(--y)");
+            found_x = true;
+        }
+    }
+    CHECK(found_x);
+    REQUIRE(sheet.variables.count("--x") == 1);
+    CHECK(sheet.variables.at("--x") == "var(--y)");
+}
+
+TEST_CASE("var(): fallback with nested parens (e.g. rgb())",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse(
+        "a { color: var(--undefined, rgb(0, 0, 0)) }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].value == "rgb(0, 0, 0)");
+}
+
+TEST_CASE("var(): malformed var() dropped",
+          "[css][stylesheet][adr-026][var]") {
+    auto sheet = Stylesheet::parse("a { color: var(notvar) }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
 }

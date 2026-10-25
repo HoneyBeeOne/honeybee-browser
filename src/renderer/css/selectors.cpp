@@ -165,6 +165,7 @@ private:
             if (*name == "link")    { out.kind = SimpleKind::PseudoLink;    return out; }
             if (*name == "visited") { out.kind = SimpleKind::PseudoVisited; return out; }
             if (*name == "hover")   { out.kind = SimpleKind::PseudoHover;   return out; }
+            if (*name == "root")    { out.kind = SimpleKind::PseudoRoot;    return out; }
             failed_ = true;  // unknown pseudo-class
             return std::nullopt;
         }
@@ -273,7 +274,8 @@ Specificity Selector::specificity() const {
                 case SimpleKind::Attribute:
                 case SimpleKind::PseudoLink:
                 case SimpleKind::PseudoVisited:
-                case SimpleKind::PseudoHover: ++out.b; break;
+                case SimpleKind::PseudoHover:
+                case SimpleKind::PseudoRoot: ++out.b; break;
                 case SimpleKind::Type:      ++out.c; break;
                 case SimpleKind::Universal: break;
             }
@@ -396,6 +398,14 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el,
                 n = n->parent();
             }
             return false;
+        }
+        case SimpleKind::PseudoRoot: {
+            // ADR-026: :root matches the document's root element
+            // (<html> in any parsed HTML). Its parent is either
+            // nullptr (detached tree) or the Document node.
+            const dom::Node* p = el.parent();
+            return p == nullptr ||
+                   p->type() == dom::NodeType::Document;
         }
     }
     return false;

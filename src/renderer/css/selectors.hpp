@@ -43,6 +43,7 @@ enum class SimpleKind {
     PseudoLink,     // :link    (ADR-018)
     PseudoVisited,  // :visited (ADR-018)
     PseudoHover,    // :hover   (ADR-018)
+    PseudoRoot,     // :root    (ADR-026)
 };
 
 enum class AttributeMatch {
