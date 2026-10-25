@@ -14,6 +14,7 @@ add_executable(honeybee_tests
   test_paint.cpp
   test_lexbor_smoke.cpp
   test_convert.cpp
+  test_css_sources.cpp
   test_preview.cpp
 )
 
