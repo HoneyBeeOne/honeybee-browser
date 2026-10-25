@@ -278,6 +278,32 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         Rule rule;
         rule.selectors = std::move(*selectors);
         split_declarations(block, rule.declarations);
+        // ADR-026: extract custom-property declarations from
+        // :root-only rules into the stylesheet's variable map.
+        //
+        // Conservative trigger: exactly one selector, exactly one
+        // simple, that simple is PseudoRoot. This covers the
+        // canonical `:root { --x: val }` case. Multi-selector
+        // rules like `:root, .foo { --x: val }` are NOT extracted
+        // (their variable scoping is more complex than :root-only;
+        // deferred until custom-property inheritance is a v1
+        // feature).
+        if (rule.selectors.selectors.size() == 1) {
+            const auto& sel = rule.selectors.selectors[0];
+            if (sel.parts.size() == 1 &&
+                sel.parts[0].compound.simples.size() == 1 &&
+                sel.parts[0].compound.simples[0].kind ==
+                    SimpleKind::PseudoRoot) {
+                for (const auto& decl : rule.declarations) {
+                    if (decl.property.size() >= 2 &&
+                        decl.property[0] == '-' &&
+                        decl.property[1] == '-') {
+                        result.variables[decl.property] = decl.value;
+                    }
+                }
+            }
+        }
+
         result.rules.push_back(std::move(rule));
     }
 

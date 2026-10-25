@@ -1,8 +1,12 @@
+#include "renderer/css/render_state.hpp"
+#include "renderer/html/convert.hpp"
+#include "renderer/dom/node.hpp"
 #include "renderer/css/stylesheet.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
 using honeybee::renderer::css::Stylesheet;
+using honeybee::renderer::css::Selector;
 
 TEST_CASE("stylesheet: empty input yields no rules", "[css][stylesheet]") {
     CHECK(Stylesheet::parse("").rules.empty());
@@ -305,4 +309,74 @@ TEST_CASE("stylesheet: border-width expands",
     CHECK(s.rules[0].declarations[1].value == "2px");
     CHECK(s.rules[0].declarations[2].value == "1px");
     CHECK(s.rules[0].declarations[3].value == "2px");
+}
+
+// =============================================================
+// ADR-026: Stylesheet::variables extraction from :root rules.
+// =============================================================
+
+TEST_CASE("Stylesheet::variables: empty for :root without custom props",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(":root { color: red }");
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: single :root block",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --color-base: #202122; --font-size: 1rem }");
+    REQUIRE(sheet.variables.size() == 2);
+    CHECK(sheet.variables.at("--color-base") == "#202122");
+    CHECK(sheet.variables.at("--font-size") == "1rem");
+    // Rule still in the sheet (declaration semantics preserved).
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: two :root blocks merge, later wins",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        ":root { --a: red; --b: blue }"
+        ":root { --a: green }");
+    REQUIRE(sheet.variables.size() == 2);
+    CHECK(sheet.variables.at("--a") == "green");   // later wins
+    CHECK(sheet.variables.at("--b") == "blue");
+}
+
+TEST_CASE("Stylesheet::variables: multi-selector :root rule NOT extracted",
+          "[css][stylesheet][adr-026]") {
+    // Conservative: `:root, .foo` doesn't trigger extraction.
+    auto sheet = Stylesheet::parse(":root, .foo { --x: red }");
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 1);
+}
+
+TEST_CASE("Stylesheet::variables: non-:root rule NOT extracted",
+          "[css][stylesheet][adr-026]") {
+    auto sheet = Stylesheet::parse(
+        "html { --x: red }"               // Type selector, not :root
+        ".foo { --y: blue }"              // Class selector
+        "html:root { --z: green }");      // Compound, not sole :root
+    CHECK(sheet.variables.empty());
+    CHECK(sheet.rules.size() == 3);
+}
+
+TEST_CASE("matches_simple: :root matches <html> not <body>",
+          "[css][selectors][adr-026]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>x</p></body></html>");
+    REQUIRE(doc);
+
+    auto sel = Selector::parse(":root");
+    REQUIRE(sel);
+
+    // Find <html> and <body>.
+    const auto* html = doc->find_element("html");
+    const auto* body = doc->find_element("body");
+    REQUIRE(html);
+    REQUIRE(body);
+
+    honeybee::renderer::css::RenderState state;
+    CHECK(sel->matches(*html, state) == true);
+    CHECK(sel->matches(*body, state) == false);
 }

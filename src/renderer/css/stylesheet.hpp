@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <unordered_map>
 
 #include "renderer/css/selectors.hpp"
 
@@ -36,6 +37,11 @@ struct Rule {
 
 struct Stylesheet {
     std::vector<Rule> rules;
+
+    // ADR-026: CSS custom properties defined in :root rules
+    // (e.g. `:root { --color-base: #202122 }`). Populated during
+    // parse(). Consumed by var() pre-resolution.
+    std::unordered_map<std::string, std::string> variables;
 
     // Parses `text` into a stylesheet. Malformed rules are
     // skipped; the result is always a valid (possibly empty)
