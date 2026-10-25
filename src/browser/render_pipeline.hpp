@@ -27,9 +27,22 @@ namespace honeybee::browser {
 
 class RenderPipeline {
 public:
-    // Parse + extract styles + cascade + layout at viewport_width.
-    // Replaces any previous page.
+    // Parse + extract inline styles + cascade + layout at
+    // viewport_width. Replaces any previous page.
+    // ADR-025: render(html, width) is now a thin wrapper that
+    // parses the HTML, extracts inline-only CSS via
+    // collect_css_sources, and delegates to render_with_css with
+    // no external CSS. Behavior-preserving vs. pre-ADR-025.
     void render(const std::string& html, float viewport_width);
+
+    // ADR-025: render with pre-parsed DOM and pre-fetched merged
+    // CSS (inline <style> content concatenated with external
+    // <link rel=stylesheet> content). Used by the window after
+    // fetching external stylesheets. Takes ownership of `doc`.
+    void render_with_css(
+        std::unique_ptr<renderer::dom::Document> doc,
+        std::string merged_css,
+        float viewport_width);
 
     // Recompute layout at a new viewport width, keeping the DOM.
     // Called on window resize.
@@ -103,6 +116,11 @@ private:
     renderer::css::ComputedStyleMap styles_cache_;
     renderer::css::Stylesheet sheet_cache_;
     const renderer::dom::Element* prev_hovered_ = nullptr;
+
+    // ADR-025: merged inline + external CSS, set by
+    // render_with_css and preserved across relayout() calls
+    // (window resize) without re-fetching.
+    std::string merged_css_;
 
     // ADR-023: hover-sensitivity state, populated in relayout(),
     // cleared in render(). `hover_level_` selects the restyle

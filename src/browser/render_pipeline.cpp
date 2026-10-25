@@ -11,6 +11,7 @@
 #include "renderer/css/stylesheet.hpp"
 #include "renderer/dom/node.hpp"
 #include "renderer/html/convert.hpp"
+#include "renderer/html/css_sources.hpp"
 #include "renderer/layout/layout.hpp"
 #include "renderer/layout/style_values.hpp"
 #include "renderer/paint/paint.hpp"
@@ -22,24 +23,6 @@ namespace {
 // Collect the concatenated text of all <style> elements in
 // `doc`. v1 only supports inline styles; <link rel=stylesheet>
 // requires network loading and is deferred.
-std::string extract_inline_css(const renderer::dom::Document& doc) {
-    std::string css;
-    std::function<void(const renderer::dom::Node&)> walk =
-        [&](const renderer::dom::Node& n) {
-            if (n.type() == renderer::dom::NodeType::Element) {
-                const auto& el =
-                    static_cast<const renderer::dom::Element&>(n);
-                if (el.tag() == "style") {
-                    css += el.text_content();
-                    css += "\n";
-                }
-            }
-            for (const auto& c : n.children()) walk(*c);
-        };
-    walk(doc);
-    return css;
-}
-
 // ADR-021: walk the layout tree updating paint-only color
 // fields from freshly-recomputed styles. Skips dimensions
 // entirely -- x, y, width, height are never touched.
@@ -122,6 +105,26 @@ void restyle_walk(renderer::layout::LayoutNode& node,
 
 void RenderPipeline::render(const std::string& html,
                             float viewport_width) {
+    // ADR-025: parse once, extract inline-only CSS, delegate.
+    auto doc = renderer::html::parse(html);
+    std::string inline_css;
+    if (doc) {
+        for (const auto& src :
+             renderer::html::collect_css_sources(*doc)) {
+            if (src.inline_style) {
+                inline_css += src.content;
+                inline_css += "\n";
+            }
+        }
+    }
+    render_with_css(std::move(doc), std::move(inline_css),
+                    viewport_width);
+}
+
+void RenderPipeline::render_with_css(
+    std::unique_ptr<renderer::dom::Document> doc,
+    std::string merged_css,
+    float viewport_width) {
     // ADR-018: hovered_element is a raw pointer into doc_. When
     // doc_ is replaced (below), the old DOM is destroyed and
     // hovered_element becomes dangling. The next relayout()
@@ -139,7 +142,9 @@ void RenderPipeline::render(const std::string& html,
     hover_level_ = renderer::css::HoverLevel::None;
     hover_sensitive_.clear();
 
-    doc_ = renderer::html::parse(html);
+    doc_ = std::move(doc);
+    merged_css_ = std::move(merged_css);
+
     if (!doc_) {
         layout_root_ = renderer::layout::LayoutBox{};
         return;
@@ -150,11 +155,11 @@ void RenderPipeline::render(const std::string& html,
 void RenderPipeline::relayout(float viewport_width) {
     if (!doc_) return;
 
+    // ADR-025: sheet_cache_ parses merged_css_ (inline + external).
     // ADR-022: cache the parsed author sheet and the full cascade
     // result. Subsequent restyle() calls mutate styles_cache_ in
     // place rather than re-cascading from scratch.
-    const std::string css = extract_inline_css(*doc_);
-    sheet_cache_ = renderer::css::Stylesheet::parse(css);
+    sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
     styles_cache_ = renderer::css::cascade(
         renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
 
@@ -198,8 +203,7 @@ void RenderPipeline::restyle() {
     // Fallback path: cache empty (never rendered, or cleared by a
     // failed render()). Full cascade, same cost as ADR-021.
     if (styles_cache_.empty()) {
-        const std::string css = extract_inline_css(*doc_);
-        sheet_cache_ = renderer::css::Stylesheet::parse(css);
+        sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
         styles_cache_ = renderer::css::cascade(
             renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
         restyle_walk(layout_root_, styles_cache_);

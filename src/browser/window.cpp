@@ -14,6 +14,11 @@
 #include "window.hpp"
 
 #include <cmath>
+#include <chrono>
+
+#include "net/client.hpp"
+#include "renderer/html/convert.hpp"
+#include "renderer/html/css_sources.hpp"
 
 // استيراد دالة الإصدار لعرض رقم الإصدار.
 #include "base/version.hpp"
@@ -279,7 +284,7 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
     // cache headers, serving stale content on an explicit
     // navigation would be surprising).
     if (kind == NavKind::Back || kind == NavKind::Forward) {
-        if (auto cached = m_cache.get(url)) {
+        if (auto entry = m_cache.get_entry(url)) {
             m_current_url = url;
             m_url_bar.set_text(url);
             // record_visit must still fire: RenderState::base_url
@@ -287,14 +292,17 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
             // and visited_urls re-insertion is idempotent.
             m_pipeline.record_visit(url);
             update_nav_buttons();
-            render_html(*cached);
-            // Distinct message from a real fetch -- on localhost
-            // a hit and a fetch are both instantaneous, so the
-            // status text is the only reliable visual signal
-            // that the cache was consulted.
+            // ADR-025: re-render from cache with both HTML and
+            // external CSS -- no re-fetch. Both fields were stored
+            // together on the original successful load.
+            auto doc = honeybee::renderer::html::parse(entry->html);
+            render_with_preparsed_doc(std::move(doc),
+                                      entry->external_css);
             m_status_label.set_text(
                 "من الذاكرة، الحجم: " +
-                std::to_string(cached->size()) + " بايت");
+                std::to_string(entry->html.size() +
+                               entry->external_css.size()) +
+                " بايت");
             return;
         }
     }
@@ -365,11 +373,18 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
         // URL rather than against an empty base.
         m_pipeline.record_visit(url);
 
-        // ADR-020: cache the freshly-fetched body. Runs for
-        // every success -- New (pushes history + caches), Back
-        // (miss, defensive), Forward (miss, defensive), Reload
-        // (overwrites the previous entry with the fresh body).
-        m_cache.put(url, r.body);
+        // ADR-025: parse HTML once, then collect + fetch external
+        // CSS. parse() is reused for the subsequent render, so we
+        // don't pay double-parse cost.
+        auto doc = honeybee::renderer::html::parse(r.body);
+        std::string merged_css;
+        if (doc) {
+            merged_css = collect_and_fetch_css(*doc, url);
+        }
+
+        // ADR-025: cache HTML + external CSS together. Back/Forward
+        // re-renders from cache without re-fetching either.
+        m_cache.put(url, r.body, merged_css);
 
         // ADR-019: history bookkeeping. New pushes; Back/Forward
         // cursor was already moved by the caller; Reload doesn't
@@ -380,9 +395,8 @@ void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
         }
         update_nav_buttons();
 
-        // Run the full render pipeline (HTML -> layout -> paint).
-        render_html(r.body);
-
+        // Run the full render pipeline with merged CSS.
+        render_with_preparsed_doc(std::move(doc), std::move(merged_css));
 
         // تحديث شريط الحالة بحجم المحتوى الكامل.
         m_status_label.set_text(
@@ -457,6 +471,85 @@ void HoneyBeeWindow::render_html(const std::string& html) {
         set_title(title + " — HoneyBee");
     }
     m_drawing_area.queue_draw();
+}
+
+// =============================================================
+// ADR-025: render_with_preparsed_doc -- renders a pre-parsed
+// document with pre-fetched merged CSS. Symmetric to render_html;
+// handles the status/title/draw updates that render_html does.
+// =============================================================
+
+void HoneyBeeWindow::render_with_preparsed_doc(
+    std::unique_ptr<honeybee::renderer::dom::Document> doc,
+    std::string merged_css) {
+    m_pipeline.render_with_css(
+        std::move(doc), std::move(merged_css),
+        static_cast<float>(m_drawing_area.get_width()));
+    sync_drawing_area_size();
+    const std::string title = m_pipeline.title();
+    if (!title.empty()) {
+        set_title(title + " — HoneyBee");
+    }
+    m_drawing_area.queue_draw();
+}
+
+// =============================================================
+// ADR-025: collect_and_fetch_css -- walk the document, extract
+// inline <style> and external <link rel=stylesheet>, fetch the
+// external ones, concatenate everything into a single CSS string.
+//
+// Caps: max 10 external stylesheets, 5s total. Failures are
+// skipped (a page with some CSS is better than a blank page).
+//
+// Known v1 limitation: this blocks the main thread during the
+// synchronous CSS fetches (~200-500ms on Wikipedia). See ADR-025
+// Design Decisions.
+// =============================================================
+
+std::string HoneyBeeWindow::collect_and_fetch_css(
+    const honeybee::renderer::dom::Document& doc,
+    const std::string& base_url) {
+    constexpr std::size_t kMaxCssSources = 10;
+    constexpr auto kTimeout = std::chrono::seconds(5);
+
+    std::string merged_css;
+    std::size_t fetched_count = 0;
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+
+    for (const auto& src :
+         honeybee::renderer::html::collect_css_sources(doc)) {
+        if (src.inline_style) {
+            merged_css += src.content;
+            merged_css += "\n";
+            continue;
+        }
+        if (fetched_count >= kMaxCssSources) continue;
+        if (std::chrono::steady_clock::now() > deadline) continue;
+
+        // ADR-025: resolve protocol-relative URLs (//host/path)
+        // by inheriting the scheme from base_url; everything else
+        // goes through honeybee::resolve_url.
+        std::string css_url = src.content;
+        if (css_url.size() >= 2 && css_url[0] == '/' &&
+            css_url[1] == '/') {
+            const auto scheme_end = base_url.find("://");
+            if (scheme_end != std::string::npos) {
+                css_url = base_url.substr(0, scheme_end + 1) + css_url;
+            }
+        } else {
+            css_url = honeybee::resolve_url(css_url, base_url);
+        }
+
+        if (!honeybee::is_valid_url(css_url)) continue;
+
+        const auto css_resp = honeybee::net::fetch(css_url);
+        if (css_resp.success()) {
+            merged_css += css_resp.body;
+            merged_css += "\n";
+            ++fetched_count;
+        }
+    }
+    return merged_css;
 }
 
 // =============================================================
