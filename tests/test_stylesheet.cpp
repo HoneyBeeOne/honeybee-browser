@@ -634,3 +634,96 @@ TEST_CASE("media: @import still skipped",
     REQUIRE(s.rules.size() == 1);
     CHECK_FALSE(s.rules[0].media.has_value());
 }
+
+// =============================================================
+// ADR-028: grid-template shorthand expansion.
+// =============================================================
+
+TEST_CASE("grid-template: simple rows / columns expansion",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".x { grid-template: 1fr / 1fr 1fr }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    // Order: rows first, then columns.
+    CHECK(sheet.rules[0].declarations[0].property == "grid-template-rows");
+    CHECK(sheet.rules[0].declarations[0].value == "1fr");
+    CHECK(sheet.rules[0].declarations[1].property == "grid-template-columns");
+    CHECK(sheet.rules[0].declarations[1].value == "1fr 1fr");
+}
+
+TEST_CASE("grid-template: Wikipedia's actual shorthand",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".mw-page-container-inner { "
+        "grid-template: min-content 1fr min-content / 12.25rem minmax(0, 1fr) "
+        "}");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].property == "grid-template-rows");
+    CHECK(sheet.rules[0].declarations[0].value
+          == "min-content 1fr min-content");
+    CHECK(sheet.rules[0].declarations[1].property == "grid-template-columns");
+    CHECK(sheet.rules[0].declarations[1].value == "12.25rem minmax(0, 1fr)");
+}
+
+TEST_CASE("grid-template: preserves !important on both longhands",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".x { grid-template: 1fr / 1fr !important }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].important);
+    CHECK(sheet.rules[0].declarations[1].important);
+}
+
+TEST_CASE("grid-template: inline-areas form dropped (deferred)",
+          "[css][stylesheet][adr-028]") {
+    // ADR-028 Defers inline-areas form (`grid-template: "a a" 1fr / 1fr`).
+    // The parser drops such rules rather than misparsing them.
+    auto sheet = Stylesheet::parse(
+        ".x { grid-template: \"a a\" 1fr / 1fr 1fr }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("grid-template: malformed (no slash) dropped",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(".x { grid-template: 1fr }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("grid-template-columns alone is not a shorthand",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".x { grid-template-columns: 12.25rem minmax(0, 1fr) }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property
+          == "grid-template-columns");
+    CHECK(sheet.rules[0].declarations[0].value
+          == "12.25rem minmax(0, 1fr)");
+}
+
+TEST_CASE("grid-template-areas passes through unchanged",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".x { grid-template-areas: 'a a' 'b c' }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property
+          == "grid-template-areas");
+    CHECK(sheet.rules[0].declarations[0].value == "'a a' 'b c'");
+}
+
+TEST_CASE("grid-area on child element stored in ComputedStyle",
+          "[css][stylesheet][adr-028]") {
+    auto sheet = Stylesheet::parse(
+        ".sidebar { grid-area: columnStart }"
+        ".content { grid-area: pageContent }");
+    REQUIRE(sheet.rules.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].property == "grid-area");
+    CHECK(sheet.rules[0].declarations[0].value == "columnStart");
+    CHECK(sheet.rules[1].declarations[0].value == "pageContent");
+}
