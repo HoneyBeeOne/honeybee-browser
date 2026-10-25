@@ -461,17 +461,43 @@ grid verification):
 | Article content indents to right column | ✅ |
 | Navbox styling preserved (ADR-027) | ✅ |
 | Article body readable | ✅ |
-| **Article's vertical position within its cell** | ❌ ~660px too low (deferred) |
+| **Article's vertical position within its cell** | ✅ Correct (see MISDIAGNOSIS below) |
 | No crash, no regression | ✅ |
 
-The structural transform (columns side by side) DID happen. The
-article's vertical placement within its cell is offset by ~660px --
-"HTML" heading appears at y ≈ 730 instead of y ≈ 70. Root cause
-hypothesis (unverified): either the article's
-`.mw-content-container` child contains block children before its
-visible content, or its own internal layout adds top
-margin/padding not accounted for by grid row layout. Deferred to
-a follow-up commit or its own ADR.
+The structural transform (columns side by side) DID happen.
+
+**Article's vertical position: MISDIAGNOSIS (corrected post-verification).**
+
+Initial observation: HTML heading appeared at y ≈ 730 instead of
+y ≈ 70, which looked like a grid placement bug.
+
+Layout-tree dump disproved this. Grid places children correctly:
+
+    .mw-page-container-inner   y=585  h=60840
+      siteNotice (row 0)       y=585  h=48    correct
+      mw-content (row 1 col 2) y=633  h=60231 correct (585+48)
+      vector-column-start      y=678  h=0     correct (2.8rem margin-top + hidden nav)
+      mw-footer (row 2)        y=60863 h=561  correct
+
+Two independent facts explain the visual offset:
+
+1. **585px-tall header above the grid.** Wikipedia's header
+   (logo, search, hamburger, etc.) renders as full-height
+   stacked blocks because flex layout is not implemented.
+   ADR-029 territory, not ADR-028's.
+
+2. **Sidebar content is intentionally hidden.** Wikipedia's
+   CSS sets `visibility: hidden` on `.vector-main-menu` and
+   `display: none` on `.vector-main-menu-landmark` in JS-off
+   state. The visible "sidebar-like" content in screenshots
+   comes from header dropdowns rendered as a vertical list
+   (again, flex not implemented). The `.vector-column-start`
+   container correctly has h=0.
+
+**Net: no bug in ADR-028.** Grid placement is 100% correct.
+The "660px offset" was 585px header + 45px sidebar
+margin-top, seen together. The real visual improvement
+requires ADR-029 (flex layout).
 
 ### The URL bug discovery (the actual biggest deliverable)
 
@@ -514,7 +540,6 @@ preserve their historical record.
 - All three prior ADRs' features actually reach the cascade.
 
 **Didn't ship (deferred):**
-- Article vertical position within its cell (~660px off).
 - Grid auto-flow (only named-area placement).
 - `inline-grid`, `subgrid`, `repeat()`, `auto`, `max-content`,
   `fit-content()`, line-based `grid-column`/`grid-row`.
