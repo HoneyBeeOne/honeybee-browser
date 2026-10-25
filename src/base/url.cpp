@@ -66,7 +66,38 @@ std::string resolve_url(const std::string& href,
         dir.push_back('/');  // "http://example.com" -> "...com/"
     }
 
-    if (href[0] == '/') return dir + href.substr(1);
+    if (href[0] == '/') {
+        // Root-relative URL (e.g. "/w/load.php"): resolve against
+        // the ORIGIN (scheme + host), not the base directory.
+        // Per RFC 3986 §5.2.2, "/path" replaces the entire path
+        // component of the base URL.
+        //
+        // Prior to ADR-028 this branch concatenated onto `dir`
+        // (base with last segment stripped), which is correct for
+        // bases without subdirectories ("https://example.com/page"
+        // -> dir = "https://example.com/") but wrong for bases
+        // with subdirectories ("https://en.wikipedia.org/wiki/HTML"
+        // -> dir = "https://en.wikipedia.org/wiki/", producing
+        // "https://en.wikipedia.org/wiki/w/load.php" when it should
+        // be "https://en.wikipedia.org/w/load.php").
+        //
+        // Wikipedia exposes this bug because its base URL has a
+        // "/wiki/" subdirectory, and its external CSS/JS hrefs are
+        // root-relative ("/w/load.php"). Every external CSS fetch
+        // was silently 404ing, so external CSS never actually
+        // reached the cascade. That's why ADR-025/026/027's
+        // "external CSS loading" was really inline <style> doing
+        // the work, and why ADR-028's grid rules (external-only)
+        // never fired.
+        const auto scheme_end = dir.find("://");
+        if (scheme_end == std::string::npos) return dir + href;
+        const auto host_end = dir.find('/', scheme_end + 3);
+        const std::string origin =
+            (host_end == std::string::npos)
+                ? dir.substr(0, dir.size() - 1)  // strip trailing '/'
+                : dir.substr(0, host_end);
+        return origin + href;
+    }
     return dir + href;
 }
 

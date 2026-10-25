@@ -10,6 +10,7 @@ add_library(honeybee_lib
   renderer/css/hover_sensitivity.cpp
   renderer/css/ua_stylesheet.cpp
   renderer/layout/style_values.cpp
+  renderer/layout/grid_layout.cpp
   renderer/layout/layout.cpp
   renderer/layout/text_utils.cpp
   renderer/paint/paint.cpp

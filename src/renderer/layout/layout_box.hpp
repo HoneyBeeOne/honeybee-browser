@@ -38,7 +38,12 @@ struct Color {
 
 // CSS display value (ADR-016). None and the layout modes
 // (flex/grid/table) are deferred; v1 has Block and Inline.
-enum class Display : std::uint8_t { Block, Inline, None };
+// ADR-028: Grid added. `display: grid` parses to this value and
+// is dispatched to layout_grid in Commit 2. In Commit 1 (this
+// commit), Grid still falls through to block layout --
+// behavior-neutral. Same isolation discipline as ADR-025/026/027's
+// Commit 1.
+enum class Display : std::uint8_t { Block, Inline, None, Grid };
 
 // Text direction for a block container (ADR-016). Resolved from
 // the dir attribute on the element or its ancestors; defaults to

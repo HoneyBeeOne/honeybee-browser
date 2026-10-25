@@ -380,3 +380,33 @@ Caps (10 sheets, 5s) comfortably covered Wikipedia's 2 stylesheets. No failures 
 
 `render(html, width)` is now a thin wrapper over `render_with_css(parse(html), inline_css_only, width)`. Every existing test that relied on inline `<style>` being applied continues to pass unchanged (288 cases / 1239 assertions). The refactor was noted in Commit 1's message as an intentional refinement over the ADR's original wording ("render delegates with empty CSS"), because empty CSS would break dozens of `test_layout.cpp` tests. Behaviorally equivalent to pre-ADR-025 for the inline-only case.
 
+## Post-ADR-028 correction (external CSS was silently 404ing)
+
+During ADR-028's verification, a root-relative URL resolution bug
+was discovered in `base/url.cpp`: `/path` hrefs were resolving
+against the base URL's **directory** (including subdirectories)
+instead of its **origin** (scheme + host).
+
+Wikipedia's external CSS is served at root-relative URLs
+(`/w/load.php?...`) with a base URL containing a `/wiki/`
+subdirectory. Fetch URLs became
+`https://en.wikipedia.org/wiki/w/load.php?...` -- a 404.
+
+**Every external CSS fetch on Wikipedia has been silently 404ing
+since ADR-025.** The visible deltas measured in this ADR were
+real, but they came from inline `<style>` tags (Wikipedia's
+TemplateStyles extension emits ~20KB of inline CSS in `<body>`),
+not from the external 222KB of CSS that this ADR was supposed to
+be loading.
+
+Fixed in ADR-028's Commit 2a. Post-fix, this ADR's features
+actually reach the cascade on Wikipedia, and the true visible
+delta is larger than measured at the time.
+
+The four regression tests added with the fix cover subdirectory
+bases (`/wiki/HTML`), multi-level subdirectory bases, host-only
+bases, and bases with ports. The gap in the original test suite
+was that every URL-resolution test used a base without a
+subdirectory -- the dir==origin case produces identical results,
+masking the bug.
+

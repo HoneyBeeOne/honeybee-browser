@@ -1,4 +1,5 @@
 #include "renderer/layout/layout.hpp"
+#include "renderer/layout/grid_layout.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -361,27 +362,158 @@ LayoutBox layout_element(const dom::Element& el,
         box.children.push_back(std::move(ctx));
     };
 
-    for (const auto& child : el.children()) {
-        if (child->type() == dom::NodeType::Element) {
-            const auto& child_el = static_cast<const dom::Element&>(*child);
-            const css::ComputedStyle* child_style = lookup(styles, child_el);
-            if (display_of(child_style) == Display::None) continue;
-            if (display_of(child_style) == Display::Inline) {
+    // ADR-028: block/inline children layout. Reused by the grid
+    // path's fallback (grid without a parsed template degrades to
+    // block) and by the standard block path.
+    auto layout_block_children = [&]() {
+        for (const auto& child : el.children()) {
+            if (child->type() == dom::NodeType::Element) {
+                const auto& child_el = static_cast<const dom::Element&>(*child);
+                const css::ComputedStyle* child_style = lookup(styles, child_el);
+                if (display_of(child_style) == Display::None) continue;
+                if (display_of(child_style) == Display::Inline) {
+                    inline_run.push_back(child.get());
+                    continue;
+                }
+                flush_inline_run();
+                auto child_box = std::make_unique<LayoutBox>(
+                    layout_element(child_el, styles, measurer, content_x, cursor_y,
+                                   content_w, own_font_size, root_font_size,
+                                   own_dir));
+                cursor_y = child_box->y + child_box->height + child_box->margin[2];
+                box.children.push_back(std::move(child_box));
+            } else if (child->type() == dom::NodeType::Text) {
                 inline_run.push_back(child.get());
-                continue;
             }
-            flush_inline_run();
-            auto child_box = std::make_unique<LayoutBox>(
-                layout_element(child_el, styles, measurer, content_x, cursor_y,
-                               content_w, own_font_size, root_font_size,
-                               own_dir));
-            cursor_y = child_box->y + child_box->height + child_box->margin[2];
-            box.children.push_back(std::move(child_box));
-        } else if (child->type() == dom::NodeType::Text) {
-            inline_run.push_back(child.get());
+        }
+        flush_inline_run();
+    };
+
+    // ADR-028: grid layout dispatch. If this element's display is
+    // grid AND its ComputedStyle declares a parseable template,
+    // dispatch to grid children layout. Otherwise (grid without
+    // template, or any non-grid display) fall through to block.
+    bool grid_handled = false;
+    if (display_of(style) == Display::Grid && style) {
+        auto tmpl = parse_grid_template(*style, ctx);
+        if (tmpl && !tmpl->columns.empty()) {
+            // Parse column-gap (fallback 0).
+            float col_gap = 0.0f;
+            if (const auto g = style->get("column-gap");
+                g && !is_auto(*g)) {
+                col_gap = parse_length(*g, ctx);
+            }
+
+            const auto col_widths = compute_column_widths(
+                tmpl->columns, content_w, col_gap);
+
+            struct PlacedChild {
+                std::unique_ptr<LayoutBox> box;
+                int row = 0;
+                int col = 0;
+                int row_span = 1;
+                int col_span = 1;
+            };
+            std::vector<PlacedChild> placed;
+
+            // Layout each direct child at y=0 within its cell's
+            // horizontal bounds. Y position comes after row heights
+            // are computed.
+            for (const auto& child : el.children()) {
+                if (child->type() != dom::NodeType::Element) continue;
+                const auto& child_el =
+                    static_cast<const dom::Element&>(*child);
+                const css::ComputedStyle* child_style =
+                    lookup(styles, child_el);
+                if (display_of(child_style) == Display::None) continue;
+
+                if (!child_style) continue;
+                const auto ga = child_style->get("grid-area");
+                if (!ga) continue;  // v1: children without grid-area skipped
+                auto area_it = tmpl->areas.find(*ga);
+                if (area_it == tmpl->areas.end()) continue;
+
+                const int row = area_it->second.row;
+                const int col = area_it->second.col;
+                const int row_span = area_it->second.row_span;
+                const int col_span = area_it->second.col_span;
+
+                // Cell X position = content_x + sum of widths before
+                // + gaps before.
+                float cell_x = content_x;
+                for (int c = 0;
+                     c < col && c < static_cast<int>(col_widths.size());
+                     ++c) {
+                    cell_x += col_widths[c] + col_gap;
+                }
+                float cell_w = 0.0f;
+                for (int c = col;
+                     c < col + col_span &&
+                     c < static_cast<int>(col_widths.size());
+                     ++c) {
+                    cell_w += col_widths[c];
+                }
+                if (col_span > 1) cell_w += col_gap * (col_span - 1);
+
+                auto child_box = std::make_unique<LayoutBox>(
+                    layout_element(child_el, styles, measurer, cell_x, 0.0f,
+                                   cell_w, own_font_size, root_font_size,
+                                   own_dir));
+                PlacedChild pc;
+                pc.box = std::move(child_box);
+                pc.row = row;
+                pc.col = col;
+                pc.row_span = row_span;
+                pc.col_span = col_span;
+                placed.push_back(std::move(pc));
+            }
+
+            // Compute row heights: max natural content height across
+            // children placed at each row. For Fr and Auto rows,
+            // natural content height is the flow-layout resolution
+            // (ADR-028 v1).
+            int num_rows = static_cast<int>(tmpl->rows.size());
+            if (num_rows < 1) num_rows = 1;
+            for (const auto& pc : placed) {
+                if (pc.row + pc.row_span > num_rows) {
+                    num_rows = pc.row + pc.row_span;
+                }
+            }
+            std::vector<float> row_heights(num_rows, 0.0f);
+            for (const auto& pc : placed) {
+                if (pc.row < num_rows &&
+                    pc.box->height > row_heights[pc.row]) {
+                    row_heights[pc.row] = pc.box->height;
+                }
+            }
+
+            // Row Y positions: cumulative from content_y, no row gap
+            // by default (Wikipedia uses column-gap only).
+            std::vector<float> row_y(num_rows, content_y);
+            for (int r = 1; r < num_rows; ++r) {
+                row_y[r] = row_y[r-1] + row_heights[r-1];
+            }
+
+            // Shift each child to its row's Y position and append.
+            for (auto& pc : placed) {
+                if (pc.row < num_rows) {
+                    shift_subtree_y(*pc.box, row_y[pc.row]);
+                }
+                box.children.push_back(std::move(pc.box));
+            }
+
+            // Update cursor_y for the final box.height computation.
+            float total_h = 0.0f;
+            for (float h : row_heights) total_h += h;
+            cursor_y = content_y + total_h;
+
+            grid_handled = true;
         }
     }
-    flush_inline_run();
+
+    if (!grid_handled) {
+        layout_block_children();
+    }
 
     box.width = content_w
               + box.padding[3] + box.padding[1]
@@ -410,6 +542,7 @@ Display display_of(const css::ComputedStyle* style) {
     if (!v) return Display::Block;
     if (*v == "inline") return Display::Inline;
     if (*v == "none") return Display::None;
+    if (*v == "grid") return Display::Grid;  // ADR-028
     return Display::Block;
 }
 

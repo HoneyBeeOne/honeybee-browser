@@ -39,6 +39,7 @@ HoneyBee is at **v0.1.0 (first paint)**. It parses HTML, cascades CSS, lays out 
 | Large-page scrolling + hover | :white_check_mark: (link hover ~20ms; wrapper hover ~8ms) |
 | External CSS loading (`<link rel=stylesheet>`) | :white_check_mark: (article content styled; layout deferred to ADR-026/027) |
 | @media queries (viewport filtering) | :white_check_mark: (52% of blocks fire at 1024; layout transform deferred to layout-engine ADR) |
+| CSS grid layout (`display: grid`) | :white_check_mark: (fixed/fr tracks + named areas; article-cell vertical positioning deferred) |
 | CSS variables (`:root` + `var()`) | :white_check_mark: (infrastructure; visible win deferred to ADR-027/028) |
 | `@media` queries | :x: |
 | `border-radius`, `box-shadow` | :x: |

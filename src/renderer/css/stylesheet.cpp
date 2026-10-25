@@ -193,8 +193,70 @@ bool is_box_shorthand(std::string_view prop) {
 
 // Push one declaration, expanding if it's a box shorthand.
 // ADR-012: 1/2/3/4 tokens -> top/right/bottom/left longhands.
+// ADR-028: expand `grid-template: <rows> / <columns>` into two
+// longhand declarations (`grid-template-rows`, `grid-template-columns`).
+// Follows ADR-012's shorthand expansion pattern.
+//
+// Conservative scope:
+//   - No inline-areas form (`grid-template: 'a a' 1fr / 1fr 1fr`)
+//     -- that's deferred per ADR-028's Deferred section. Rules
+//     with quotes in the shorthand are dropped (safe).
+//   - Requires exactly one top-level `/` separator. Malformed
+//     input drops the declaration.
+//
+// The parser does NOT validate track syntax (e.g. `minmax(0, 1fr)`).
+// Track parsing happens at layout time; malformed tracks degrade
+// to auto-flow there. This keeps parse-time logic string-only,
+// matching how `margin`, `width`, etc. already work.
+bool try_expand_grid_template(std::string_view value, bool important,
+                              std::vector<Declaration>& out) {
+    // Reject inline-areas form (quotes) -- deferred.
+    if (value.find('\'') != std::string_view::npos ||
+        value.find('"') != std::string_view::npos) {
+        return false;
+    }
+
+    // Find the first `/` outside any parens. Parenthesized values
+    // like minmax(0, 1fr) contain no `/` today, but tracking
+    // depth is ~3 lines and safe for future track functions.
+    std::size_t slash = std::string_view::npos;
+    int depth = 0;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const char c = value[i];
+        if (c == '(') ++depth;
+        else if (c == ')' && depth > 0) --depth;
+        else if (c == '/' && depth == 0) { slash = i; break; }
+    }
+    if (slash == std::string_view::npos) return false;
+
+    const std::string rows = trim(value.substr(0, slash));
+    const std::string cols = trim(value.substr(slash + 1));
+    if (rows.empty() || cols.empty()) return false;
+
+    Declaration d_rows;
+    d_rows.property = "grid-template-rows";
+    d_rows.value = rows;
+    d_rows.important = important;
+    out.push_back(std::move(d_rows));
+
+    Declaration d_cols;
+    d_cols.property = "grid-template-columns";
+    d_cols.value = cols;
+    d_cols.important = important;
+    out.push_back(std::move(d_cols));
+
+    return true;
+}
+
 void expand_shorthand(std::string_view property, std::string_view value,
                       bool important, std::vector<Declaration>& out) {
+    // ADR-028: grid-template shorthand.
+    if (property == "grid-template") {
+        if (try_expand_grid_template(value, important, out)) return;
+        // Malformed or inline-areas form: drop declaration entirely.
+        return;
+    }
+
     if (!is_box_shorthand(property)) {
         Declaration d;
         d.property = std::string(property);

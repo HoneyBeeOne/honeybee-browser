@@ -563,3 +563,18 @@ TEST_CASE("media: print @media never fires (dropped at parse)",
         CHECK_FALSE(styles.at(p).get("color").has_value());
     }
 }
+
+// =============================================================
+// ADR-028: display: grid parse-through.
+// =============================================================
+
+TEST_CASE("cascade: display: grid reaches ComputedStyle",
+          "[css][cascade][adr-028]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><div class=\"x\"></div></body></html>");
+    auto sheet = css::Stylesheet::parse(".x { display: grid }");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    const auto* div = doc->find_element("div");
+    REQUIRE(div);
+    CHECK(styles.at(div).get("display").value_or("") == "grid");
+}

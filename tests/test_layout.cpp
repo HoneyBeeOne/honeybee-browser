@@ -706,7 +706,12 @@ TEST_CASE("display_of: explicit none", "[layout][display]") {
 
 TEST_CASE("display_of: unknown value falls back to Block",
           "[layout][display]") {
-    auto doc = run("<p>test</p>", "p { display: grid }");
+    // ADR-028 note: `display: grid` is now a supported value
+    // (returns Display::Grid, verified elsewhere). Using `flex`
+    // here -- genuinely unknown today, becomes known in ADR-029 --
+    // preserves the test's original intent (unknown display value
+    // falls back to Block).
+    auto doc = run("<p>test</p>", "p { display: flex }");
     const auto* p = doc.doc->find_element("p");
     REQUIRE(p != nullptr);
     auto it = doc.styles.find(p);
@@ -1466,4 +1471,108 @@ TEST_CASE("layout: <style> nested in inline element is hidden",
 
     CHECK(found_before);
     CHECK(found_after);
+}
+
+// =============================================================
+// ADR-028: end-to-end grid layout.
+// =============================================================
+
+TEST_CASE("layout: 2-column grid places children at cells",
+          "[layout][grid][adr-028]") {
+    // Simple 2-column grid: sidebar (12rem) + content (1fr).
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class=\"g\">"
+        "<div class=\"sidebar\">S</div>"
+        "<div class=\"content\">C</div>"
+        "</div>"
+        "</body></html>");
+    REQUIRE(doc);
+
+    auto sheet = css::Stylesheet::parse(
+        // Reset body margin so the grid container starts at x=0.
+        // Without this, UA's default body { margin: 8px } would
+        // shift the whole grid right by 8px, muddying the test's
+        // assertions about cell positions.
+        "body { margin: 0 }"
+        ".g { display: grid; "
+        "     grid-template-columns: 12rem minmax(0, 1fr); "
+        "     grid-template-areas: 'sidebar content'; "
+        "     column-gap: 0 }"
+        ".sidebar { grid-area: sidebar }"
+        ".content { grid-area: content }");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    auto root = layout::layout(*doc, styles, fake_measure, 800.0f);
+
+    const auto* sidebar = doc->find_element("div");
+    REQUIRE(sidebar);
+    // Find the .g box, then its children.
+    std::function<const layout::LayoutBox*(const layout::LayoutNode&,
+        const honeybee::renderer::dom::Element*)> find_box =
+        [&](const layout::LayoutNode& n,
+            const honeybee::renderer::dom::Element* target)
+            -> const layout::LayoutBox* {
+            if (n.kind == layout::LayoutKind::Box) {
+                const auto& b = static_cast<const layout::LayoutBox&>(n);
+                if (b.element == target) return &b;
+                for (const auto& c : b.children) {
+                    if (auto r = find_box(*c, target)) return r;
+                }
+            }
+            return nullptr;
+        };
+
+    const auto* g_el = doc->find_element("div");
+    // find_element returns first div, which IS .g. Get children.
+    REQUIRE(g_el);
+    std::vector<const honeybee::renderer::dom::Element*> divs;
+    std::function<void(const honeybee::renderer::dom::Node&)> walk =
+        [&](const honeybee::renderer::dom::Node& n) {
+            using namespace honeybee::renderer::dom;
+            if (n.type() == NodeType::Element) {
+                const auto& el = static_cast<const Element&>(n);
+                if (el.tag() == "div") divs.push_back(&el);
+            }
+            for (const auto& c : n.children()) walk(*c);
+        };
+    walk(*doc);
+    REQUIRE(divs.size() >= 3);  // .g, .sidebar, .content
+
+    const auto* g_box = find_box(root, divs[0]);
+    REQUIRE(g_box);
+    // .g should have 2 children placed horizontally.
+    REQUIRE(g_box->children.size() == 2);
+
+    // Find sidebar and content boxes by element.
+    const auto* sidebar_box = find_box(root, divs[1]);
+    const auto* content_box = find_box(root, divs[2]);
+    REQUIRE(sidebar_box);
+    REQUIRE(content_box);
+
+    // Sidebar starts at the left edge, content at 12rem (192px).
+    CHECK(sidebar_box->x == 0.0f);
+    CHECK(content_box->x == 192.0f);
+
+    // Sidebar width is 192px; content fills the rest.
+    CHECK(sidebar_box->width == 192.0f);
+    CHECK(content_box->width == 608.0f);  // 800 - 192
+}
+
+TEST_CASE("layout: grid with no template falls back to block",
+          "[layout][grid][adr-028]") {
+    // display: grid without grid-template-columns: no template to
+    // dispatch on -> layout_block_children runs.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class=\"g\"><p>A</p><p>B</p></div>"
+        "</body></html>");
+    REQUIRE(doc);
+
+    auto sheet = css::Stylesheet::parse(
+        ".g { display: grid }");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+    auto root = layout::layout(*doc, styles, fake_measure, 800.0f);
+
+    // No crash, layout produces positive height (falls back to block).
+    CHECK(root.height > 0.0f);
 }
