@@ -1340,3 +1340,38 @@ TEST_CASE("RenderPipeline::restyle reverts <a> hover on ancestor hover",
     // cascade produces, which the assert_maps_equal already checks.
     (void)a_color;
 }
+
+// =============================================================
+// ADR-025: external CSS loading.
+// =============================================================
+
+TEST_CASE("RenderPipeline::render_with_css applies external CSS",
+          "[render-pipeline][external-css]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p class=\"x\">hello</p></body></html>");
+    REQUIRE(doc);
+
+    honeybee::browser::RenderPipeline p;
+    p.render_with_css(std::move(doc),
+                       ".x { color: #FF0000 }",
+                       800.0f);
+
+    const auto* p_el = p.doc()->find_element("p");
+    REQUIRE(p_el);
+    const auto color = p.styles().at(p_el).get("color");
+    REQUIRE(color.has_value());
+    CHECK(*color == "#FF0000");
+}
+
+TEST_CASE("RenderPipeline::render_with_css handles empty CSS",
+          "[render-pipeline][external-css]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p>plain</p></body></html>");
+    REQUIRE(doc);
+
+    honeybee::browser::RenderPipeline p;
+    p.render_with_css(std::move(doc), std::string{}, 800.0f);
+
+    CHECK(p.has_page());
+    CHECK(p.layout_height() > 0.0f);
+}

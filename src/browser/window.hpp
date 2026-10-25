@@ -211,4 +211,18 @@ private:
 
     // Run the full pipeline and repaint.
     void render_html(const std::string& html);
+
+    // ADR-025: render a pre-parsed DOM with pre-fetched merged CSS.
+    // Used by the navigation callback after fetching external
+    // stylesheets, and by the Back/Forward cache-hit path.
+    void render_with_preparsed_doc(
+        std::unique_ptr<honeybee::renderer::dom::Document> doc,
+        std::string merged_css);
+
+    // ADR-025: collect and fetch external CSS referenced by `doc`,
+    // merging with inline <style> content. Applies caps: max 10
+    // stylesheets, 5s total. Failures are skipped.
+    std::string collect_and_fetch_css(
+        const honeybee::renderer::dom::Document& doc,
+        const std::string& base_url);
 };

@@ -105,6 +105,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Meta-lesson-v2: predictions need a complete code-path model,
   not just component measurements.
 
+- **External CSS loading** (ADR-025): external stylesheets
+  (`<link rel="stylesheet">`) are now fetched, parsed, and
+  applied alongside inline `<style>` CSS. Verified visually on
+  Wikipedia's HTML article: article-body typography, heading
+  hierarchy, inline link styling, citation markers, and
+  references formatting are all transformed; sidebar link colors
+  partially improved. Sidebar/header/TOC **layout** remains
+  UA-default (blocked by `@media` and `:root`; ADR-026/027 close
+  those gaps). Page cache now stores `(html, external_css)` per
+  URL, so Back/Forward re-render without re-fetching.
+
+  Notable finding: 27% parser acceptance translated to ~40-50%
+  visual improvement (higher than expected). The parseable rules
+  concentrated in content-typography; the unparseable 73% is
+  dominated by layout rules. Acceptance rates alone don't predict
+  user-visible impact -- visual verification is what revealed the
+  concentration.
+
+  Deferred (three-ADR continuation): ADR-026 (`:root` + `var()`),
+  ADR-027 (`@media`), ADR-028 (`:not()` + attribute operators).
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after

@@ -14,6 +14,7 @@ add_library(honeybee_lib
   renderer/layout/text_utils.cpp
   renderer/paint/paint.cpp
   renderer/html/convert.cpp
+  renderer/html/css_sources.cpp
   renderer/html/preview.cpp
   # ADR-021: moved from honeybee executable so tests can link
   # against RenderPipeline and PangoText. Both are GTK-free

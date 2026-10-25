@@ -88,3 +88,55 @@ TEST_CASE("PageCache: empty body is a valid cache entry",
     CHECK(body->empty());
     CHECK(c.bytes() == 0);
 }
+
+// =============================================================
+// ADR-025: PageCache extension for external CSS.
+// =============================================================
+
+TEST_CASE("PageCache: get_entry returns html + external_css",
+          "[page-cache]") {
+    using honeybee::browser::CacheEntry;
+    honeybee::browser::PageCache c;
+    c.put("https://a.example/", "<p>A</p>", ".x { color: red }");
+    auto e = c.get_entry("https://a.example/");
+    REQUIRE(e.has_value());
+    CHECK(e->html == "<p>A</p>");
+    CHECK(e->external_css == ".x { color: red }");
+}
+
+TEST_CASE("PageCache: get_entry on missing URL returns nullopt",
+          "[page-cache]") {
+    honeybee::browser::PageCache c;
+    CHECK_FALSE(c.get_entry("https://missing.example/").has_value());
+}
+
+TEST_CASE("PageCache: compat put(url, html) yields empty external_css",
+          "[page-cache]") {
+    honeybee::browser::PageCache c;
+    c.put("A", "hello");
+    auto e = c.get_entry("A");
+    REQUIRE(e.has_value());
+    CHECK(e->html == "hello");
+    CHECK(e->external_css.empty());
+}
+
+TEST_CASE("PageCache: bytes() sums html + external_css",
+          "[page-cache]") {
+    honeybee::browser::PageCache c;
+    c.put("A", "hello", "world");     // 5 + 5 = 10
+    c.put("B", "abc", "defghij");     // 3 + 7 = 10
+    CHECK(c.bytes() == 20);
+    c.put("A", "hi", "x");            // 2 + 1 = 3, replaces 10
+    CHECK(c.bytes() == 13);
+}
+
+TEST_CASE("PageCache: overwrite replaces external_css",
+          "[page-cache]") {
+    honeybee::browser::PageCache c;
+    c.put("A", "old html", "old css");
+    c.put("A", "new html", "new css");
+    auto e = c.get_entry("A");
+    REQUIRE(e.has_value());
+    CHECK(e->html == "new html");
+    CHECK(e->external_css == "new css");
+}

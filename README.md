@@ -37,6 +37,7 @@ HoneyBee is at **v0.1.0 (first paint)**. It parses HTML, cascades CSS, lays out 
 | Back / forward navigation | :white_check_mark: |
 | Instant Back/Forward (session cache) | :white_check_mark: |
 | Large-page scrolling + hover | :white_check_mark: (link hover ~20ms; wrapper hover ~8ms) |
+| External CSS loading (`<link rel=stylesheet>`) | :white_check_mark: (article content styled; layout deferred to ADR-026/027) |
 | `@media` queries | :x: |
 | `border-radius`, `box-shadow` | :x: |
 

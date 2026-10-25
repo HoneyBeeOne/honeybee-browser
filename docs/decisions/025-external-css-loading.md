@@ -1,6 +1,6 @@
 # ADR-025: External CSS Loading
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-25
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-009 (CSS parser), ADR-014 (UA stylesheet), ADR-018 (pseudo-classes), ADR-020 (page cache), ADR-021 (restyle), ADR-024 (transition check)
@@ -323,3 +323,60 @@ ADR-025 is complete when:
       section
 - [ ] `main` is green: 271 + N cases, all pass, zero warnings
 - [ ] ADR-025 status -> Implemented in Commit 3
+
+## Implementation
+
+Implemented on `feat/external-css-loading` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `6ab6c47` | `collect_css_sources` helper (walks DOM, extracts `<style>` + `<link rel=stylesheet>` in document order, idempotent HTML-entity decode of href). `PageCache` extended to `CacheEntry { html, external_css }` with backward-compatible shims. |
+| `1f9b739` | `RenderPipeline::render_with_css` API. `render(html, width)` delegates via `collect_css_sources` filtered to inline. `relayout()` and `restyle()` use `merged_css_` instead of re-extracting. `window.cpp`: sync fetch loop with caps (10 stylesheets, 5s), fail-graceful per sheet, protocol-relative URL handling. Cache-hit path re-renders from cached `(html, css)`. |
+| (this commit) | Docs: ADR-025 status -> Implemented, README + CHANGELOG, measured delta. |
+
+### Measured visual delta on Wikipedia's HTML article
+
+Verified by screenshots at three scroll positions (top, article body, references). Browser blocked ~500ms-1s on navigation (2 stylesheets × ~110KB each, well under the 10-sheet/5s caps).
+
+| Feature | Predicted | Observed |
+|---|---|---|
+| Article body typography (sans-serif, line-height) | YES | **YES** |
+| Inline link styling + underlines | — | **YES** |
+| Heading hierarchy (H2/H3 sized) | — | **YES** |
+| Citation markers (`[a]`, `[3]`) superscripted | — | **YES** |
+| References: numbered list + hanging indents | YES | **YES** |
+| References: backlink markers styled | — | **YES** |
+| Sidebar: link colors | NO | **PARTIAL YES** (dark colors applied) |
+| Sidebar: column layout / box structure | NO | **NO** (blocked by `@media` / `:root`) |
+| Header: bar layout | NO | **NO** |
+| TOC: list-with-structure | NO | **NO** |
+
+**Escape hatch did not fire.** ADR-025's Verification section specified "if <2 of 3 expected-YES checks pass, ship anyway but document the smaller delta." Two expected-YES checks (article body, references) passed cleanly, plus a partial improvement on the sidebar (link colors) above prediction.
+
+### The 27% -> 40-50% surprise (worth documenting)
+
+ADR-025's Context measured 27.0% parser acceptance (390 of 1,443 rules) and honestly predicted this would translate to "article content styling improves... does NOT deliver Wikipedia-looks-like-Wikipedia." That prediction was **too conservative**: 27% acceptance produced ~40-50% visual improvement.
+
+**Why**: the parseable 27% concentrated in **article-content** rules -- typography, spacing, colors, heading hierarchy, list indentation. The unparseable 73% is dominated by **layout** rules (columns, positioning, responsive breakpoints). Layout rules determine the page's structural look; content rules determine readability. The 27% happened to capture almost all of the readability win.
+
+This is the same class of finding as ADR-023's "2,500 `<a>` per wrapper, not 10" and ADR-024's "measured prediction missed by 3x because the code path was different than modeled." **Acceptance rates alone don't predict user-visible impact; you have to look at what the accepted rules target.** The visual verification (screenshots) is what revealed the concentration -- the parser-acceptance number did not.
+
+### Deferred and confirmed-inactive (unchanged from ADR-025's Deferred section)
+
+The measurement before implementation identified these as blockers for the 73% rejection. The visual result confirms which ones matter for which elements:
+
+- `:root` + `var()` (ADR-026): 255 accepted rules become visible once variables resolve. Likely unlocks sidebar/link colors more completely, plus more content typography.
+- `@media` blocks (ADR-027): 72 blocks. Almost certainly contains the Vector skin column/layout rules. Unlocks sidebar structure, header, TOC layout.
+- `:not()` + attribute operators (ADR-028): 391 + ~150 rules. Polish.
+- `::before`/`::after`: 98 rules, decorative. Larger ADR.
+
+### Synchronous fetch timing (measured, not estimated)
+
+Wikipedia navigation with CSS fetch: ~500ms-1s longer than the pre-ADR-025 baseline. The HTML fetch already blocked 1-3s; the CSS fetch is in the same UX tier ("frozen during navigation"). ADR-025's Design Decisions section said "if this becomes unacceptable, async fetch is a future ADR." Not triggered: the block felt like part of navigation, not a separate delay.
+
+Caps (10 sheets, 5s) comfortably covered Wikipedia's 2 stylesheets. No failures observed.
+
+### Behavior-preservation note
+
+`render(html, width)` is now a thin wrapper over `render_with_css(parse(html), inline_css_only, width)`. Every existing test that relied on inline `<style>` being applied continues to pass unchanged (288 cases / 1239 assertions). The refactor was noted in Commit 1's message as an intentional refinement over the ADR's original wording ("render delegates with empty CSS"), because empty CSS would break dozens of `test_layout.cpp` tests. Behaviorally equivalent to pre-ADR-025 for the inline-only case.
+
