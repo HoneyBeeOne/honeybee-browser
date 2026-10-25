@@ -40,10 +40,22 @@ bool beats(const CascadeValue& a, const CascadeValue& b) {
     return b.specificity < a.specificity;
 }
 
+// ADR-027: does the rule's media query match the current viewport?
+// Rules with no media field (nullopt) always match. Rules with a
+// populated MediaQuery match if all populated bounds are satisfied.
+bool media_matches(const std::optional<MediaQuery>& mq, float vw) {
+    if (!mq) return true;  // top-level rule, no condition
+    if (mq->min_width_px && vw < *mq->min_width_px) return false;
+    if (mq->max_width_px && vw > *mq->max_width_px) return false;
+    return true;
+}
+
 void apply_rule(const Rule& rule, const dom::Element& el,
                 Origin origin, std::size_t& counter,
-                const RenderState& state, ComputedStyle& style) {
+                const RenderState& state, float viewport_width,
+                ComputedStyle& style) {
     ++g_apply_rule_call_count;
+    if (!media_matches(rule.media, viewport_width)) return;
     auto spec = rule.selectors.matches(el, state);
     if (!spec) return;
 
@@ -68,21 +80,25 @@ void compute_styles(const dom::Node& node,
                     const Stylesheet& ua_sheet,
                     const Stylesheet& author_sheet,
                     const RenderState& state,
+                    float viewport_width,
                     ComputedStyleMap& out) {
     if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
         ComputedStyle style;
         std::size_t counter = 0;
         for (const auto& rule : ua_sheet.rules) {
-            apply_rule(rule, el, Origin::UserAgent, counter, state, style);
+            apply_rule(rule, el, Origin::UserAgent, counter, state,
+                       viewport_width, style);
         }
         for (const auto& rule : author_sheet.rules) {
-            apply_rule(rule, el, Origin::Author, counter, state, style);
+            apply_rule(rule, el, Origin::Author, counter, state,
+                       viewport_width, style);
         }
         out[&el] = std::move(style);
     }
     for (const auto& child : node.children()) {
-        compute_styles(*child, ua_sheet, author_sheet, state, out);
+        compute_styles(*child, ua_sheet, author_sheet, state,
+                       viewport_width, out);
     }
 }
 
@@ -134,8 +150,10 @@ ComputedStyle::get(const std::string& property) const {
 
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
-                         const dom::Document& doc) {
-    return cascade(ua_sheet, author_sheet, doc, RenderState{});
+                         const dom::Document& doc,
+                         float viewport_width) {
+    return cascade(ua_sheet, author_sheet, doc, RenderState{},
+                   viewport_width);
 }
 
 ComputedStyleMap cascade(const Stylesheet& author_sheet,
@@ -147,9 +165,11 @@ ComputedStyleMap cascade(const Stylesheet& author_sheet,
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc,
-                         const RenderState& state) {
+                         const RenderState& state,
+                         float viewport_width) {
     ComputedStyleMap out;
-    compute_styles(doc, ua_sheet, author_sheet, state, out);
+    compute_styles(doc, ua_sheet, author_sheet, state, viewport_width,
+                   out);
     propagate_inheritance(doc, out);
     return out;
 }
@@ -160,13 +180,15 @@ void cascade_subtree(const dom::Element& el,
                      const Stylesheet& ua_sheet,
                      const Stylesheet& author_sheet,
                      const RenderState& state,
+                     float viewport_width,
                      ComputedStyleMap& out) {
     // compute_styles already traverses the element's subtree;
     // starting from `el` scopes it correctly. Inherited properties
     // are intentionally left unfilled -- the caller runs
     // propagate_inheritance after erasing + re-cascading all dirty
     // subtrees, so inheritance is computed once for the whole tree.
-    compute_styles(el, ua_sheet, author_sheet, state, out);
+    compute_styles(el, ua_sheet, author_sheet, state, viewport_width,
+                   out);
 }
 
 void erase_subtree(const dom::Element& el, ComputedStyleMap& out) {

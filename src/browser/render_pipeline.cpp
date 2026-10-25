@@ -160,8 +160,10 @@ void RenderPipeline::relayout(float viewport_width) {
     // result. Subsequent restyle() calls mutate styles_cache_ in
     // place rather than re-cascading from scratch.
     sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
+    last_viewport_width_ = viewport_width;
     styles_cache_ = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
+        renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
+        viewport_width);
 
     layout_root_ = renderer::layout::layout(
         *doc_, styles_cache_, &measure_with_pango, viewport_width);
@@ -205,7 +207,8 @@ void RenderPipeline::restyle() {
     if (styles_cache_.empty()) {
         sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
         styles_cache_ = renderer::css::cascade(
-            renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_);
+            renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
+            last_viewport_width_);
         restyle_walk(layout_root_, styles_cache_);
         prev_hovered_ = state_.hovered_element;
         return;
@@ -244,7 +247,8 @@ void RenderPipeline::restyle() {
             renderer::css::erase_subtree(*prev_hovered_, styles_cache_);
             renderer::css::cascade_subtree(
                 *prev_hovered_, renderer::css::ua_stylesheet(),
-                sheet_cache_, state_, styles_cache_);
+                sheet_cache_, state_, last_viewport_width_,
+                styles_cache_);
             did_work = true;
         }
         if (state_.hovered_element) {
@@ -252,7 +256,8 @@ void RenderPipeline::restyle() {
                 *state_.hovered_element, styles_cache_);
             renderer::css::cascade_subtree(
                 *state_.hovered_element, renderer::css::ua_stylesheet(),
-                sheet_cache_, state_, styles_cache_);
+                sheet_cache_, state_, last_viewport_width_,
+                styles_cache_);
             did_work = true;
         }
     } else {
@@ -312,7 +317,8 @@ void RenderPipeline::restyle() {
             renderer::css::erase_subtree(*el, styles_cache_);
             renderer::css::cascade_subtree(
                 *el, renderer::css::ua_stylesheet(),
-                sheet_cache_, state_, styles_cache_);
+                sheet_cache_, state_, last_viewport_width_,
+                styles_cache_);
             did_work = true;
         }
     }
