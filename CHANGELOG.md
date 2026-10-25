@@ -126,6 +126,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Deferred (three-ADR continuation): ADR-026 (`:root` + `var()`),
   ADR-027 (`@media`), ADR-028 (`:not()` + attribute operators).
 
+- **CSS variable resolution** (ADR-026): `:root` selector
+  support + parse-time `var(--x[, fallback])` resolution. On
+  Wikipedia's CSS: 542 `var()` declarations; 341 are whole-value
+  (299 of those target properties our layout engine consumes);
+  194 are partial-value (left unchanged, deferred). The 299
+  consumed-property resolutions are real and cascade-integrated,
+  but **visible delta over ADR-025 is negligible** -- the rules
+  containing these declarations either lose the cascade on
+  specificity, are gated by `@media` (ADR-027), or produce
+  values visually similar to what ADR-025 already applies.
+
+  Meta-lesson-v3 documented: "consumed-property coverage is
+  necessary, not sufficient, for visible change. The rule
+  containing the resolved declaration must also win the cascade
+  after parsing." Same shape as ADR-023/024's earlier Meta-
+  lessons.
+
+  Also fixes a pre-existing `display: none` gap in
+  `flatten_inline_to_words`: `<style>` tags nested inside inline
+  elements were rendering their CSS text as visible article
+  content (Wikipedia has 18 such tags in `<body>`, several
+  inline-nested). Cascade correctly computed `display: none`;
+  the inline-flattening recursion simply wasn't checking it.
+  Surfaced by ADR-026's visual verification. One-line fix +
+  regression test.
+
 ### Fixed
 
 - **Use-after-free segfault on click-navigation** (ADR-018): after

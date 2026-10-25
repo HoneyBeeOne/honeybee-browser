@@ -1,6 +1,6 @@
 # ADR-026: CSS Variable Resolution (`:root` + `var()`)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-25
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-009 (CSS parser), ADR-010 (cascade), ADR-013 (length units), ADR-025 (external CSS loading)
@@ -377,3 +377,73 @@ ADR-026 is complete when:
 **Explicit claim**: ~92% of Wikipedia's `var()` calls resolve to
 usable values via fallback. Visible improvement expected in font
 sizes and text colors. Structural layout unchanged (ADR-027).
+
+## Implementation
+
+Implemented on `feat/css-variables` across three commits:
+
+| Commit | Scope |
+|---|---|
+| `d979198` | `SimpleKind::PseudoRoot` + parser + matcher + specificity. `Stylesheet::variables` field + extraction from `:root`-only rules. 8 new tests. |
+| `7fd29e2` | `var()` pre-resolution pass (`VarResult` + `resolve_var_whole`) applied to all non-custom-property declarations. **Also: `display: none` inline-flattening fix** (surfaced during visual verification). 9 var() tests + 1 regression test. |
+| (this commit) | Docs: ADR-026 status -> Implemented, README + CHANGELOG, measured delta + Meta-lesson-v3. |
+
+### What shipped
+
+**Primary infrastructure: var() resolution.** Whole-value `var(--x[, fallback])` declarations resolve at parse time. Tested against 9 edge cases (defined var, undefined+fallback, undefined+no-fallback-drop, partial-unchanged, non-var-unchanged, nested-var-falls-to-fallback, custom-prop-skipped, fallback-with-parens, malformed-dropped).
+
+Measured coverage (from ADR-026's Context, restated):
+- 542 total var() declarations
+- 341 whole-value; 299 target consumed properties (**84.2%**)
+- 194 partial; 36 target consumed properties (20.0%)
+- 7 multi-var
+
+**Bonus fix: display:none inline-flattening gap.** Wikipedia has 18 `<style>` tags in `<body>` (TemplateStyles extension), several nested inside inline elements. Cascade computed `display: none` correctly (confirmed by diagnostic), but `flatten_inline_to_words` recursed into `display:none` descendants without checking, rendering ~1KB of raw CSS text as visible article content. **Pre-existing bug** — never triggered by synthetic tests. Visual verification on Wikipedia is what caught it. One-line fix + regression test.
+
+### Measured visible delta over ADR-025: negligible
+
+Screenshots before/after ADR-026's var() resolution are visually indistinguishable. The 299 resolutions are real (verified by unit tests + cascade integration) but they don't produce perceptible change on Wikipedia.
+
+**Root cause hypothesis (not fully verified — would need one more diagnostic):**
+1. **Cascade loss**: rules containing var() declarations may have lower specificity than higher-priority rules (e.g. `--color-base: #202122` resolves on 27 declarations, but the blue link rules may still win on sidebar `<a>` tags — visible in screenshot 1 where sidebar links are still blue, not dark gray).
+2. **Media-gating**: some rules with var() declarations are inside `@media` blocks (not yet parsed), so the var() never reaches the cascade.
+3. **Visual similarity**: resolved values may be nearly identical to what ADR-025's already-applied rules produce.
+
+### Meta-lesson-v3: "consumed-property coverage" is necessary, not sufficient
+
+ADR-026's Context measured **consumed-property coverage** — what fraction of resolved var() declarations target properties our layout engine reads. That was **84.2%**. It looked like the answer.
+
+**It was necessary but not sufficient for visible change.** The rule containing the resolved declaration must ALSO **win the cascade** after parsing:
+- Specificity beats competitors (blue link rules beating `--color-base` resolutions)
+- Media-query gating passes (not yet parsed — deferred to ADR-027)
+- Selector parses (pseudo-classes, `:not()`, attribute operators — ADR-028)
+
+Same shape as ADR-023's "2,500 `<a>` per wrapper not 10" and ADR-024's "measured prediction needs a code-path model." A metric that looks like the answer but isn't.
+
+**The refined rule**: when claiming a resolution-count implies a visible delta, trace the full cascade path for a sample of declarations. **Consumed-property coverage + cascade-winner status + visible-difference are three separate properties, not one.**
+
+### The infrastructure does real work
+
+ADR-026 doesn't diminish in value from the negligible visible delta. The var() resolver is now the mechanism that:
+- **ADR-027 (`@media`)** will use: once `@media` blocks parse, their rules finally reach the cascade. Any var() in those rules resolves via this commit's pass.
+- **ADR-028 (`:not()` + attribute operators)** will use: same reasoning — more rules reach cascade, more var() resolutions become visible.
+- **Future author stylesheets** can use `:root` + `var()` with confidence that the parse-time resolution matches CSS computed-value-time semantics.
+
+This is the same pattern as ADR-022 → ADR-023: ADR-022 shipped the targeted cascade (no visible change for wrapper hovers, but real infrastructure for the fast path); ADR-023 used it to deliver the visible win. ADR-026 ships var() resolution (no visible change today); ADR-027 uses it to unlock the layout rules that will produce visible change.
+
+### Deferred (unchanged from ADR-026's original Deferred section)
+
+- Recursive `var()` (1 case on Wikipedia; single-pass uses fallback)
+- Element-scoped custom properties (`.theme-dark { --bg: black }`)
+- Dynamic variable cascade (`:hover`-changing variables — incompatible with parse-time resolution)
+- Keyword fallbacks (`inherit`/`initial`/`unset` — 17 cases)
+- Merged UA+author variable maps
+- Partial-value substitution + calc() evaluation
+- `env()` environment variables
+
+### Verification
+
+- **Unit tests**: 8 `:root` / `Stylesheet::variables` cases (Commit 1) + 9 `[var]` resolution cases + 1 display:none regression test = **18 new cases** across Commits 1 and 2.
+- **Cascade-integration diagnostic**: body-position `<style>` reports `display: none` in ComputedStyleMap (confirms the fix targets the right layer).
+- **Visual**: CSS text gone; article body starts cleanly with prose. Var() resolution is visible-neutral on Wikipedia.
+
