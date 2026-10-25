@@ -27,11 +27,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 022 | [Targeted Cascade for Hover](022-targeted-cascade.md) | Re-cascade only changed elements; ~40x faster hover |
 | 023 | [Skip-Subtree Optimization for Hover](023-skip-subtree.md) | Precompute hover-sensitive elements; wrapper hovers fast too |
 | 024 | [Hover-Match Transition Check](024-hover-transition-check.md) | Cascade only elements whose :hover match changed; wrapper hovers ~25ms |
+| 025 | [External CSS Loading](025-external-css-loading.md) | Load `<link rel=stylesheet>`, merge with inline CSS |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 024 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 025 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
