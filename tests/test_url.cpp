@@ -60,3 +60,42 @@ TEST_CASE("resolve_url returns href when base is empty",
           "[url][resolve]") {
     CHECK(honeybee::resolve_url("other.html", "") == "other.html");
 }
+
+// =============================================================
+// ADR-028 regression: root-relative URLs against a base with a
+// subdirectory. Every previous test used bases without
+// subdirectories, which masked this bug for ADR-018 through
+// ADR-027.
+// =============================================================
+
+TEST_CASE("resolve_url: root-relative against subdirectory base",
+          "[url][resolve]") {
+    // Base has subdirectory /wiki/. Root-relative /w/load.php
+    // must resolve to origin + href, NOT /wiki/ + href.
+    CHECK(honeybee::resolve_url(
+              "/w/load.php?lang=en",
+              "https://en.wikipedia.org/wiki/HTML")
+          == "https://en.wikipedia.org/w/load.php?lang=en");
+}
+
+TEST_CASE("resolve_url: root-relative against multi-level subdirectory base",
+          "[url][resolve]") {
+    CHECK(honeybee::resolve_url(
+              "/asset.css",
+              "https://example.com/a/b/c/page.html")
+          == "https://example.com/asset.css");
+}
+
+TEST_CASE("resolve_url: root-relative against host-only base",
+          "[url][resolve]") {
+    CHECK(honeybee::resolve_url(
+              "/path", "https://example.com")
+          == "https://example.com/path");
+}
+
+TEST_CASE("resolve_url: root-relative preserves port",
+          "[url][resolve]") {
+    CHECK(honeybee::resolve_url(
+              "/api", "http://localhost:8080/page.html")
+          == "http://localhost:8080/api");
+}
