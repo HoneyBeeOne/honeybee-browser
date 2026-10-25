@@ -122,6 +122,12 @@ private:
     // (window resize) without re-fetching.
     std::string merged_css_;
 
+    // ADR-027: viewport width from the last relayout() call.
+    // Used by restyle()'s fallback path (which doesn't receive
+    // a viewport param) to re-run cascade with the correct
+    // @media query filtering.
+    float last_viewport_width_ = 1024.0f;
+
     // ADR-023: hover-sensitivity state, populated in relayout(),
     // cleared in render(). `hover_level_` selects the restyle
     // strategy (None/AnchorOnly/Compound); `hover_sensitive_` is

@@ -59,7 +59,8 @@ bool is_inherited(std::string_view property);
 // 6.4.1).
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
-                         const dom::Document& doc);
+                         const dom::Document& doc,
+                         float viewport_width = 1024.0f);
 
 // ADR-018: two-sheet form with presentation state for
 // :link / :visited / :hover matching. Commit 1 delegates to the
@@ -67,7 +68,8 @@ ComputedStyleMap cascade(const Stylesheet& ua_sheet,
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc,
-                         const RenderState& state);
+                         const RenderState& state,
+                         float viewport_width = 1024.0f);
 
 // Single-sheet form: equivalent to the two-sheet form with an
 // empty UA stylesheet. Kept so existing tests and any future
@@ -86,6 +88,7 @@ void cascade_subtree(const dom::Element& el,
                      const Stylesheet& ua_sheet,
                      const Stylesheet& author_sheet,
                      const RenderState& state,
+                     float viewport_width,
                      ComputedStyleMap& out);
 
 // Remove `el` and all its element descendants from `out`. Used

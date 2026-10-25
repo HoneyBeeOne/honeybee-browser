@@ -446,7 +446,7 @@ TEST_CASE("cascade_subtree + propagate matches full cascade for subtree",
     // Recompose <body>'s subtree from scratch via targeted primitives,
     // then propagate inheritance for the full document.
     css::ComputedStyleMap targeted;
-    css::cascade_subtree(*body, ua, sheet, css::RenderState{}, targeted);
+    css::cascade_subtree(*body, ua, sheet, css::RenderState{}, 1024.0f, targeted);
     css::propagate_inheritance(*doc, targeted);
 
     // Every element in <body>'s subtree should have the same
@@ -459,5 +459,107 @@ TEST_CASE("cascade_subtree + propagate matches full cascade for subtree",
             REQUIRE(t.has_value());
             CHECK(*t == val.value);
         }
+    }
+}
+
+// =============================================================
+// ADR-027: @media viewport filtering at cascade time.
+// =============================================================
+
+namespace {
+std::string rule_color_under_media(
+    const std::string& media_prelude,
+    const std::string& rule_selector_and_decls,
+    float viewport_width) {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p class=\"x\">text</p></body></html>");
+    auto sheet = css::Stylesheet::parse(
+        "@media " + media_prelude + " { " +
+        rule_selector_and_decls + " }");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc,
+                               css::RenderState{}, viewport_width);
+    const auto* p = doc->find_element("p");
+    return styles.at(p).get("color").value_or("");
+}
+} // namespace
+
+TEST_CASE("media: min-width: 640px fires at viewport 1024",
+          "[css][cascade][adr-027]") {
+    CHECK(rule_color_under_media("(min-width: 640px)",
+                                 ".x { color: red }", 1024.0f) == "red");
+    CHECK(rule_color_under_media("(min-width: 640px)",
+                                 ".x { color: red }", 500.0f) == "");
+    CHECK(rule_color_under_media("(min-width: 640px)",
+                                 ".x { color: red }", 1500.0f) == "red");
+}
+
+TEST_CASE("media: max-width: 640px fires only below threshold",
+          "[css][cascade][adr-027]") {
+    CHECK(rule_color_under_media("(max-width: 640px)",
+                                 ".x { color: red }", 500.0f) == "red");
+    CHECK(rule_color_under_media("(max-width: 640px)",
+                                 ".x { color: red }", 641.0f) == "");
+    CHECK(rule_color_under_media("(max-width: 640px)",
+                                 ".x { color: red }", 1024.0f) == "");
+}
+
+TEST_CASE("media: min-width: 1120px does NOT fire at viewport 1024",
+          "[css][cascade][adr-027]") {
+    CHECK(rule_color_under_media("(min-width: 1120px)",
+                                 ".x { color: red }", 1024.0f) == "");
+    CHECK(rule_color_under_media("(min-width: 1120px)",
+                                 ".x { color: red }", 1200.0f) == "red");
+}
+
+TEST_CASE("media: max-width: calc(1120px - 1px) fires at viewport 1024",
+          "[css][cascade][adr-027]") {
+    // The critical Wikipedia mid-size layout case.
+    CHECK(rule_color_under_media("(max-width: calc(1120px - 1px))",
+                                 ".x { color: red }", 1024.0f) == "red");
+    CHECK(rule_color_under_media("(max-width: calc(1120px - 1px))",
+                                 ".x { color: red }", 1119.0f) == "red");
+    CHECK(rule_color_under_media("(max-width: calc(1120px - 1px))",
+                                 ".x { color: red }", 1120.0f) == "");
+}
+
+TEST_CASE("media: min-width AND max-width both required",
+          "[css][cascade][adr-027]") {
+    const std::string prelude = "(min-width: 640px) and (max-width: 1024px)";
+    CHECK(rule_color_under_media(prelude, ".x { color: red }", 700.0f)
+          == "red");
+    CHECK(rule_color_under_media(prelude, ".x { color: red }", 1024.0f)
+          == "red");
+    CHECK(rule_color_under_media(prelude, ".x { color: red }", 500.0f)
+          == "");
+    CHECK(rule_color_under_media(prelude, ".x { color: red }", 1100.0f)
+          == "");
+}
+
+TEST_CASE("media: top-level rule (no media) always matches",
+          "[css][cascade][adr-027]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p class=\"x\">text</p></body></html>");
+    auto sheet = css::Stylesheet::parse(".x { color: red }");
+    // Viewport 500 and 1500 both see the top-level rule.
+    for (float vw : {500.0f, 1024.0f, 1500.0f}) {
+        auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc,
+                                   css::RenderState{}, vw);
+        const auto* p = doc->find_element("p");
+        CHECK(styles.at(p).get("color").value_or("") == "red");
+    }
+}
+
+TEST_CASE("media: print @media never fires (dropped at parse)",
+          "[css][cascade][adr-027]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><p class=\"x\">text</p></body></html>");
+    auto sheet = css::Stylesheet::parse(
+        "@media print { .x { color: red } }");
+    // print rule dropped at parse -> stylesheet empty -> no color.
+    for (float vw : {500.0f, 1024.0f, 1500.0f}) {
+        auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc,
+                                   css::RenderState{}, vw);
+        const auto* p = doc->find_element("p");
+        CHECK_FALSE(styles.at(p).get("color").has_value());
     }
 }
