@@ -123,8 +123,24 @@ void flatten_inline_to_words(
         if (pending_ws) prev_had_space = true;
     } else if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
-        Color color = default_color;
         auto it = styles.find(&el);
+
+        // ADR-026 fix: display: none check in inline flattening.
+        //
+        // Block-level iteration skips display: none elements
+        // before they can enter inline_run (in layout_element's
+        // child loop), but once inside an inline run, recursion
+        // into a display: none descendant (e.g. a <style> nested
+        // inside a <span>) had no such guard. Wikipedia ships 18
+        // <style> tags in <body>; several live inside inline
+        // elements and were being rendered as visible CSS text
+        // before this fix.
+        if (it != styles.end()) {
+            const auto dv = it->second.get("display");
+            if (dv && *dv == "none") return;
+        }
+
+        Color color = default_color;
         if (it != styles.end()) {
             const auto cv = it->second.get("color");
             if (cv) {

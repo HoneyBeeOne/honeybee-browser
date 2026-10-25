@@ -1375,3 +1375,95 @@ TEST_CASE("RenderPipeline::render_with_css handles empty CSS",
     CHECK(p.has_page());
     CHECK(p.layout_height() > 0.0f);
 }
+
+// =============================================================
+// Regression: display: none on an element nested inside inline
+// content must hide its text. Surfaced during ADR-026 visual
+// verification on Wikipedia, which has ~18 <style> tags in body,
+// several inside inline elements. Without the fix, their CSS text
+// rendered as visible article content.
+// =============================================================
+
+TEST_CASE("layout: <style> nested in inline element is hidden",
+          "[layout][adr-026-fix]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<p><span>before <style>.x{color:red}</style> after</span></p>"
+        "</body></html>");
+    REQUIRE(doc);
+
+    auto sheet = css::Stylesheet::parse("");
+    auto styles = css::cascade(css::ua_stylesheet(), sheet, *doc);
+
+    auto root = layout::layout(*doc, styles, fake_measure, 800.0f);
+
+    // Walk the layout tree; assert no LineFragment / LayoutText
+    // contains the CSS text that should have been hidden.
+    bool found_css_text = false;
+    std::function<void(const layout::LayoutNode&)> walk =
+        [&](const layout::LayoutNode& n) {
+            if (n.kind == layout::LayoutKind::Text) {
+                const auto& lt = static_cast<const layout::LayoutText&>(n);
+                if (lt.text.find("color:red") != std::string::npos ||
+                    lt.text.find(".x{") != std::string::npos) {
+                    found_css_text = true;
+                }
+                for (const auto& f : lt.lines) {
+                    if (f.text.find("color:red") != std::string::npos ||
+                        f.text.find(".x{") != std::string::npos) {
+                        found_css_text = true;
+                    }
+                }
+            } else if (n.kind == layout::LayoutKind::InlineContext) {
+                const auto& ctx =
+                    static_cast<const layout::LayoutInlineContext&>(n);
+                for (const auto& f : ctx.lines) {
+                    if (f.text.find("color:red") != std::string::npos ||
+                        f.text.find(".x{") != std::string::npos) {
+                        found_css_text = true;
+                    }
+                }
+                for (const auto& c : ctx.children) walk(*c);
+            } else if (n.kind == layout::LayoutKind::Box) {
+                const auto& b = static_cast<const layout::LayoutBox&>(n);
+                for (const auto& c : b.children) walk(*c);
+            } else if (n.kind == layout::LayoutKind::Inline) {
+                const auto& inl = static_cast<const layout::LayoutInline&>(n);
+                for (const auto& c : inl.children) walk(*c);
+            }
+        };
+    walk(root);
+
+    CHECK_FALSE(found_css_text);
+
+    // Sanity: the "before" and "after" text should still be present
+    // (the span itself isn't display: none, only its <style> child).
+    bool found_before = false;
+    bool found_after = false;
+    std::function<void(const layout::LayoutNode&)> walk2 =
+        [&](const layout::LayoutNode& n) {
+            if (n.kind == layout::LayoutKind::Text) {
+                const auto& lt = static_cast<const layout::LayoutText&>(n);
+                if (lt.text.find("before") != std::string::npos) found_before = true;
+                if (lt.text.find("after") != std::string::npos) found_after = true;
+            } else if (n.kind == layout::LayoutKind::InlineContext) {
+                const auto& ctx =
+                    static_cast<const layout::LayoutInlineContext&>(n);
+                for (const auto& f : ctx.lines) {
+                    if (f.text.find("before") != std::string::npos) found_before = true;
+                    if (f.text.find("after") != std::string::npos) found_after = true;
+                }
+                for (const auto& c : ctx.children) walk2(*c);
+            } else if (n.kind == layout::LayoutKind::Box) {
+                const auto& b = static_cast<const layout::LayoutBox&>(n);
+                for (const auto& c : b.children) walk2(*c);
+            } else if (n.kind == layout::LayoutKind::Inline) {
+                const auto& inl = static_cast<const layout::LayoutInline&>(n);
+                for (const auto& c : inl.children) walk2(*c);
+            }
+        };
+    walk2(root);
+
+    CHECK(found_before);
+    CHECK(found_after);
+}
