@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Feature-class flip table + skip-link hide** (ADR-030): extends
+  ADR-029's single-flip helper into a `constexpr` table (entries
+  for `main-menu-pinned` and `page-tools-pinned`) and injects
+  `.mw-jump-link{display:none !important}` into the desktop viewport
+  CSS. On Wikipedia this collapses the Tools panel (687px to 21px),
+  moves the article intro from y=834 to y=145, and hides the "Jump
+  to content" skip link. Combined with ADR-029's `#p-lang-btn`
+  workaround, the first viewport now shows the compact header,
+  article title "HTML" at y=84, the Article/Talk tabs with Read/View
+  source/View history inline, and the intro paragraph. Principled
+  fix for the skip link (`.mw-jump-link:not(:focus)` + `position:
+  absolute` + `clip`) and for click-to-open dropdowns (`:checked`
+  + `position: absolute`) is ADR-031.
 - **Flex layout** (ADR-029): `display: flex` and `display: inline-flex`
   now parse and lay out with a single-line flex algorithm --
   `flex-direction` (row | column), `justify-content`, `align-items`,

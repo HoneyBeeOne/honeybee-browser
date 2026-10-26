@@ -1,6 +1,6 @@
 # ADR-030: Feature-Class Extensions + Skip-Link Hide
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-26
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-025 (external CSS), ADR-028 (grid), ADR-029 (flex + first feature-class flip)
@@ -331,6 +331,120 @@ Two commits on `feat/feature-class-extensions`:
 2. **Docs** -- ADR-030 status -> Implemented, Post-Implementation
    note in ADR-029 updated with new y-coordinates, CHANGELOG,
    README row.
+
+## Implementation
+
+**Implemented 2026-10-26.** Three PRs (spec #166, Commit 1 impl
+#167, this docs PR). Small, measurement-driven follow-up to
+ADR-029.
+
+### Measured actuals vs predictions
+
+Actual measurements on Wikipedia at viewport 1774 after Commit 1:
+
+| Metric | ADR-029 baseline | Predicted | **Actual** | Delta vs prior |
+|---|---|---|---|---|
+| `.mw-page-container-inner` y | 59 | 59 | **36** | **-23 (unexpected)** |
+| `.vector-page-toolbar` height | 687 | ~40-60 | **21** | **-666** |
+| `vector-body` (article) y | 834 | ~250-350 | **145** | **-689** |
+| `h1#firstHeading` y | 107 | 107 | **84** | **-23 (unexpected)** |
+
+Two positive surprises:
+
+1. **Toolbar collapsed to 21px** (not ~40-60 as predicted). The
+   `.vector-page-toolbar-container` flex row plus `font-size:
+   var(--font-size-small, 0.875rem)` produces a compact toolbar
+   once the landmark children are hidden. The predicted range
+   assumed some padding/margin contribution that turned out to
+   be less than expected.
+
+2. **The entire grid moved up 23px** --
+   `.mw-page-container-inner` and `h1#firstHeading` both dropped
+   by 23px from prior state. The `page-tools` flip also
+   deactivates a companion rule under the `-disabled` state
+   (`.mw-body { justify-content: center }`), freeing vertical
+   space we didn't model. Not predicted, but consistent with the
+   feature-class-flip mechanism (each flip can enable/disable
+   multiple rules at once).
+
+### Visual proof
+
+The first-viewport PNG at 1774x900 (rendered from the new
+pipeline) shows:
+
+- Compact header bar -- Donate / Create account / Log in
+  right-aligned
+- **"HTML" article title** prominent at top (y=84)
+- Article / Talk tabs with **Read / View source / View history
+  inline** (y~=100)
+- "From Wikipedia, the free encyclopedia"
+- **Intro paragraph**: "Markup language for documents" + the
+  multiple-issues maintenance banners
+- No Tools panel (was 687px inline)
+- No skip link
+
+**Article intro at y=145** -- deeply above the fold (was
+predicted ~250-350). Actual improvement exceeds prediction.
+
+### What didn't change
+
+- `mw-page-container-inner` width: still 1670 (grid template
+  unchanged)
+- `mw-content-container` x: still 324 (right column position
+  unchanged)
+- `vector-column-start` x: still 40 (left column position
+  unchanged)
+- All prior ADR behavior unchanged
+- Article body layout (h=54491) unchanged in structure
+
+### Two honest observations deferred
+
+1. **Infobox renders as inline list** (`.html` / `.htm` /
+   `text/html` / `WHATWG` / `W3C` / ... stacked at bottom of
+   first viewport) instead of the top-right `float: right` box.
+   `float` not implemented. ADR-031 candidate (or its own
+   `float` ADR).
+
+2. **Stray closing-tag fragment** in top-right of viewport -- a
+   parser leak, likely a literal closing `</html>` in the source
+   mid-document or an attribute-parsing edge case. Not
+   introduced by ADR-030 (visible in ADR-029 baseline too).
+   Deferred to its own diagnostic; small enough to not block the
+   arc.
+
+Neither regresses any prior ADR. Both documented for future
+cycles.
+
+### The scope reframe as the earned lesson
+
+The original plan for ADR-030 was `position` + `:checked`. The
+measurement drove the split:
+
+- **47 `position` rules, 14 `:checked` rules** in Wikipedia's CSS
+- **None of them directly drive the four visible bugs** in the
+  first viewport
+- Three bugs driven by `vector-feature-*` flag state on `<html>`
+- One bug (skip link) driven by `:not()` + `position:
+  absolute` + `clip`
+
+So ADR-030 became small (flip table extension + skip-link hide,
+~20 lines). ADR-031 (structural `position` + `:checked` +
+`:not` + `clip` + `z-index`, ~300-400 lines) is deferred and
+legitimately needed for future features (click-to-open
+dropdowns, infobox thumbnails, sticky headers) but not for
+these four visible bugs.
+
+This is the second mid-cycle scope reframe in the arc (ADR-028's
+grid misdiagnosis correction was the first). Both started from a
+measurement that contradicted the plan and ended with the plan
+changed to match the measurement -- not the measurement forced
+to match the plan.
+
+### Test count
+
+- Before ADR-030 Commit 1: 394 cases / 1643 assertions
+- After Commit 1: **399 cases / 1660 assertions** (+5 / +17)
+- Full suite all pass, zero warnings
 
 ## Verification
 
