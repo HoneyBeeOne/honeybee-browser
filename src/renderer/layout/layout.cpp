@@ -171,6 +171,19 @@ LayoutBox layout_element(const dom::Element& el,
     const Direction own_dir = resolve_direction(el, parent_dir);
 
     const css::ComputedStyle* style = lookup(styles, el);
+        // ADR-033: parse position. Relative/Absolute/Sticky are
+    // stored but treated as Static in layout (v1 limitation).
+    // Fixed is honored by layout_block_children (skip from flow
+    // + viewport anchor).
+    if (style) {
+        if (auto p = style->get("position")) {
+            if (*p == "relative") box.position = Position::Relative;
+            else if (*p == "absolute") box.position = Position::Absolute;
+            else if (*p == "fixed") box.position = Position::Fixed;
+            else if (*p == "sticky") box.position = Position::Sticky;
+        }
+    }
+
     // ADR-032: compute paint-authoritative visibility. Layout
     // still lays out hidden elements (visibility:hidden preserves
     // their space per CSS spec); paint respects LayoutBox::visible
@@ -409,6 +422,41 @@ LayoutBox layout_element(const dom::Element& el,
                 if (child_style) {
                     if (auto f = child_style->get("float")) {
                         float_dir = *f;
+                    }
+                }
+
+                // ADR-033: position:fixed children are out of
+                // flow. Layout at (0,0), then shift to viewport
+                // anchor. Don't advance cursor_y (parent height
+                // excludes fixed children). No float interaction
+                // (CSS spec: float is ignored on positioned
+                // elements).
+                if (child_style) {
+                    if (auto p = child_style->get("position");
+                        p && *p == "fixed") {
+                        flush_inline_run();
+                        auto fixed_box = std::make_unique<LayoutBox>(
+                            layout_element(child_el, styles, measurer,
+                                           0.0f, 0.0f, content_w,
+                                           own_font_size, root_font_size,
+                                           own_dir));
+                        float top_off = 0.0f, left_off = 0.0f;
+                        if (auto t = child_style->get("top");
+                            t && *t != "auto") {
+                            top_off = parse_length(*t, ctx);
+                        }
+                        if (auto l = child_style->get("left");
+                            l && *l != "auto") {
+                            left_off = parse_length(*l, ctx);
+                        }
+                        if (left_off != 0.0f) {
+                            shift_subtree_x(*fixed_box, left_off);
+                        }
+                        if (top_off != 0.0f) {
+                            shift_subtree_y(*fixed_box, top_off);
+                        }
+                        box.children.push_back(std::move(fixed_box));
+                        continue;
                     }
                 }
 

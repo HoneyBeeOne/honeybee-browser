@@ -78,6 +78,19 @@ protected:
     explicit LayoutNode(LayoutKind k) : kind(k) {}
 };
 
+// ADR-033: CSS position value. Determines flow participation.
+//   Static:    default; in-flow block
+//   Relative:  in-flow; positioning context for future absolute
+//              children (no visible effect in v1; offsets ignored)
+//   Absolute:  stored, but treated as Static in v1 (needs
+//              containing-block tracking; ADR-034)
+//   Fixed:     out-of-flow; viewport-anchored at (top, left)
+//   Sticky:    stored, but treated as Static in v1 (needs
+//              scroll-aware layout; ADR-034+)
+enum class Position : std::uint8_t {
+    Static, Relative, Absolute, Fixed, Sticky
+};
+
 struct LayoutBox final : LayoutNode {
     float margin[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -92,6 +105,11 @@ struct LayoutBox final : LayoutNode {
     // not skip it (visibility:hidden, unlike display:none, still
     // occupies space).
     bool visible = true;
+
+    // ADR-033: parsed position. Fixed is honored by layout
+    // (out-of-flow + viewport anchor); Relative/Absolute/Sticky
+    // are stored but treated as Static in v1.
+    Position position = Position::Static;
 
     const dom::Element* element = nullptr;
     std::vector<std::unique_ptr<LayoutNode>> children;
