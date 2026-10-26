@@ -171,6 +171,26 @@ LayoutBox layout_element(const dom::Element& el,
     const Direction own_dir = resolve_direction(el, parent_dir);
 
     const css::ComputedStyle* style = lookup(styles, el);
+    // ADR-032: compute paint-authoritative visibility. Layout
+    // still lays out hidden elements (visibility:hidden preserves
+    // their space per CSS spec); paint respects LayoutBox::visible
+    // and skips the subtree.
+    if (style) {
+        if (auto v = style->get("visibility")) {
+            if (*v == "hidden" || *v == "collapse") {
+                box.visible = false;
+            }
+        }
+        if (box.visible) {
+            if (auto o = style->get("opacity")) {
+                try {
+                    if (std::stof(*o) <= 0.0001f) {
+                        box.visible = false;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
 
     const float own_font_size =
         font_size_of(style, parent_font_size, root_font_size);
