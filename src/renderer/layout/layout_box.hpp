@@ -86,6 +86,13 @@ struct LayoutBox final : LayoutNode {
     Color background = Color::transparent();
     Color border_color = Color::transparent();
 
+    // ADR-032: paint-authoritative culling signal. Set during
+    // layout from ComputedStyle's visibility/opacity. When false,
+    // paint skips this box and its entire subtree. Layout does
+    // not skip it (visibility:hidden, unlike display:none, still
+    // occupies space).
+    bool visible = true;
+
     const dom::Element* element = nullptr;
     std::vector<std::unique_ptr<LayoutNode>> children;
 

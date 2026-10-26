@@ -1649,6 +1649,72 @@ bool near(float a, float b, float tol = 1.0f) {
 }  // namespace
 
 // =============================================================
+// =============================================================
+// ADR-032: paint-authoritative visibility/opacity culling.
+// =============================================================
+
+TEST_CASE("visibility: hidden element has visible=false",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='h'>H</div>",
+        ".h{visibility:hidden;width:100px;height:50px}");
+    const auto* h = find_class(doc.root, "h");
+    REQUIRE(h != nullptr);
+    CHECK(h->visible == false);
+}
+
+TEST_CASE("visibility: visible element has visible=true",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='v'>V</div>",
+        ".v{visibility:visible;width:100px;height:50px}");
+    const auto* v = find_class(doc.root, "v");
+    REQUIRE(v != nullptr);
+    CHECK(v->visible == true);
+}
+
+TEST_CASE("opacity: 0 element has visible=false",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='z'>Z</div>",
+        ".z{opacity:0;width:100px;height:50px}");
+    const auto* z = find_class(doc.root, "z");
+    REQUIRE(z != nullptr);
+    CHECK(z->visible == false);
+}
+
+TEST_CASE("opacity: 0.5 element has visible=true (v1: no blending)",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='o'>O</div>",
+        ".o{opacity:0.5;width:100px;height:50px}");
+    const auto* o = find_class(doc.root, "o");
+    REQUIRE(o != nullptr);
+    CHECK(o->visible == true);
+}
+
+TEST_CASE("opacity: var(...) treated as opaque (v1 limitation)",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='o'>O</div>",
+        ".o{opacity:var(--x);width:100px;height:50px}");
+    const auto* o = find_class(doc.root, "o");
+    REQUIRE(o != nullptr);
+    // var() doesn't resolve -- stof throws -> caught -> treated as
+    // > 0.0001 -> visible stays true
+    CHECK(o->visible == true);
+}
+
+TEST_CASE("no visibility/opacity defaults to visible=true",
+          "[layout][adr-032]") {
+    auto doc = run(
+        "<div class='d'>D</div>",
+        ".d{width:100px;height:50px}");
+    const auto* d = find_class(doc.root, "d");
+    REQUIRE(d != nullptr);
+    CHECK(d->visible == true);
+}
+
 // ADR-031: float layout (v1: block-level float + block narrowing).
 // =============================================================
 

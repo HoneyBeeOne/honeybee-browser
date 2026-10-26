@@ -24,6 +24,13 @@ void paint_children(
 
 void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                const LineDrawer& drawer) {
+    // ADR-032: paint-authoritative culling. Skip the entire
+    // subtree if visibility:hidden or opacity:0. Set on
+    // LayoutBox::visible by layout_element. Handles both root
+    // and child invocations since they all route through
+    // paint_box().
+    if (!box.visible) return;
+
     fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
 
     const float& bt = box.border[0];
