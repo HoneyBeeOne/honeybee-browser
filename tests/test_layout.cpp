@@ -1650,6 +1650,97 @@ bool near(float a, float b, float tol = 1.0f) {
 
 // =============================================================
 // =============================================================
+// =============================================================
+// ADR-033: position relative + fixed.
+// =============================================================
+
+TEST_CASE("position: relative stored on LayoutBox",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='r'>R</div>",
+        ".r{position:relative;width:100px;height:50px}");
+    const auto* r = find_class(doc.root, "r");
+    REQUIRE(r != nullptr);
+    CHECK(r->position == layout::Position::Relative);
+}
+
+TEST_CASE("position: static default",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='s'>S</div>",
+        ".s{width:100px;height:50px}");
+    const auto* s = find_class(doc.root, "s");
+    REQUIRE(s != nullptr);
+    CHECK(s->position == layout::Position::Static);
+}
+
+TEST_CASE("position: fixed anchored at (top, left)",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='f'>F</div>",
+        ".f{position:fixed;top:12px;left:12px;width:100px;height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(f->position == layout::Position::Fixed);
+    CHECK(near(f->x, 12.0f, 2.0f));
+    CHECK(near(f->y, 12.0f, 2.0f));
+}
+
+TEST_CASE("position: fixed without offsets anchors at (0,0)",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='f'>F</div>",
+        ".f{position:fixed;width:100px;height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(near(f->x, 0.0f, 2.0f));
+    CHECK(near(f->y, 0.0f, 2.0f));
+}
+
+TEST_CASE("position: fixed skipped from parent flow",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f'>F</div>"
+        "<div class='n'>N</div>"
+        "</div>",
+        ".c{width:500px}"
+        ".f{position:fixed;top:12px;left:12px;width:100px;height:200px}"
+        ".n{width:200px;height:50px}");
+    const auto* c = find_class(doc.root, "c");
+    const auto* n = find_class(doc.root, "n");
+    REQUIRE(c != nullptr);
+    REQUIRE(n != nullptr);
+    // .n should start near top (fixed .f didn't push it down
+    // by its 200px height)
+    CHECK(n->y < 20.0f);
+    // .c height excludes the fixed child's 200px
+    CHECK(c->height < 100.0f);
+}
+
+TEST_CASE("position: absolute stored but layout as static (v1)",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='a'>A</div>",
+        ".a{position:absolute;top:100px;left:100px;width:100px;height:50px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->position == layout::Position::Absolute);
+    // v1: treated as static, so NOT at (100, 100)
+    CHECK(a->x < 100.0f);
+}
+
+TEST_CASE("position: relative offsets ignored in v1 layout",
+          "[layout][position][adr-033]") {
+    auto doc = run(
+        "<div class='r'>R</div>",
+        ".r{position:relative;top:100px;left:100px;width:100px;height:50px}");
+    const auto* r = find_class(doc.root, "r");
+    REQUIRE(r != nullptr);
+    // v1: relative no-op; not shifted by (100, 100)
+    CHECK(r->x < 50.0f);
+}
+
 // ADR-032: paint-authoritative visibility/opacity culling.
 // =============================================================
 
