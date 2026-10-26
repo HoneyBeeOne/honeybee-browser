@@ -1648,6 +1648,141 @@ bool near(float a, float b, float tol = 1.0f) {
 
 }  // namespace
 
+// =============================================================
+// ADR-031: float layout (v1: block-level float + block narrowing).
+// =============================================================
+
+TEST_CASE("float: right places element at right edge",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'><div class='f'>F</div></div>",
+        ".c{width:500px}.f{float:right;width:100px;height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    // c.x + c.width - f.width = right edge anchor.
+    // The .c box is at content_x (0 by default with body{margin:0}
+    // in run()) and width 500. f should be at x = 500 - 100 = 400.
+    CHECK(near(f->x, 400.0f));
+    CHECK(near(f->width, 100.0f));
+}
+
+TEST_CASE("float: left places element at left edge",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'><div class='f'>F</div></div>",
+        ".c{width:500px}.f{float:left;width:100px;height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(near(f->x, 0.0f));
+    CHECK(near(f->width, 100.0f));
+}
+
+TEST_CASE("float: following block narrows within float zone",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f'>F</div>"
+        "<div class='b'>B</div>"
+        "</div>",
+        ".c{width:500px}.f{float:right;width:100px;height:100px}"
+        ".b{height:200px}");
+    const auto* f = find_class(doc.root, "f");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(f != nullptr);
+    REQUIRE(b != nullptr);
+    // .b should be narrowed by float's 100px width
+    CHECK(near(b->width, 400.0f));
+}
+
+TEST_CASE("float: following block full width when below float",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f'>F</div>"
+        "<div class='b'>B</div>"
+        "</div>",
+        ".c{width:500px}.f{float:right;width:100px;height:50px}"
+        ".b{height:100px;margin-top:80px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    // .b starts at y=80 (margin-top), float bottom at y=50,
+    // so .b is below float zone → full width
+    CHECK(near(b->width, 500.0f));
+}
+
+TEST_CASE("float: float doesn't advance cursor_y",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f'>F</div>"
+        "<div class='b'>B</div>"
+        "</div>",
+        ".c{width:500px}.f{float:right;width:100px;height:200px}"
+        ".b{height:50px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    // .b should start at y=0 (float doesn't advance cursor_y)
+    CHECK(near(b->y, 0.0f));
+}
+
+TEST_CASE("float: left narrows following block from left",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f'>F</div>"
+        "<div class='b'>B</div>"
+        "</div>",
+        ".c{width:500px}.f{float:left;width:100px;height:100px}"
+        ".b{height:200px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    // .b starts at x=100 (after float), width = 500-100 = 400
+    CHECK(near(b->x, 100.0f));
+    CHECK(near(b->width, 400.0f));
+}
+
+TEST_CASE("float: multiple float:right, no stacking (v1 limitation)",
+          "[layout][float][adr-031]") {
+    // v1 limitation: two float:right children overlap at the same
+    // position (both at right edge). Per-line stacking is ADR-032.
+    auto doc = run(
+        "<div class='c'>"
+        "<div class='f1'>F1</div>"
+        "<div class='f2'>F2</div>"
+        "</div>",
+        ".c{width:500px}"
+        ".f1{float:right;width:100px;height:50px}"
+        ".f2{float:right;width:100px;height:50px}");
+    const auto* f1 = find_class(doc.root, "f1");
+    const auto* f2 = find_class(doc.root, "f2");
+    REQUIRE(f1 != nullptr);
+    REQUIRE(f2 != nullptr);
+    // Both at right edge, same y — v1 limitation documented in ADR
+    CHECK(near(f1->x, 400.0f));
+    CHECK(near(f2->x, 400.0f));
+}
+
+TEST_CASE("float: none behaves as normal block",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'><div class='f'>F</div></div>",
+        ".c{width:500px}.f{float:none;width:100px;height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    // float:none → normal block at x=0
+    CHECK(near(f->x, 0.0f));
+}
+
+TEST_CASE("float: empty container yields no float effect",
+          "[layout][float][adr-031]") {
+    auto doc = run(
+        "<div class='c'></div>",
+        ".c{width:500px}");
+    CHECK(near(doc.root.height, doc.root.height)); // sanity
+}
+
+// ADR-029 flex test block follows:
+
 TEST_CASE("flex: empty container yields zero height",
           "[layout][flex][adr-029]") {
     auto lt = flex_prep("<div class='f'></div>", ".f{display:flex}");

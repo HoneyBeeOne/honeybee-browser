@@ -327,4 +327,24 @@ void shift_subtree_y(LayoutNode& node, float dy) {
     }
 }
 
+
+// ADR-031: horizontal variant of shift_subtree_y. Used by float
+// layout to reposition floated children at the left or right
+// edge of their block parent. Mirrors the y-variant's traversal
+// for Box, Inline, and InlineContext nodes.
+void shift_subtree_x(LayoutNode& node, float dx) {
+    node.x += dx;
+    if (node.kind == LayoutKind::Box) {
+        auto& b = static_cast<LayoutBox&>(node);
+        for (auto& c : b.children) shift_subtree_x(*c, dx);
+    } else if (node.kind == LayoutKind::Inline) {
+        auto& inl = static_cast<LayoutInline&>(node);
+        for (auto& c : inl.children) shift_subtree_x(*c, dx);
+    } else if (node.kind == LayoutKind::InlineContext) {
+        auto& ctx = static_cast<LayoutInlineContext&>(node);
+        for (auto& line : ctx.lines) line.x += dx;
+        for (auto& c : ctx.children) shift_subtree_x(*c, dx);
+    }
+}
+
 } // namespace honeybee::renderer::layout

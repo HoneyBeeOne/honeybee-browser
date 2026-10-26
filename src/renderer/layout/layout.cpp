@@ -366,19 +366,100 @@ LayoutBox layout_element(const dom::Element& el,
     // path's fallback (grid without a parsed template degrades to
     // block) and by the standard block path.
     auto layout_block_children = [&]() {
+        // ADR-031: float tracking. A floated child is laid out at
+        // its natural size, positioned at the left or right edge
+        // of the block parent, and does NOT advance cursor_y.
+        // Following block children that start within the float's
+        // vertical extent have their content width narrowed to
+        // avoid overlapping the float. Full per-line text-wrap is
+        // deferred to ADR-032; this is a block-narrowing
+        // approximation that covers the infobox case.
+        float float_left_w = 0.0f;
+        float float_right_w = 0.0f;
+        float float_bottom = 0.0f;
+
         for (const auto& child : el.children()) {
             if (child->type() == dom::NodeType::Element) {
                 const auto& child_el = static_cast<const dom::Element&>(*child);
                 const css::ComputedStyle* child_style = lookup(styles, child_el);
                 if (display_of(child_style) == Display::None) continue;
+
+                // Read float direction
+                std::string float_dir = "none";
+                if (child_style) {
+                    if (auto f = child_style->get("float")) {
+                        float_dir = *f;
+                    }
+                }
+
+                // Float: right|left. Layout at edge, don't advance
+                // cursor_y, track vertical extent for follow-ups.
+                if (float_dir == "left" || float_dir == "right") {
+                    flush_inline_run();
+                    auto probe = std::make_unique<LayoutBox>(
+                        layout_element(child_el, styles, measurer,
+                                       content_x, cursor_y, content_w,
+                                       own_font_size, root_font_size,
+                                       own_dir));
+                    if (float_dir == "right") {
+                        // Shift right edge to content right edge.
+                        const float target_right =
+                            content_x + content_w - probe->margin[1];
+                        const float current_right =
+                            probe->x + probe->width;
+                        shift_subtree_x(*probe, target_right - current_right);
+                        if (probe->width > float_right_w) {
+                            float_right_w = probe->width;
+                        }
+                    } else {
+                        // Float left: natural position already at
+                        // content_x + margin[3]; no shift needed.
+                        if (probe->width > float_left_w) {
+                            float_left_w = probe->width;
+                        }
+                    }
+                    const float fbox_bottom =
+                        probe->y + probe->height + probe->margin[2];
+                    if (fbox_bottom > float_bottom) {
+                        float_bottom = fbox_bottom;
+                    }
+                    box.children.push_back(std::move(probe));
+                    continue;
+                }
+
                 if (display_of(child_style) == Display::Inline) {
                     inline_run.push_back(child.get());
                     continue;
                 }
                 flush_inline_run();
+
+                // ADR-031: narrow block content if its actual
+                // starting y (cursor_y + margin_top) falls within
+                // the float's vertical zone. Reading margin-top
+                // explicitly is needed because layout_element
+                // applies margins internally -- checking cursor_y
+                // alone misjudges blocks that push themselves
+                // below the float via margin-top.
+                // Approximate: whole block is narrowed uniformly
+                // (per-line wrap is ADR-032).
+                float child_margin_top = 0.0f;
+                if (child_style) {
+                    if (auto m = child_style->get("margin-top")) {
+                        child_margin_top = parse_length(*m, ctx);
+                    }
+                }
+                const float start_y = cursor_y + child_margin_top;
+                float narrow_x = content_x;
+                float narrow_w = content_w;
+                if (start_y < float_bottom) {
+                    narrow_x = content_x + float_left_w;
+                    narrow_w = content_w - float_left_w - float_right_w;
+                    if (narrow_w < 0.0f) narrow_w = 0.0f;
+                }
+
                 auto child_box = std::make_unique<LayoutBox>(
-                    layout_element(child_el, styles, measurer, content_x, cursor_y,
-                                   content_w, own_font_size, root_font_size,
+                    layout_element(child_el, styles, measurer, narrow_x, cursor_y,
+                                   narrow_w, own_font_size, root_font_size,
                                    own_dir));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
