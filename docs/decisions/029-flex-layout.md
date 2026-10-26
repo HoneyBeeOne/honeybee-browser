@@ -439,6 +439,60 @@ Commit 3 flips the class at desktop viewports in
 This mimics what real Wikipedia's JS does. Idempotent round-trip:
 desktop -> mobile -> desktop stays correct.
 
+### Post-Implementation Note: language dropdown pushes article below the fold
+
+The measured delta above records the **grid container** at y=59.
+That measurement is correct. However, the visible first viewport
+does **not** show the article body at y=59 — it shows the
+"In other languages" panel (`#p-lang-btn`), which is **4766px tall**
+in our layout, filling the visible first viewport. The article
+title (`h1#firstHeading`) sits at y=2470; the article body
+(`vector-body`) at y=5560. Both are below the fold.
+
+Root cause: `#p-lang-btn` is a CSS dropdown driven by a hidden
+`<input type="checkbox">`. Real Wikipedia shows its content only
+on `:checked` / `:hover`. Without `:checked` support (ADR-030
+territory) and without `position: absolute` (also ADR-030), the
+140 `<li>` children render as visible blocks in the block flow.
+
+**This is not an ADR-029 regression** — the grid container is at
+y=59 in every measurement. It's a known limitation of the CSS
+feature set the arc has implemented so far (no `position:
+absolute`, no `:checked` pseudo-class, no `:has()`). It becomes
+visible now that the header is compact enough to expose the top
+of the article column.
+
+**A small workaround ships alongside this note**: at desktop
+viewport (>= 1120), `RenderPipeline::relayout()` injects
+`#p-lang-btn { display: none }` into the cascade. This matches
+what real Wikipedia with JS actually shows — the dropdown is
+visible only on hover/click. The principled fix is ADR-030
+(`position: absolute` and `:checked`).
+
+Measured post-workaround state (viewport 1774):
+
+| Element | Before workaround | After workaround | Note |
+|---|---|---|---|
+| `#p-lang-btn` | y=107 h=4766 | **display: none** | hidden |
+| `h1#firstHeading` | y=2470 | **y=107** | top of article column |
+| `vector-page-toolbar` | y=4873 h=687 | **y=147 h=687** | visible |
+| `vector-body` (article) | y=5560 | **y=834** | just below fold (900) |
+| Total layout height | 60612 | 55885 | -4727 |
+
+Article title is now visible at the top of the first viewport, with
+the page tabs (Article / Talk) and page actions (Read / View source
+/ View history). A **second `:checked` dropdown remains inline**:
+`vector-page-toolbar` (the "Tools" panel, 687px) — same root cause
+as the language dropdown (no `:checked`, no `position: absolute`).
+The article intro starts at y=834, just below the fold. **A
+principled fix for `:checked` + `position: absolute` (ADR-030) will
+collapse the toolbar too and move the intro above the fold.**
+
+The claim "article content above the fold" holds for the **article
+title and page chrome** (y=107 through y=834). The article *body*
+intro is at y=834, one small scroll away. This is the closest
+Wikipedia has ever rendered in HoneyBee.
+
 ### The discipline working preventively
 
 This is the first time the measure-predict-verify-correct

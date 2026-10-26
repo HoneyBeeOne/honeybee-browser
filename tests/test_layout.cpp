@@ -1858,6 +1858,35 @@ TEST_CASE("viewport feature classes: mobile keeps disabled",
           == std::string::npos);
 }
 
+TEST_CASE("viewport css: p-lang-btn hidden at desktop",
+          "[browser][adr-029][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html><body><div id=\"p-lang-btn\">x</div></body></html>",
+        1200.0f);
+    const auto* el = pipeline.doc()->find_element("div");
+    REQUIRE(el != nullptr);
+    auto it = pipeline.styles().find(el);
+    REQUIRE(it != pipeline.styles().end());
+    const auto v = it->second.get("display");
+    REQUIRE(v.has_value());
+    CHECK(*v == "none");
+}
+
+TEST_CASE("viewport css: p-lang-btn not hidden at mobile",
+          "[browser][adr-029][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html><body><div id=\"p-lang-btn\">x</div></body></html>",
+        800.0f);
+    const auto* el = pipeline.doc()->find_element("div");
+    REQUIRE(el != nullptr);
+    auto it = pipeline.styles().find(el);
+    REQUIRE(it != pipeline.styles().end());
+    const auto v = it->second.get("display");
+    if (v) CHECK(*v != "none");
+}
+
 TEST_CASE("viewport feature classes: round-trip through resize",
           "[browser][adr-029][feature-classes]") {
     honeybee::browser::RenderPipeline pipeline;
