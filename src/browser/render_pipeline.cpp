@@ -101,6 +101,53 @@ void restyle_walk(renderer::layout::LayoutNode& node,
     }
 }
 
+// ADR-029: viewport-driven feature class injection.
+//
+// Wikipedia's Vector 2022 skin ships <html class="... vector-
+// feature-main-menu-pinned-disabled ..."> when the page is
+// fetched without JS. A small inline <script> at page load flips
+// specific feature classes from -disabled to -enabled at desktop
+// viewports. Without that flip, .vector-main-menu-landmark stays
+// visible at 711px, pushing the entire grid container down by
+// ~165px (measured: mw-page-container-inner y=585 pre-flex,
+// y=750 post-flex without flip).
+//
+// HoneyBee doesn't run JS. We mimic the flip here: at desktop
+// viewport (>=1120, matching the grid @media breakpoint), rewrite
+// "vector-feature-main-menu-pinned-disabled" to "-enabled" on
+// <html>. This restores the desktop menu layout a real browser
+// would show. Also flips back when the viewport shrinks, so a
+// desktop->mobile->desktop resize round-trip stays correct.
+//
+// Deferred: other vector-feature-* flips (language-in-header,
+// toc-pinned, page-tools-pinned). Only the main-menu flip is
+// needed for ADR-029's visible delta. Future ADRs can extend.
+void apply_viewport_feature_classes(
+    renderer::dom::Document& doc, float viewport_width) {
+    auto* html_el = doc.find_element("html");
+    if (!html_el) return;
+
+    std::string cls = html_el->get_attribute("class");
+    const std::string enabled  =
+        "vector-feature-main-menu-pinned-enabled";
+    const std::string disabled =
+        "vector-feature-main-menu-pinned-disabled";
+
+    auto flip = [&](const std::string& from,
+                    const std::string& to) {
+        const auto pos = cls.find(from);
+        if (pos == std::string::npos) return;
+        cls.replace(pos, from.size(), to);
+        html_el->set_attribute("class", cls);
+    };
+
+    if (viewport_width >= 1120.0f) {
+        flip(disabled, enabled);
+    } else {
+        flip(enabled, disabled);
+    }
+}
+
 } // namespace
 
 void RenderPipeline::render(const std::string& html,
@@ -154,6 +201,11 @@ void RenderPipeline::render_with_css(
 
 void RenderPipeline::relayout(float viewport_width) {
     if (!doc_) return;
+
+    // ADR-029: viewport-driven feature class flips MUST run
+    // before the cascade so selector matching sees the updated
+    // <html> class. Idempotent round-trip across resizes.
+    apply_viewport_feature_classes(*doc_, viewport_width);
 
     // ADR-025: sheet_cache_ parses merged_css_ (inline + external).
     // ADR-022: cache the parsed author sheet and the full cascade
