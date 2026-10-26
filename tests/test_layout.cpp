@@ -1578,3 +1578,327 @@ TEST_CASE("layout: grid with no template falls back to block",
     // No crash, layout produces positive height (falls back to block).
     CHECK(root.height > 0.0f);
 }
+
+
+// =============================================================
+// ADR-029: flex layout algorithm.
+// =============================================================
+
+namespace {
+
+struct FlexTestDoc {
+    std::unique_ptr<honeybee::renderer::dom::Document> doc;
+    honeybee::renderer::css::ComputedStyleMap styles;
+};
+
+FlexTestDoc flex_prep(const std::string& html_src,
+                      const std::string& css_src,
+                      float viewport = 800.0f) {
+    auto d = honeybee::renderer::html::parse(html_src);
+    // Isolate from UA defaults (default body margin is 8px) so
+    // x=0 / y=0 assertions are absolute.
+    const std::string full_css =
+        "body,html{margin:0;padding:0}" + css_src;
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(full_css);
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *d,
+        honeybee::renderer::css::RenderState{}, viewport);
+    return {std::move(d), std::move(styles)};
+}
+
+const honeybee::renderer::layout::LayoutBox* find_class(
+    const honeybee::renderer::layout::LayoutNode& n,
+    const std::string& cls) {
+    using namespace honeybee::renderer::layout;
+    if (n.kind == LayoutKind::Box) {
+        const auto& b = static_cast<const LayoutBox&>(n);
+        if (b.element &&
+            b.element->get_attribute("class") == cls) {
+            return &b;
+        }
+        for (const auto& c : b.children) {
+            if (auto r = find_class(*c, cls)) return r;
+        }
+    } else if (n.kind == LayoutKind::Inline) {
+        const auto& inl = static_cast<const LayoutInline&>(n);
+        for (const auto& c : inl.children) {
+            if (auto r = find_class(*c, cls)) return r;
+        }
+    } else if (n.kind == LayoutKind::InlineContext) {
+        const auto& ctx = static_cast<const LayoutInlineContext&>(n);
+        for (const auto& c : ctx.children) {
+            if (auto r = find_class(*c, cls)) return r;
+        }
+    }
+    return nullptr;
+}
+
+const honeybee::renderer::layout::LayoutBox* child_box_at(
+    const honeybee::renderer::layout::LayoutBox& parent, size_t i) {
+    using namespace honeybee::renderer::layout;
+    if (i >= parent.children.size()) return nullptr;
+    const auto* c = parent.children[i].get();
+    if (c->kind != LayoutKind::Box) return nullptr;
+    return static_cast<const LayoutBox*>(c);
+}
+
+bool near(float a, float b, float tol = 1.0f) {
+    return std::abs(a - b) < tol;
+}
+
+}  // namespace
+
+TEST_CASE("flex: empty container yields zero height",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep("<div class='f'></div>", ".f{display:flex}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(near(f->height, 0.0f));
+    CHECK(f->children.empty());
+}
+
+TEST_CASE("flex: single child, no grow, natural width",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='c'>hello</div></div>",
+        ".f{display:flex}.c{flex-basis:100px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 1);
+    const auto* c = child_box_at(*f, 0);
+    REQUIRE(c != nullptr);
+    CHECK(near(c->width, 100.0f));
+}
+
+TEST_CASE("flex: 2 children both grow 1 fill width",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;width:800px}"
+        ".a{flex:1}.b{flex:1}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(near(a->width, 400.0f));
+    CHECK(near(b->width, 400.0f));
+    CHECK(near(a->x, 0.0f));
+    CHECK(near(b->x, 400.0f));
+}
+
+TEST_CASE("flex: grow 1 vs grow 2 splits free space 1/3 : 2/3",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;width:800px}"
+        ".a{flex:1 1 0}.b{flex:2 1 0}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(near(a->width, 800.0f / 3.0f));
+    CHECK(near(b->width, 1600.0f / 3.0f));
+}
+
+TEST_CASE("flex: explicit flex-basis honored",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;width:800px}"
+        ".a{flex-basis:200px;flex-shrink:0;flex-grow:0}"
+        ".b{flex-basis:300px;flex-shrink:0;flex-grow:0}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    CHECK(near(child_box_at(*f, 0)->width, 200.0f));
+    CHECK(near(child_box_at(*f, 1)->width, 300.0f));
+}
+
+TEST_CASE("flex: gap inserts space between children",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;gap:20px;width:800px}"
+        ".a{flex:0 0 100px}.b{flex:0 0 100px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(near(a->x, 0.0f));
+    CHECK(near(b->x, 120.0f));  // 100 + 20 gap
+}
+
+TEST_CASE("flex: justify-content center centers children",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;justify-content:center;width:800px}"
+        ".a{flex:0 0 100px}.b{flex:0 0 100px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    // Total width = 200, remaining = 600, so start = 300.
+    CHECK(near(a->x, 300.0f));
+}
+
+TEST_CASE("flex: justify-content space-between pushes to edges",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;justify-content:space-between;width:800px}"
+        ".a{flex:0 0 100px}.b{flex:0 0 100px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(near(a->x, 0.0f));
+    CHECK(near(b->x, 700.0f));  // 800 - 100
+}
+
+TEST_CASE("flex: align-items center vertically centers short child",
+          "[layout][flex][adr-029]") {
+    // Use natural content height (no inline styles, which the test
+    // cascade doesn't parse). fake_measure yields 16px per line.
+    // .a = 6 nested divs -> 96px. .b = 1 div -> 16px.
+    // Container = 96. b offset = (96 - 16) / 2 = 40.
+    auto lt = flex_prep(
+        "<div class='f'>"
+        "<div class='a'>"
+        "<div>A1</div><div>A2</div><div>A3</div>"
+        "<div>A4</div><div>A5</div><div>A6</div>"
+        "</div>"
+        "<div class='b'><div>B1</div></div>"
+        "</div>",
+        ".f{display:flex;align-items:center;width:800px}"
+        ".a{flex:0 0 50px}.b{flex:0 0 50px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(b->y > a->y);
+    CHECK(near(b->y - a->y, 40.0f, 2.0f));
+}
+
+// =============================================================
+// ADR-029: viewport feature class injection (run via RenderPipeline).
+// =============================================================
+
+TEST_CASE("viewport feature classes: desktop flips disabled to enabled",
+          "[browser][adr-029][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-main-menu-pinned-disabled\">"
+        "<body></body></html>",
+        1200.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    const std::string cls = html_el->get_attribute("class");
+    CHECK(cls.find("vector-feature-main-menu-pinned-enabled")
+          != std::string::npos);
+    CHECK(cls.find("vector-feature-main-menu-pinned-disabled")
+          == std::string::npos);
+}
+
+TEST_CASE("viewport feature classes: mobile keeps disabled",
+          "[browser][adr-029][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-main-menu-pinned-disabled\">"
+        "<body></body></html>",
+        800.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    const std::string cls = html_el->get_attribute("class");
+    CHECK(cls.find("vector-feature-main-menu-pinned-disabled")
+          != std::string::npos);
+    CHECK(cls.find("vector-feature-main-menu-pinned-enabled")
+          == std::string::npos);
+}
+
+TEST_CASE("viewport feature classes: round-trip through resize",
+          "[browser][adr-029][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-main-menu-pinned-disabled\">"
+        "<body></body></html>",
+        1600.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    // Now shrink below threshold -> flip back to disabled.
+    pipeline.relayout(800.0f);
+    CHECK(html_el->get_attribute("class")
+          .find("vector-feature-main-menu-pinned-disabled")
+          != std::string::npos);
+    // Grow again -> back to enabled.
+    pipeline.relayout(1600.0f);
+    CHECK(html_el->get_attribute("class")
+          .find("vector-feature-main-menu-pinned-enabled")
+          != std::string::npos);
+}
+
+TEST_CASE("flex-direction column stacks children vertically",
+          "[layout][flex][adr-029]") {
+    auto lt = flex_prep(
+        "<div class='f'><div class='a'>A</div><div class='b'>B</div></div>",
+        ".f{display:flex;flex-direction:column}"
+        ".a{height:30px;width:100px}.b{height:40px;width:100px}");
+    auto root = honeybee::renderer::layout::layout(
+        *lt.doc, lt.styles, &fake_measure,
+        800.0f);
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    REQUIRE(f->children.size() == 2);
+    const auto* a = child_box_at(*f, 0);
+    const auto* b = child_box_at(*f, 1);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    // Same x (column cross-axis = flex-start default)
+    CHECK(near(a->x, b->x));
+    // Stacked vertically: b.y = a.y + a.height + 0 gap
+    CHECK(near(b->y - a->y, a->height));
+    // Container height = sum
+    CHECK(near(f->height, a->height + b->height, 2.0f));
+}

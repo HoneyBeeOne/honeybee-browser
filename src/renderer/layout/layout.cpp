@@ -389,12 +389,218 @@ LayoutBox layout_element(const dom::Element& el,
         flush_inline_run();
     };
 
+    // ADR-029: flex layout dispatch. Single-line flex: row | column,
+    // justify-content, align-items (cross-axis row only), flex-grow /
+    // shrink / basis, gap. Multi-line flex (wrap) deferred per ADR-029.
+    bool flex_handled = false;
+    if (style &&
+        (display_of(style) == Display::Flex ||
+         display_of(style) == Display::InlineFlex)) {
+        auto get_prop = [&](const std::string& key,
+                            std::string_view fallback) -> std::string {
+            const auto v = style->get(key);
+            return v ? std::string(*v) : std::string(fallback);
+        };
+        const std::string direction = get_prop("flex-direction", "row");
+        const std::string justify = get_prop("justify-content", "flex-start");
+        const std::string align = get_prop("align-items", "stretch");
+        const bool is_row =
+            (direction != "column" && direction != "column-reverse");
+
+        // Gap: column-gap for row, row-gap for column; fall back to gap.
+        auto parse_gap_longhand = [&](const char* longhand) -> float {
+            if (const auto v = style->get(longhand)) {
+                if (*v != "normal" && *v != "auto") {
+                    return parse_length(*v, ctx);
+                }
+            }
+            return -1.0f;
+        };
+        float gap = parse_gap_longhand(is_row ? "column-gap" : "row-gap");
+        if (gap < 0.0f) {
+            if (const auto v = style->get("gap")) {
+                if (*v != "normal" && *v != "auto") {
+                    std::string_view gs = *v;
+                    const auto sp = gs.find(' ');
+                    if (sp != std::string_view::npos) gs = gs.substr(0, sp);
+                    gap = parse_length(gs, ctx);
+                }
+            }
+            if (gap < 0.0f) gap = 0.0f;
+        }
+
+        struct FC {
+            const dom::Element* el;
+            float basis;       // border-box main-axis size
+            float final_main;
+            float grow;
+            float shrink;
+            std::unique_ptr<LayoutBox> final_box;
+        };
+        std::vector<FC> fcs;
+
+        for (const auto& child : el.children()) {
+            if (child->type() != dom::NodeType::Element) continue;
+            const auto& child_el =
+                static_cast<const dom::Element&>(*child);
+            const css::ComputedStyle* cs = lookup(styles, child_el);
+            if (display_of(cs) == Display::None) continue;
+
+            float grow = 0.0f, shrink = 1.0f;
+            std::string basis_str = "auto";
+            if (cs) {
+                if (const auto g = cs->get("flex-grow")) {
+                    try { grow = std::stof(std::string(*g)); } catch (...) {}
+                }
+                if (const auto s = cs->get("flex-shrink")) {
+                    try { shrink = std::stof(std::string(*s)); } catch (...) {}
+                }
+                if (const auto b = cs->get("flex-basis")) {
+                    basis_str = *b;
+                }
+            }
+
+            // First pass: natural size for basis resolution.
+            LayoutBox natural = layout_element(
+                child_el, styles, measurer, 0.0f, 0.0f, content_w,
+                own_font_size, root_font_size, own_dir);
+            const float natural_main =
+                is_row ? natural.width : natural.height;
+
+            float basis;
+            if (basis_str != "auto" && basis_str != "content") {
+                // ADR-029: honor explicit basis (including 0)
+                // per CSS flex shorthand semantics.
+                basis = parse_length(basis_str, ctx);
+            } else {
+                basis = natural_main;
+            }
+
+            FC fc;
+            fc.el = &child_el;
+            fc.basis = basis;
+            fc.final_main = basis;
+            fc.grow = grow;
+            fc.shrink = shrink;
+            fcs.push_back(std::move(fc));
+        }
+
+        if (!fcs.empty()) {
+            // Sum basis + gaps.
+            float total_basis = gap * static_cast<float>(fcs.size() - 1);
+            for (const auto& fc : fcs) total_basis += fc.basis;
+
+            // Grow / shrink (row only; column's container main is
+            // intrinsic so no distribution applies).
+            if (is_row) {
+                const float free = content_w - total_basis;
+                if (free < 0.0f) {
+                    float total_shrink = 0.0f;
+                    for (const auto& fc : fcs) {
+                        total_shrink += fc.shrink * fc.basis;
+                    }
+                    if (total_shrink > 0.0f) {
+                        for (auto& fc : fcs) {
+                            const float amt =
+                                (fc.shrink * fc.basis / total_shrink) *
+                                (-free);
+                            fc.final_main =
+                                std::max(0.0f, fc.basis - amt);
+                        }
+                    }
+                } else if (free > 0.0f) {
+                    float total_grow = 0.0f;
+                    for (const auto& fc : fcs) total_grow += fc.grow;
+                    if (total_grow > 0.0f) {
+                        for (auto& fc : fcs) {
+                            fc.final_main =
+                                fc.basis +
+                                (fc.grow / total_grow) * free;
+                        }
+                    }
+                }
+            }
+
+            // Remaining after resolution, for justify positioning.
+            float used_main = gap * static_cast<float>(fcs.size() - 1);
+            for (const auto& fc : fcs) used_main += fc.final_main;
+            const float remaining = is_row
+                ? std::max(0.0f, content_w - used_main) : 0.0f;
+
+            // Main-axis start + effective gap per justify-content.
+            float main_cursor = is_row ? content_x : content_y;
+            float effective_gap = gap;
+            if (remaining > 0.0f) {
+                if (justify == "flex-end" || justify == "end") {
+                    main_cursor += remaining;
+                } else if (justify == "center") {
+                    main_cursor += remaining / 2.0f;
+                } else if (justify == "space-between" &&
+                           fcs.size() > 1) {
+                    effective_gap += remaining /
+                        static_cast<float>(fcs.size() - 1);
+                } else if (justify == "space-around") {
+                    const float around =
+                        remaining / static_cast<float>(fcs.size());
+                    main_cursor += around / 2.0f;
+                    effective_gap += around;
+                }
+            }
+
+            // Second pass: final layout per child.
+            float container_cross = 0.0f;
+            for (auto& fc : fcs) {
+                const float cw = is_row ? fc.final_main : content_w;
+                const float x = is_row ? main_cursor : content_x;
+                const float y = is_row ? 0.0f : main_cursor;
+
+                fc.final_box = std::make_unique<LayoutBox>(
+                    layout_element(*fc.el, styles, measurer, x, y, cw,
+                                   own_font_size, root_font_size,
+                                   own_dir));
+                const float cross_size =
+                    is_row ? fc.final_box->height : fc.final_box->width;
+                if (cross_size > container_cross) {
+                    container_cross = cross_size;
+                }
+                main_cursor += fc.final_main + effective_gap;
+            }
+
+            // Cross-axis alignment + append (row only; column's
+            // align-items deferred per ADR-029).
+            if (is_row) {
+                for (auto& fc : fcs) {
+                    float cross_off = 0.0f;
+                    if (align == "flex-end") {
+                        cross_off = container_cross -
+                                    fc.final_box->height;
+                    } else if (align == "center") {
+                        cross_off = (container_cross -
+                                     fc.final_box->height) / 2.0f;
+                    }
+                    // stretch: no-op (natural height, top-aligned) —
+                    // documented v1 limitation.
+                    shift_subtree_y(*fc.final_box, content_y + cross_off);
+                    box.children.push_back(std::move(fc.final_box));
+                }
+                cursor_y = content_y + container_cross;
+            } else {
+                for (auto& fc : fcs) {
+                    box.children.push_back(std::move(fc.final_box));
+                }
+                cursor_y = content_y + used_main;
+            }
+        }
+
+        flex_handled = true;
+    }
+
     // ADR-028: grid layout dispatch. If this element's display is
     // grid AND its ComputedStyle declares a parseable template,
     // dispatch to grid children layout. Otherwise (grid without
     // template, or any non-grid display) fall through to block.
     bool grid_handled = false;
-    if (display_of(style) == Display::Grid && style) {
+    if (!flex_handled && display_of(style) == Display::Grid && style) {
         auto tmpl = parse_grid_template(*style, ctx);
         if (tmpl && !tmpl->columns.empty()) {
             // Parse column-gap (fallback 0).
@@ -511,7 +717,7 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
-    if (!grid_handled) {
+    if (!grid_handled && !flex_handled) {
         layout_block_children();
     }
 
