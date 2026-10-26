@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Position layout: relative + fixed** (ADR-033): `Position`
+  enum on `LayoutBox` (Static / Relative / Absolute / Fixed /
+  Sticky). `layout_element` parses `position` from ComputedStyle.
+  `layout_block_children` honors `position: fixed` -- out-of-flow,
+  viewport-anchored at `(top, left)`. `relative` is a no-op (v1;
+  context-only declarations in Wikipedia's CSS have zero offsets).
+  `absolute` / `sticky` are stored but treated as `static` in v1;
+  proper handling in ADR-034 (containing-block tracking).
+  **Zero visible delta on Wikipedia at desktop 1774** --
+  PNG byte-identical to pre-ADR-033, exactly as the spec
+  predicted. Structural prep for ADR-034 (absolute) and future
+  `z-index`.
 - **Visibility + opacity paint culling** (ADR-032): `LayoutBox`
   gains a `visible` flag set during layout from `visibility:
   hidden | collapse` or `opacity: 0`. `paint_box()` early-returns

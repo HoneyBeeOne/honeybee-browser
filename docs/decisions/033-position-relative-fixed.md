@@ -1,6 +1,6 @@
 # ADR-033: Position Layout (relative + fixed)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-26
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (layout), ADR-031 (float), ADR-032 (visibility/opacity paint culling)
@@ -336,6 +336,112 @@ Two commits on `feat/position-relative-fixed`:
 2. **Docs** — ADR-033 status → Implemented, Post-ADR-033 note in
    ADR-031 recording zero-visible-delta honestly, CHANGELOG,
    README row.
+
+## Implementation
+
+**Implemented 2026-10-26.** Two PRs (spec #174, impl #175).
+
+### Measured outcome: zero visible delta, exactly as predicted
+
+The spec's honest caveat said this ADR would produce zero visible
+delta on Wikipedia at desktop 1774. The pre-merge check confirmed
+it:
+
+    cmp -s /tmp/wiki-adr032-final.png /tmp/wiki-post-adr033.png
+    -> PNGs are BYTE-IDENTICAL
+
+Byte-identical PNG before and after. The prediction was correct,
+to the byte. This is the first ADR in the arc where the visual
+prediction was fully validated by exhaustive measurement.
+
+### What shipped
+
+**Position enum** (5 values):
+
+    Static (default)
+    Relative  -- stored; no-op in v1; context for ADR-034's
+                 absolute children
+    Absolute  -- stored; treated as static in v1; proper
+                 handling in ADR-034
+    Fixed     -- honored by layout; out-of-flow + viewport anchor
+    Sticky    -- stored; treated as static in v1
+
+**LayoutBox::position** field (default Static).
+
+**layout_element** parses position from ComputedStyle's
+`position` property.
+
+**layout_block_children** honors fixed:
+
+- Lays out the fixed child at (0, 0)
+- Reads `top` / `left` from ComputedStyle, parses against
+  viewport coordinates
+- Shifts subtree to (top, left) via shift_subtree_x and
+  shift_subtree_y
+- Appends WITHOUT advancing cursor_y -- parent height excludes
+  the fixed child
+
+**No further behavior for relative / absolute / sticky in v1.**
+Documented fallbacks.
+
+### Why the visible delta is zero (the honest reason)
+
+The three `position: fixed` rules in Wikipedia's CSS all target
+`.vector-page-titlebar-toc` -- a TOC toggle button that only
+appears when the TOC is in "below page title" mode. Not present
+in the first viewport at desktop 1774.
+
+All 22 `position: relative` rules are context-only (zero actual
+`top` / `left` / `bottom` / `right` offsets). Their layout
+behavior is identical to `position: static` in our engine.
+
+The one `position: absolute` element with real offsets in the
+first viewport -- `span.cdx-text-input__icon` at
+`top: 50% left: 9px` -- is treated as `static` in v1. Its in-
+flow position (approximately y=22 in the search bar) is close
+to its absolute position by accident. Shifting it now without
+containing-block tracking would be unpredictable.
+
+**Not a flaw. An honest precondition.** The infrastructure is
+in place; ADR-034 will activate it.
+
+### Structural value delivered
+
+1. **Position infrastructure exists.** Before this ADR, the
+   `position` property was completely unhandled -- elements
+   with `position: relative | fixed | absolute | sticky` all
+   participated in normal block flow. Now parsed, stored, and
+   honored for `fixed`.
+
+2. **Principled code path for the 3 fixed elements** in
+   Wikipedia's CSS. Currently these leak into block flow (the
+   `.vector-page-titlebar-toc` button would appear inline if it
+   were ever in the first viewport). After this ADR, fixed is
+   out-of-flow with viewport anchoring.
+
+3. **Prep for ADR-034 (absolute).** The `Position` enum,
+   `LayoutBox::position` field, and paint flow are all in
+   place. ADR-034 adds containing-block tracking.
+
+4. **Prep for z-index.** Stacking contexts require position.
+   Future ADR.
+
+### Test count
+
+- Before ADR-033 Commit 1: 414 cases / 1710 assertions
+- After Commit 1: **421 cases / 1737 assertions** (+7 / +27)
+- Full suite all pass, zero warnings
+
+### v1 limitations shipped
+
+- `right` / `bottom` for fixed: unused in Wikipedia's CSS
+  (all 3 rules use `top:12px; left:12px`). Deferred.
+- No scroll interaction for fixed: anchored to initial viewport
+  top-left. Scroll-aware positioning deferred.
+- `absolute` / `sticky` treated as `static`: needs containing-
+  block tracking (ADR-034) and scroll-aware layout (ADR-034+).
+- No `z-index` for fixed: fixed elements paint at tree position.
+  Deferred.
 
 ## Verification
 

@@ -378,6 +378,26 @@ original claim and the correction, side by side.** A future
 reader can see how the misreading happened and trust the
 corrected version because the evidence is preserved.
 
+## Post-ADR-033 note (2026-10-26)
+
+ADR-033 shipped `position: relative | fixed`. Zero visible
+delta on the article PNG -- byte-identical to pre-ADR-033.
+
+**Relevance to this ADR's float v1**: none. The
+`position: relative` declarations on the 22 rules that use them
+are context-only (zero actual top/left/right/bottom offsets).
+None interact with float layout. The one `position: absolute`
+element in the first viewport (search icon) is treated as
+`static` in ADR-033 v1.
+
+Float v1 remains correct and unaffected. The subsequent ADR-034
+(`position: absolute` with containing-block tracking) will
+introduce the first real interaction between position and
+layout flow -- absolute children can be positioned relative to
+a `position: relative` ancestor, which is where float and
+absolute could interact (e.g., absolute element inside a
+narrowed float zone). That's future work.
+
 ## Verification
 
 **Unit tests** (in `tests/test_layout.cpp`, new
