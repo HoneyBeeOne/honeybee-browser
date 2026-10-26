@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Flex layout** (ADR-029): `display: flex` and `display: inline-flex`
+  now parse and lay out with a single-line flex algorithm --
+  `flex-direction` (row | column), `justify-content`, `align-items`,
+  `flex-grow` / `flex-shrink` / `flex-basis`, and `gap` /
+  `row-gap` / `column-gap`. `flex` and `flex-flow` shorthands
+  expand at parse time (matching ADR-012 / ADR-028 conventions).
+- **Viewport feature-class flip** (ADR-029): `RenderPipeline` now
+  rewrites `vector-feature-main-menu-pinned-disabled` to
+  `-enabled` on `<html>` at viewports >= 1120, mimicking what
+  Wikipedia's inline JS does at page load. Without this flip,
+  Wikipedia's `.vector-main-menu-landmark` renders at 711px
+  (mobile hamburger menu stacked as blocks), pushing the entire
+  grid container down by 165px. With the flip, the header
+  collapses from 727px to 36px and the article content sits
+  above the fold for the first time.
 - **State pseudo-classes** (ADR-018): `:link`, `:visited`, and `:hover`
   now parse, match, and render. `<a href>` links render blue when
   unvisited, purple when visited, and lighter blue when hovered --
