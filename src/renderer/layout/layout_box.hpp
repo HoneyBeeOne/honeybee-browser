@@ -43,7 +43,10 @@ struct Color {
 // commit), Grid still falls through to block layout --
 // behavior-neutral. Same isolation discipline as ADR-025/026/027's
 // Commit 1.
-enum class Display : std::uint8_t { Block, Inline, None, Grid };
+enum class Display : std::uint8_t {
+    Block, Inline, None, Grid,
+    Flex, InlineFlex        // ADR-029: CSS flex layout
+};
 
 // Text direction for a block container (ADR-016). Resolved from
 // the dir attribute on the element or its ancestors; defaults to

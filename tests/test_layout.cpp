@@ -707,11 +707,13 @@ TEST_CASE("display_of: explicit none", "[layout][display]") {
 TEST_CASE("display_of: unknown value falls back to Block",
           "[layout][display]") {
     // ADR-028 note: `display: grid` is now a supported value
-    // (returns Display::Grid, verified elsewhere). Using `flex`
-    // here -- genuinely unknown today, becomes known in ADR-029 --
-    // preserves the test's original intent (unknown display value
-    // falls back to Block).
-    auto doc = run("<p>test</p>", "p { display: flex }");
+    // (returns Display::Grid, verified elsewhere).
+    // ADR-029 note: `display: flex` is now a supported value
+    // (returns Display::Flex, verified elsewhere). Using
+    // `inline-block` here -- genuinely unknown today (not in the
+    // Display enum, not planned for v1) -- preserves the test's
+    // original intent (unknown display value falls back to Block).
+    auto doc = run("<p>test</p>", "p { display: inline-block }");
     const auto* p = doc.doc->find_element("p");
     REQUIRE(p != nullptr);
     auto it = doc.styles.find(p);

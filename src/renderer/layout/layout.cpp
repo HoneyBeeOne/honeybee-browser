@@ -542,7 +542,9 @@ Display display_of(const css::ComputedStyle* style) {
     if (!v) return Display::Block;
     if (*v == "inline") return Display::Inline;
     if (*v == "none") return Display::None;
-    if (*v == "grid") return Display::Grid;  // ADR-028
+    if (*v == "grid") return Display::Grid;       // ADR-028
+    if (*v == "flex") return Display::Flex;       // ADR-029
+    if (*v == "inline-flex") return Display::InlineFlex;  // ADR-029
     return Display::Block;
 }
 
