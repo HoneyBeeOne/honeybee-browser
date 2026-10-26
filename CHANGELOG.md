@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grid container down by 165px. With the flip, the header
   collapses from 727px to 36px and the article content sits
   above the fold for the first time.
+- **Language dropdown hidden at desktop** (ADR-029 follow-up): `#p-lang-btn`
+  (the "In other languages" 140-item list) is a `:checked` /
+  `position: absolute` dropdown in real Wikipedia, visible only on
+  hover/click. Without those features, its 140 `<li>` children render
+  as visible blocks consuming 4766px in the article column, pushing
+  the article body below the fold. `RenderPipeline::relayout()`
+  injects `#p-lang-btn{display:none}` at viewports >= 1120, matching
+  the visible behavior of real Wikipedia with JS. Principled fix is
+  ADR-030 (`position: absolute` + `:checked`).
 - **State pseudo-classes** (ADR-018): `:link`, `:visited`, and `:hover`
   now parse, match, and render. `<a href>` links render blue when
   unvisited, purple when visited, and lighter blue when hovered --

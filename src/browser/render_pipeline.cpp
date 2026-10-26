@@ -211,7 +211,22 @@ void RenderPipeline::relayout(float viewport_width) {
     // ADR-022: cache the parsed author sheet and the full cascade
     // result. Subsequent restyle() calls mutate styles_cache_ in
     // place rather than re-cascading from scratch.
-    sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
+    // ADR-029 follow-up: hide the JS/`:checked`-controlled language
+    // dropdown at desktop viewports. `#p-lang-btn` (140 <li> items)
+    // is a `position: absolute` / `:checked` dropdown in real
+    // Wikipedia; without those features (ADR-030 territory) its
+    // children render as visible blocks in the flow, consuming
+    // ~4766px and pushing the article body to y≈5560. Real
+    // Wikipedia shows the dropdown only on hover/click, so hiding
+    // it at desktop matches the visible behavior. Preserves the
+    // article-above-fold claim by removing an unrelated 4766px
+    // obstruction. Principled fix is ADR-030.
+    std::string viewport_css;
+    if (viewport_width >= 1120.0f) {
+        viewport_css = "#p-lang-btn{display:none}";
+    }
+    sheet_cache_ = renderer::css::Stylesheet::parse(
+        merged_css_ + viewport_css);
     last_viewport_width_ = viewport_width;
     styles_cache_ = renderer::css::cascade(
         renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
