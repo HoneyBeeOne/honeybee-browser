@@ -1,6 +1,6 @@
 # ADR-029: Flex Layout (Basic)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-26
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (layout engine), ADR-013 (length units), ADR-016 (inline formatting), ADR-025 (external CSS), ADR-028 (grid layout)
@@ -383,6 +383,91 @@ Three commits on `feat/flex-layout`:
    `flex-direction: column`, `gap`.
 3. **Docs** -- ADR-029 status -> Implemented, README + CHANGELOG
    with measured visible delta.
+
+## Implementation
+
+**Implemented 2026-10-26.** Three PRs (spec, Commit 1 parser-side,
+Commits 2+3 algorithm + feature-class flip) plus this closing docs
+commit.
+
+### The measured delta
+
+`.mw-page-container-inner` y-coordinate on Wikipedia at viewport
+1774 (this is the grid container; the article sits directly below):
+
+| Stage | y-coordinate | Delta vs baseline |
+|---|---|---|
+| Baseline (pre-ADR-029) | 585 | -- |
+| Commit 2 alone (flex, no flip) | 750 | +165 (regression) |
+| **Commit 2 + Commit 3** | **59** | **-526 (payoff)** |
+
+Header height, same viewports:
+
+| Element | Commit 2 alone | Commit 2+3 |
+|---|---|---|
+| `.vector-header-container` | 727 | 36 |
+| `.vector-header-start` | 711 | 5 |
+| `.vector-header-end` | 20 | 20 |
+
+The article content is above the fold for the first time in the
+CSS-layout arc (ADR-025 through ADR-029). 526px of vertical
+space reclaimed from baseline; the header is a compact bar
+instead of a 727px stack of full-width mobile-layout blocks.
+
+### The unplanned Commit 3 (scope addition)
+
+The original plan for ADR-029 was **three commits**: parser,
+algorithm, docs. Actual scope was **three PRs** -- spec (already
+merged), parser (Commit 1), algorithm + feature-class flip
+(Commits 2+3), docs (this commit). **The feature-class flip was
+not in the original spec.**
+
+It was discovered during Commit 2's verification. The layout tree
+dump showed `.mw-page-container-inner` at y=750 -- **worse than
+baseline**, not better. The unit tests were green (10/10); the
+algorithm was correct. The regression was entirely in
+Wikipedia's `<html class>` state:
+
+- The page ships with `<html class="... vector-feature-main-menu-pinned-disabled ...">` when fetched without JS
+- A small inline `<script>` flips that to `-enabled` at desktop viewports
+- Without the flip, `.vector-main-menu-landmark` stays visible at 711px (the mobile hamburger menu, rendered as vertical stacked blocks)
+- The hide rule is `.vector-feature-main-menu-pinned-enabled .vector-header-start .vector-main-menu-landmark { display: none }`
+- Neither branch matches the mobile-default class
+
+Commit 3 flips the class at desktop viewports in
+`RenderPipeline::relayout()` (~15 lines, before the cascade).
+This mimics what real Wikipedia's JS does. Idempotent round-trip:
+desktop -> mobile -> desktop stays correct.
+
+### The discipline working preventively
+
+This is the first time the measure-predict-verify-correct
+pattern **caught a regression before merge** rather than
+correcting the record after (cf. ADR-028's post-hoc misdiagnosis
+correction):
+
+- Commit 2 alone would have shipped a -165px regression
+- The verification step revealed it (layout tree dump on real
+  Wikipedia, not just unit tests)
+- The diagnostic traced the cause to `<html>` server-shipped state
+- Commit 3 fixed it in the correct architectural layer
+  (browser-side JS-substitute)
+- The two-stage measurement is now permanent in the historical
+  record
+
+### Four small bugs fixed during the implementation
+
+1. **`ComputedStyle::get` takes `const std::string&` not `std::string_view`** -- the `get_prop` lambda signature was adjusted.
+2. **Explicit `flex-basis: 0` was being treated as natural size** -- breaks `flex: 1 1 0` semantics (both children default to their content sizes, no free space to distribute, grow does nothing). Removed the "parsed > 0" guard; explicit basis including 0 is honored.
+3. **Flex test harness didn't zero the UA default `body { margin: 8px }`** -- so `x=0` assertions were off by 8px. Prepended `body,html{margin:0;padding:0}` in `flex_prep`.
+4. **(Test-only) Initial `align-items` test used inline `style="height:..."`** -- which the test cascade doesn't parse, so the children were natural-height and the cross-axis offset was 0. Rewritten to use natural content heights (nested divs; `fake_measure` yields 16px per line).
+
+### Test count
+
+- Before ADR-029 Commit 2: 379 cases, 1575 assertions
+- After Commit 2: 389 cases, 1628 assertions (+10 / +53)
+- After Commit 3: 392 cases, 1637 assertions (+3 / +9)
+- Full suite all pass, zero warnings
 
 ## Verification
 
