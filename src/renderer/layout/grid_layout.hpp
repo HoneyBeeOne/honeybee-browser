@@ -87,4 +87,9 @@ std::vector<float> compute_column_widths(
 // their row's Y position, once row heights are known.
 void shift_subtree_y(LayoutNode& node, float dy);
 
+// ADR-031: horizontal variant of shift_subtree_y, used by
+// float layout to reposition floated children at the left or
+// right edge of their block parent.
+void shift_subtree_x(LayoutNode& node, float dx);
+
 } // namespace honeybee::renderer::layout

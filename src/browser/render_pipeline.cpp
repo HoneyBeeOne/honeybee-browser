@@ -261,7 +261,18 @@ void RenderPipeline::relayout(float viewport_width) {
         // support.
         viewport_css =
             "#p-lang-btn{display:none}"
-            ".mw-jump-link{display:none !important}";
+            ".mw-jump-link{display:none !important}"
+            // ADR-031 workaround: .sidebar (the HTML article's nav
+            // template) renders as a 1517px flat list inside the
+            // narrow zone. It pushes the intro below the fold and
+            // grows total layout height by ~9000px. Real Wikipedia
+            // renders it as a compact nav using display:grid
+            // internals that we do not support. Hiding it lets the
+            // infobox float correctly AND the intro take the narrow
+            // zone beside it. Will be removed when ADR-032 lands
+            // proper nested layout (grid/flex internals for
+            // .sidebar's children).
+            ".sidebar{display:none !important}";
     }
     sheet_cache_ = renderer::css::Stylesheet::parse(
         merged_css_ + viewport_css);
