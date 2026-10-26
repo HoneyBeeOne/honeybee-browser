@@ -311,6 +311,73 @@ Two commits on `feat/float-layout`:
    note in ADR-030's Implementation section updated with new
    infobox y-coordinates, CHANGELOG, README row.
 
+## Post-ADR-032 correction (2026-10-26)
+
+ADR-031 shipped with a "known paint overlap" note in its commit
+message. That claim was a **misreading** of the rendered PNG.
+
+Diagnostic confirmation (via ADR-032's `find_leak` walk of the
+layout tree for every box at `x<500, y<900`):
+
+| Element | y | w | Content |
+|---|---|---|---|
+| `<h1>#firstHeading>` | 84 | 948 | Article title "HTML" |
+| 4 maintenance banners | 259-466 | 948 | Ambox warnings |
+| `<p>#mwEg>` | 497 | **590** | Intro paragraph 1 |
+| `<p>#mwHw>` | 613 | **590** | Intro paragraph 2 |
+| `<p>#mwJg>` | 729 | **590** | Intro paragraph 3 |
+
+**No navbox, no leaked infobox content, no overlap.** The intro
+paragraphs are correctly narrowed to w=590 beside the infobox
+at x=914. Every box in the first viewport is legitimate article
+content.
+
+### What was actually seen
+
+The HTML article's intro paragraphs legitimately contain the
+strings `HTML5`, `XHTML`, `text/html`, `WHATWG` -- the article
+is about those exact subjects. When the paragraphs wrap to 4-5
+lines each at Pango's ~23px line height, the visual density
+resembled a nav list. Combined with a stale PNG from before the
+`.sidebar` hide (ADR-031 Commit 1's second fix), the "overlap"
+appeared real.
+
+The earlier `leak_locate` diagnostic (searching for the same
+strings) already showed all infobox-related hits at
+`y >= 4317`, way below the first viewport. That was the signal
+that should have stopped the investigation.
+
+### What this means
+
+- **ADR-031's float v1 is correct.** Block-level float, block
+  narrowing, `.sidebar` hide all work as intended. The layout
+  tree matches the plan.
+- **The "known bug" note in ADR-031 Commit 1's message was
+  wrong.** It stays in the commit message (historical record,
+  not rewritten) but this correction supersedes it.
+- **The `.sidebar{display:none}` workaround** (ADR-031 Commit 1's
+  second fix) is still useful: it removes the 1517px nav
+  template that was crowding the article column, freeing the
+  intro to land at y=497 instead of y=2014.
+- **No further fix needed for ADR-031's "overlap."**
+
+### The pattern
+
+Same class of correction as ADR-028's grid misdiagnosis:
+
+- A visual signal led to a hypothesis (overlap in first
+  viewport)
+- The hypothesis shipped with a caveat (draft PR, then merged
+  with "known overlap" note)
+- A diagnostic disproved it (find_leak showed only legitimate
+  content)
+- The record is corrected in place, not rewritten
+
+The discipline holds: **the historical record shows both the
+original claim and the correction, side by side.** A future
+reader can see how the misreading happened and trust the
+corrected version because the evidence is preserved.
+
 ## Verification
 
 **Unit tests** (in `tests/test_layout.cpp`, new

@@ -1,6 +1,6 @@
 # ADR-032: visibility + opacity Paint Support
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-26
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline), ADR-025 (external CSS), ADR-030 (feature flips), ADR-031 (float)
@@ -289,6 +289,100 @@ Two commits on `feat/visibility-opacity`:
 2. **Docs** — ADR-032 status → Implemented, Post-ADR-032 note
    in ADR-031 recording whether the paint fix resolved the
    apparent overlap, CHANGELOG, README row.
+
+## Implementation
+
+**Implemented 2026-10-26.** Two PRs (spec #171, impl #172).
+Small structural follow-up.
+
+### What shipped
+
+- `LayoutBox::visible` (default true), ADR-032 comment
+- `layout_element` sets `visible=false` for `visibility:hidden |
+  collapse` OR `opacity <= 0.0001` (parsed via `std::stof`;
+  catch-all treats `var()` as opaque)
+- `paint_box()` early-returns on `!box.visible` -- single choke
+  point (both root at line 80 and children at line 50 route
+  through it)
+- 6 tests in `[layout][adr-032]`
+
+### The measurement that reframed ADR-031's "known bug"
+
+After ADR-032 shipped, paint culling didn't change the PNG.
+That led to a `find_leak` diagnostic walking the layout tree
+for every box with content at `x<500, y<900` (first viewport,
+left column).
+
+Result: **60 boxes, every single one legitimate article
+content**:
+
+| Element | y | w | What |
+|---|---|---|---|
+| `<h1>#firstHeading>` | 84 | 948 | Article title "HTML" |
+| `<table>.box-Multiple_issues>` | 259 | 948 | Maintenance banner 1 |
+| `<table>.box-Howto>` | 305 | 948 | Maintenance banner 2 |
+| `<table>.box-More_citations_needed>` | 351 | 948 | Maintenance banner 3 |
+| `<table>.box-Copy_edit>` | 420 | 948 | Maintenance banner 4 |
+| `<p>#mwEg>` | 497 | **590** | Intro paragraph 1 |
+| `<p>#mwHw>` | 613 | **590** | Intro paragraph 2 |
+| `<p>#mwJg>` | 729 | **590** | Intro paragraph 3 |
+
+**No navbox. No sidebar. No leaked infobox content. The intro
+paragraphs are correctly narrowed to w=590 beside the infobox
+at x=914.** The layout tree is clean.
+
+### The misdiagnosis, corrected
+
+ADR-031 shipped with a "known paint overlap" note in its commit
+message. The apparent overlap at x=324 in PNGs was **article
+intro text being misread as nav-style content**:
+
+- The HTML article's intro legitimately mentions HTML5, XHTML,
+  text/html, WHATWG -- those strings appear in the first-
+  viewport paragraphs
+- When the intro paragraphs' lines wrap (4-5 lines each at
+  Pango's 23px line-height), the visual density resembles a
+  nav list at a glance
+- **It was my misreading, twice.** The earlier leak_locate
+  diagnostic (which searched for the same strings) already
+  showed all infobox-related hits at `y >= 4317`, way below
+  the fold. That was the signal that should have stopped the
+  investigation.
+
+**Same pattern as ADR-028's grid misdiagnosis**: measurement
+catches the misread claim, correction is preserved in the
+record, no rewrite.
+
+### Structural value delivered (independent of the misreading)
+
+Even with the misreading corrected, ADR-032 delivers its
+intended structural value:
+
+1. **Paint is now authoritative about visibility/opacity.**
+   Before this ADR, `paint_box` drew every box without checking
+   -- if layout skipped a `display:none` child, paint wouldn't
+   (defense-in-depth gap). Now paint respects the layout-
+   computed `visible` flag.
+2. **Precondition for future `:checked` dropdowns.** The 14
+   `:checked` rules use `visibility:visible` to reveal content.
+   The initial hidden state now paints correctly.
+3. **Pattern established** for future culling (`z-index`,
+   `clip-path`, `position` once those land).
+
+### v1 limitations shipped
+
+- No `opacity` blending (any value > 0 drawn opaque)
+- `visibility: visible` does not re-enable on a hidden-ancestor
+  descendant (only 1 use in Wikipedia's CSS, already worked
+  around with `!important`)
+- `opacity: var(...)` treated as opaque (no variable resolution
+  in v1)
+
+### Test count
+
+- Before ADR-032 Commit 1: 408 cases / 1692 assertions
+- After Commit 1: **414 cases / 1710 assertions** (+6 / +18)
+- Full suite all pass, zero warnings
 
 ## Verification
 
