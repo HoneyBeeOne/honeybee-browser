@@ -127,25 +127,51 @@ void apply_viewport_feature_classes(
     auto* html_el = doc.find_element("html");
     if (!html_el) return;
 
-    std::string cls = html_el->get_attribute("class");
-    const std::string enabled  =
-        "vector-feature-main-menu-pinned-enabled";
-    const std::string disabled =
-        "vector-feature-main-menu-pinned-disabled";
-
-    auto flip = [&](const std::string& from,
-                    const std::string& to) {
-        const auto pos = cls.find(from);
-        if (pos == std::string::npos) return;
-        cls.replace(pos, from.size(), to);
-        html_el->set_attribute("class", cls);
+    // ADR-030: flip table. Each entry maps a -disabled suffix to
+    // its -enabled counterpart on <html> at desktop viewport
+    // (>=1120, matching grid @media breakpoint and ADR-029's
+    // threshold). Undo runs on the same loop when viewport shrinks
+    // below threshold, so desktop->mobile->desktop round-trip
+    // stays correct.
+    //
+    // main-menu-pinned:  ADR-029 -- mobile hamburger menu
+    //                    visibility: 711px inline -> 0
+    // page-tools-pinned: ADR-030 -- Tools panel 687px inline
+    //                    -> hidden (article intro moves from
+    //                    y=834 to y~=300)
+    //
+    // clientpref-* flags (toc-pinned, limited-width,
+    // custom-font-size, appearance-pinned) are intentionally not
+    // flipped: they are user preferences and we don't have
+    // localStorage. Flipping would override server-side defaults.
+    struct FeatureFlip { const char* disabled; const char* enabled; };
+    static constexpr FeatureFlip kDesktopFeatureFlips[] = {
+        {"vector-feature-main-menu-pinned-disabled",
+         "vector-feature-main-menu-pinned-enabled"},
+        {"vector-feature-page-tools-pinned-disabled",
+         "vector-feature-page-tools-pinned-enabled"},
     };
 
-    if (viewport_width >= 1120.0f) {
-        flip(disabled, enabled);
-    } else {
-        flip(enabled, disabled);
+    std::string cls = html_el->get_attribute("class");
+
+    auto flip_one = [&](const char* from, const char* to) {
+        const std::string from_s(from);
+        const std::string to_s(to);
+        const auto pos = cls.find(from_s);
+        if (pos == std::string::npos) return;
+        cls.replace(pos, from_s.size(), to_s);
+    };
+
+    const bool desktop = viewport_width >= 1120.0f;
+    for (const auto& f : kDesktopFeatureFlips) {
+        if (desktop) {
+            flip_one(f.disabled, f.enabled);
+        } else {
+            flip_one(f.enabled, f.disabled);
+        }
     }
+
+    html_el->set_attribute("class", cls);
 }
 
 } // namespace
@@ -223,7 +249,19 @@ void RenderPipeline::relayout(float viewport_width) {
     // obstruction. Principled fix is ADR-030.
     std::string viewport_css;
     if (viewport_width >= 1120.0f) {
-        viewport_css = "#p-lang-btn{display:none}";
+        // ADR-029 workaround: language dropdown (140 items) is
+        // :checked-controlled in real Wikipedia; without :checked
+        // support (ADR-031), hide it. Will be removed when ADR-031
+        // lands.
+        // ADR-030: skip link uses .mw-jump-link:not(:focus) +
+        // position:absolute + clip in real Wikipedia; we support
+        // none of those. !important beats the :not rule (which
+        // we can't match anyway). Will be removed when ADR-031
+        // lands with :not + position + clip + future :focus
+        // support.
+        viewport_css =
+            "#p-lang-btn{display:none}"
+            ".mw-jump-link{display:none !important}";
     }
     sheet_cache_ = renderer::css::Stylesheet::parse(
         merged_css_ + viewport_css);

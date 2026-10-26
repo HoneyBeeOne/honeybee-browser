@@ -1858,6 +1858,91 @@ TEST_CASE("viewport feature classes: mobile keeps disabled",
           == std::string::npos);
 }
 
+TEST_CASE("feature-classes: page-tools-pinned flips at desktop",
+          "[browser][adr-030][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-page-tools-pinned-disabled\">"
+        "<body></body></html>",
+        1200.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    const std::string cls = html_el->get_attribute("class");
+    CHECK(cls.find("vector-feature-page-tools-pinned-enabled")
+          != std::string::npos);
+    CHECK(cls.find("vector-feature-page-tools-pinned-disabled")
+          == std::string::npos);
+}
+
+TEST_CASE("feature-classes: page-tools-pinned unchanged at mobile",
+          "[browser][adr-030][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-page-tools-pinned-disabled\">"
+        "<body></body></html>",
+        800.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    const std::string cls = html_el->get_attribute("class");
+    CHECK(cls.find("vector-feature-page-tools-pinned-disabled")
+          != std::string::npos);
+}
+
+TEST_CASE("feature-classes: both flips round-trip together",
+          "[browser][adr-030][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html class=\"vector-feature-main-menu-pinned-disabled "
+        "vector-feature-page-tools-pinned-disabled\">"
+        "<body></body></html>",
+        1600.0f);
+    const auto* html_el = pipeline.doc()->find_element("html");
+    REQUIRE(html_el != nullptr);
+    const std::string cls_desktop = html_el->get_attribute("class");
+    CHECK(cls_desktop.find("vector-feature-main-menu-pinned-enabled")
+          != std::string::npos);
+    CHECK(cls_desktop.find("vector-feature-page-tools-pinned-enabled")
+          != std::string::npos);
+
+    pipeline.relayout(800.0f);
+    const std::string cls_mobile = html_el->get_attribute("class");
+    CHECK(cls_mobile.find("vector-feature-main-menu-pinned-disabled")
+          != std::string::npos);
+    CHECK(cls_mobile.find("vector-feature-page-tools-pinned-disabled")
+          != std::string::npos);
+}
+
+TEST_CASE("viewport css: mw-jump-link hidden at desktop",
+          "[browser][adr-030][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html><body><a class=\"mw-jump-link\" href=\"#x\">"
+        "Jump to content</a></body></html>",
+        1200.0f);
+    const auto* el = pipeline.doc()->find_element("a");
+    REQUIRE(el != nullptr);
+    auto it = pipeline.styles().find(el);
+    REQUIRE(it != pipeline.styles().end());
+    const auto v = it->second.get("display");
+    REQUIRE(v.has_value());
+    CHECK(*v == "none");
+}
+
+TEST_CASE("viewport css: mw-jump-link untouched at mobile",
+          "[browser][adr-030][feature-classes]") {
+    honeybee::browser::RenderPipeline pipeline;
+    pipeline.render(
+        "<html><body><a class=\"mw-jump-link\" href=\"#x\">"
+        "Jump to content</a></body></html>",
+        800.0f);
+    const auto* el = pipeline.doc()->find_element("a");
+    REQUIRE(el != nullptr);
+    auto it = pipeline.styles().find(el);
+    REQUIRE(it != pipeline.styles().end());
+    const auto v = it->second.get("display");
+    if (v) CHECK(*v != "none");
+}
+
 TEST_CASE("viewport css: p-lang-btn hidden at desktop",
           "[browser][adr-029][feature-classes]") {
     honeybee::browser::RenderPipeline pipeline;
