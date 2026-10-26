@@ -493,6 +493,46 @@ title and page chrome** (y=107 through y=834). The article *body*
 intro is at y=834, one small scroll away. This is the closest
 Wikipedia has ever rendered in HoneyBee.
 
+### Post-ADR-030 update (2026-10-26)
+
+The prediction in this note -- that "a principled fix for
+`:checked` + `position: absolute` (ADR-030) will collapse the
+toolbar too and move the intro above the fold" -- was wrong
+about the **mechanism**.
+
+ADR-030's measurement showed that the Tools panel was **not**
+`:checked`-controlled. It was controlled by another
+**feature-class flip** on `<html>`
+(`vector-feature-page-tools-pinned-disabled` -> `-enabled` at
+desktop). Same JS-set pattern as ADR-029's own main-menu flip.
+The visible bug was solved by the flip, not by structural work.
+
+`:checked` and `position: absolute` remain genuinely needed for
+future features (click-to-open dropdowns, infoboxes, thumbnails),
+and ADR-031 remains their home. But they weren't the mechanism
+behind the Tools panel.
+
+Measured actuals after ADR-030 (viewport 1774):
+
+| Element | ADR-029 baseline | Actual after ADR-030 |
+|---|---|---|
+| `.mw-page-container-inner` y | 59 | **36** |
+| `.vector-page-toolbar` height | 687 | **21** |
+| `vector-body` (article) y | 834 | **145** |
+| `h1#firstHeading` y | 107 | **84** |
+
+The article intro at y=145 is deeply above the fold, not "one
+small scroll away" as this note predicted. The improvement
+exceeded the prediction. The prediction was honest but
+pessimistic about the destination and wrong about the mechanism.
+
+This is the third correction in ADR-029's record: (1) the
+mid-cycle Commit 2 regression that motivated Commit 3, (2) the
+post-merge language-dropdown overstatement, (3) this mechanism
+prediction. Each correction is preserved in place rather than
+rewritten -- same discipline as ADR-028's post-fix corrections
+to ADR-025/026/027.
+
 ### The discipline working preventively
 
 This is the first time the measure-predict-verify-correct
