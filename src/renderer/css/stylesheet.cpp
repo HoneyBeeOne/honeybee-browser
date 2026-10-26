@@ -208,6 +208,120 @@ bool is_box_shorthand(std::string_view prop) {
 // Track parsing happens at layout time; malformed tracks degrade
 // to auto-flow there. This keeps parse-time logic string-only,
 // matching how `margin`, `width`, etc. already work.
+// ADR-029: shared whitespace tokenizer for shorthand expansion.
+namespace {
+std::vector<std::string> split_ws(std::string_view s) {
+    std::vector<std::string> parts;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() &&
+               (s[i] == ' ' || s[i] == '\t' ||
+                s[i] == '\n' || s[i] == '\r')) ++i;
+        if (i >= s.size()) break;
+        const size_t start = i;
+        while (i < s.size() &&
+               s[i] != ' ' && s[i] != '\t' &&
+               s[i] != '\n' && s[i] != '\r') ++i;
+        parts.emplace_back(s.substr(start, i - start));
+    }
+    return parts;
+}
+}  // namespace
+
+// ADR-029: flex shorthand expansion.
+//
+//   flex: <number>                    -> grow=N, shrink=1, basis=0
+//   flex: <number> <number>           -> grow=A, shrink=B, basis=0
+//   flex: <number> <number> <length>  -> grow=A, shrink=B, basis=C
+//   flex: auto                        -> grow=1, shrink=1, basis=auto
+//   flex: none                        -> grow=0, shrink=0, basis=auto
+//   flex: initial                     -> grow=0, shrink=1, basis=auto
+bool try_expand_flex(std::string_view value, bool important,
+                     std::vector<Declaration>& out) {
+    const auto parts = split_ws(value);
+    if (parts.empty() || parts.size() > 3) return false;
+
+    if (parts.size() == 1) {
+        const auto& p = parts[0];
+        if (p == "auto") {
+            out.push_back({"flex-grow", "1", important});
+            out.push_back({"flex-shrink", "1", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+        if (p == "none") {
+            out.push_back({"flex-grow", "0", important});
+            out.push_back({"flex-shrink", "0", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+        if (p == "initial") {
+            out.push_back({"flex-grow", "0", important});
+            out.push_back({"flex-shrink", "1", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+    }
+
+    std::string grow, shrink, basis;
+    if (parts.size() == 1) {
+        grow = parts[0]; shrink = "1"; basis = "0";
+    } else if (parts.size() == 2) {
+        grow = parts[0]; shrink = parts[1]; basis = "0";
+    } else {
+        grow = parts[0]; shrink = parts[1]; basis = parts[2];
+    }
+    out.push_back({"flex-grow", grow, important});
+    out.push_back({"flex-shrink", shrink, important});
+    out.push_back({"flex-basis", basis, important});
+    return true;
+}
+
+// ADR-029: flex-flow shorthand expansion.
+//
+//   flex-flow: <direction>       -> direction only, wrap=nowrap
+//   flex-flow: <wrap>            -> wrap only, direction=row
+//   flex-flow: <a> <b>           -> both (either order per CSS spec)
+bool try_expand_flex_flow(std::string_view value, bool important,
+                          std::vector<Declaration>& out) {
+    const auto parts = split_ws(value);
+    if (parts.empty() || parts.size() > 2) return false;
+
+    auto is_direction = [](const std::string& s) {
+        return s == "row" || s == "row-reverse" ||
+               s == "column" || s == "column-reverse";
+    };
+    auto is_wrap = [](const std::string& s) {
+        return s == "nowrap" || s == "wrap" || s == "wrap-reverse";
+    };
+
+    if (parts.size() == 1) {
+        if (is_direction(parts[0])) {
+            out.push_back({"flex-direction", parts[0], important});
+            out.push_back({"flex-wrap", "nowrap", important});
+            return true;
+        }
+        if (is_wrap(parts[0])) {
+            out.push_back({"flex-direction", "row", important});
+            out.push_back({"flex-wrap", parts[0], important});
+            return true;
+        }
+        return false;
+    }
+
+    if (is_direction(parts[0]) && is_wrap(parts[1])) {
+        out.push_back({"flex-direction", parts[0], important});
+        out.push_back({"flex-wrap", parts[1], important});
+        return true;
+    }
+    if (is_wrap(parts[0]) && is_direction(parts[1])) {
+        out.push_back({"flex-direction", parts[1], important});
+        out.push_back({"flex-wrap", parts[0], important});
+        return true;
+    }
+    return false;
+}
+
 bool try_expand_grid_template(std::string_view value, bool important,
                               std::vector<Declaration>& out) {
     // Reject inline-areas form (quotes) -- deferred.
@@ -254,6 +368,20 @@ void expand_shorthand(std::string_view property, std::string_view value,
     if (property == "grid-template") {
         if (try_expand_grid_template(value, important, out)) return;
         // Malformed or inline-areas form: drop declaration entirely.
+        return;
+    }
+
+    // ADR-029: flex shorthand.
+    if (property == "flex") {
+        if (try_expand_flex(value, important, out)) return;
+        // Malformed: drop declaration entirely (matching grid-template).
+        return;
+    }
+
+    // ADR-029: flex-flow shorthand.
+    if (property == "flex-flow") {
+        if (try_expand_flex_flow(value, important, out)) return;
+        // Malformed: drop declaration entirely.
         return;
     }
 

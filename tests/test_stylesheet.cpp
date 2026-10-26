@@ -694,6 +694,147 @@ TEST_CASE("grid-template: malformed (no slash) dropped",
     CHECK(sheet.rules[0].declarations.empty());
 }
 
+// =============================================================
+// ADR-029: flex shorthand expansion.
+// =============================================================
+
+TEST_CASE("flex: single number expands to grow/shrink/basis",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: 1 }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].property == "flex-grow");
+    CHECK(sheet.rules[0].declarations[0].value == "1");
+    CHECK(sheet.rules[0].declarations[1].property == "flex-shrink");
+    CHECK(sheet.rules[0].declarations[1].value == "1");
+    CHECK(sheet.rules[0].declarations[2].property == "flex-basis");
+    CHECK(sheet.rules[0].declarations[2].value == "0");
+}
+
+TEST_CASE("flex: two numbers expand with default basis 0",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: 2 3 }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].value == "2");
+    CHECK(sheet.rules[0].declarations[1].value == "3");
+    CHECK(sheet.rules[0].declarations[2].value == "0");
+}
+
+TEST_CASE("flex: Wikipedia's actual shorthand (1 1 100%)",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: 1 1 100% }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].value == "1");
+    CHECK(sheet.rules[0].declarations[1].value == "1");
+    CHECK(sheet.rules[0].declarations[2].value == "100%");
+}
+
+TEST_CASE("flex: auto keyword", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: auto }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].value == "1");
+    CHECK(sheet.rules[0].declarations[1].value == "1");
+    CHECK(sheet.rules[0].declarations[2].value == "auto");
+}
+
+TEST_CASE("flex: none keyword", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: none }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].value == "0");
+    CHECK(sheet.rules[0].declarations[1].value == "0");
+    CHECK(sheet.rules[0].declarations[2].value == "auto");
+}
+
+TEST_CASE("flex: preserves !important", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex: 1 1 auto !important }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 3);
+    CHECK(sheet.rules[0].declarations[0].important);
+    CHECK(sheet.rules[0].declarations[1].important);
+    CHECK(sheet.rules[0].declarations[2].important);
+}
+
+// =============================================================
+// ADR-029: flex-flow shorthand expansion.
+// =============================================================
+
+TEST_CASE("flex-flow: single direction", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: row }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].property == "flex-direction");
+    CHECK(sheet.rules[0].declarations[0].value == "row");
+    CHECK(sheet.rules[0].declarations[1].property == "flex-wrap");
+    CHECK(sheet.rules[0].declarations[1].value == "nowrap");
+}
+
+TEST_CASE("flex-flow: column", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: column }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].value == "column");
+    CHECK(sheet.rules[0].declarations[1].value == "nowrap");
+}
+
+TEST_CASE("flex-flow: direction + wrap", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: row nowrap }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].value == "row");
+    CHECK(sheet.rules[0].declarations[1].value == "nowrap");
+}
+
+TEST_CASE("flex-flow: single wrap keyword", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: wrap }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].value == "row");
+    CHECK(sheet.rules[0].declarations[1].value == "wrap");
+}
+
+TEST_CASE("flex-flow: wrap then direction", "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: wrap column }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].value == "column");
+    CHECK(sheet.rules[0].declarations[1].value == "wrap");
+}
+
+TEST_CASE("flex-flow: preserves !important",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { flex-flow: row wrap !important }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+    CHECK(sheet.rules[0].declarations[0].important);
+    CHECK(sheet.rules[0].declarations[1].important);
+}
+
+// =============================================================
+// ADR-029: display: flex / inline-flex pass through untouched.
+// =============================================================
+
+TEST_CASE("display: flex passes through as single declaration",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { display: flex }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property == "display");
+    CHECK(sheet.rules[0].declarations[0].value == "flex");
+}
+
+TEST_CASE("display: inline-flex passes through",
+          "[css][stylesheet][adr-029]") {
+    auto sheet = Stylesheet::parse(".x { display: inline-flex }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property == "display");
+    CHECK(sheet.rules[0].declarations[0].value == "inline-flex");
+}
+
 TEST_CASE("grid-template-columns alone is not a shorthand",
           "[css][stylesheet][adr-028]") {
     auto sheet = Stylesheet::parse(
