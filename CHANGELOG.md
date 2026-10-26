@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Visibility + opacity paint culling** (ADR-032): `LayoutBox`
+  gains a `visible` flag set during layout from `visibility:
+  hidden | collapse` or `opacity: 0`. `paint_box()` early-returns
+  when false. Paint is now authoritative about visibility --
+  defense-in-depth against paint drawing a subtree that layout
+  skipped. Structural precondition for future `:checked` dropdown
+  support. Also disproved ADR-031's apparent "paint overlap"
+  (diagnostic showed only legitimate article content at x<500,
+  y<900; the perceived overlap was the HTML article's intro
+  paragraphs mentioning HTML5/XHTML/WHATWG, misread as nav-style
+  content). See ADR-031's Post-ADR-032 correction.
 - **Feature-class flip table + skip-link hide** (ADR-030): extends
   ADR-029's single-flip helper into a `constexpr` table (entries
   for `main-menu-pinned` and `page-tools-pinned`) and injects
