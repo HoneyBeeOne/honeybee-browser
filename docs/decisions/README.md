@@ -31,11 +31,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 026 | [CSS Variable Resolution](026-css-variables.md) | `:root` + `var()` via fallbacks; ~92% resolution |
 | 027 | [@media Block Support](027-media-queries.md) | Parse @media, filter by viewport; 52% of blocks fire at 1024 |
 | 028 | [CSS Grid Layout (Basic)](028-grid-layout.md) | `display: grid` + track sizing + named areas; sidebar transform |
+| 029 | [Flex Layout (Basic)](029-flex-layout.md) | `display: flex` + single-line algorithm; header bar layout |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 028 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 029 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
