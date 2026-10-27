@@ -428,10 +428,33 @@ TEST_CASE("parse: :hover pseudo-class", "[css][selectors]") {
 
 TEST_CASE("parse: unknown pseudo-class is a parse error",
           "[css][selectors]") {
+    // ADR-038 note: :first-child used to be in this list;
+    // it's now supported (structural pseudo-class). :not() also
+    // moved out (logical pseudo-class, ADR-038 Commit 2).
+    // :focus and :active are still unsupported (form-state
+    // category, deferred to their own ADR).
     CHECK_FALSE(Selector::parse("a:focus").has_value());
-    CHECK_FALSE(Selector::parse("a:first-child").has_value());
     CHECK_FALSE(Selector::parse("a:active").has_value());
-    CHECK_FALSE(Selector::parse(":not(.x)").has_value());
+    CHECK_FALSE(Selector::parse("a:checked").has_value());
+}
+
+TEST_CASE("parse: :first-child now supported (ADR-038)",
+          "[css][selectors][adr-038]") {
+    // ADR-038: structural pseudo-classes parse and dispatch to
+    // their SimpleKind.
+    auto s = Selector::parse("a:first-child");
+    REQUIRE(s);
+    REQUIRE(s->parts[0].compound.simples.size() == 2);
+    CHECK(s->parts[0].compound.simples[1].kind
+          == SimpleKind::PseudoFirstChild);
+
+    auto s2 = Selector::parse("li:nth-child(2n+1)");
+    REQUIRE(s2);
+    REQUIRE(s2->parts[0].compound.simples.size() == 2);
+    const auto& ps = s2->parts[0].compound.simples[1];
+    CHECK(ps.kind == SimpleKind::PseudoNthChild);
+    CHECK(ps.nth_a == 2);
+    CHECK(ps.nth_b == 1);
 }
 
 TEST_CASE("specificity: :link adds class weight", "[css][selectors][specificity]") {

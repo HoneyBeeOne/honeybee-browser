@@ -1,4 +1,7 @@
 #include "renderer/css/selectors.hpp"
+
+#include <optional>
+#include <utility>
 #include "base/url.hpp"
 #include "renderer/css/render_state.hpp"
 #include "renderer/dom/node.hpp"
@@ -6,6 +9,108 @@
 #include <utility>
 
 namespace honeybee::renderer::css {
+
+// ADR-038 Commit 3: find the nearest lang attribute walking from
+// el up through ancestors. Returns empty string if none.
+std::string find_ancestor_lang(const dom::Element& el) {
+    const dom::Node* cur = &el;
+    while (cur && cur->type() == dom::NodeType::Element) {
+        const auto& e = static_cast<const dom::Element&>(*cur);
+        std::string lang = e.get_attribute("lang");
+        if (!lang.empty()) return lang;
+        cur = e.parent();
+    }
+    return "";
+}
+
+// ADR-038 Commit 3: BCP-47 prefix match. Case-insensitive.
+//   matches_lang("en-US", "en")   -> true
+//   matches_lang("en", "en-US")   -> false
+//   matches_lang("en", "en")      -> true
+bool matches_lang(const std::string& element_lang,
+                  const std::string& query) {
+    if (element_lang.empty()) return false;
+    auto to_lower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string el = to_lower(element_lang);
+    const std::string q = to_lower(query);
+    if (el == q) return true;
+    if (el.size() > q.size() &&
+        el.compare(0, q.size(), q) == 0 &&
+        el[q.size()] == '-') {
+        return true;
+    }
+    return false;
+}
+
+// ADR-038: parse an An+B argument string. Returns (a, b) or nullopt.
+// Accepts: "odd", "even", "N" (integer), "An", "An+B", "An-B",
+// "-An+B", "-An-B". Whitespace around operators allowed.
+// Self-contained (inlined is_ws check) so no forward-declaration
+// dependency on other helpers.
+std::optional<std::pair<int,int>> parse_nth_arg(std::string_view s) {
+    auto is_ws_ch = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    };
+    while (!s.empty() && is_ws_ch(s.front())) s.remove_prefix(1);
+    while (!s.empty() && is_ws_ch(s.back())) s.remove_suffix(1);
+    if (s.empty()) return std::nullopt;
+
+    if (s == "odd")  return std::make_pair(2, 1);
+    if (s == "even") return std::make_pair(2, 0);
+
+    size_t pos = 0;
+    int sign1 = 1;
+    if (pos < s.size() && (s[pos] == '+' || s[pos] == '-')) {
+        if (s[pos] == '-') sign1 = -1;
+        pos++;
+    }
+
+    size_t n_pos = s.find_first_of("nN", pos);
+    if (n_pos != std::string_view::npos) {
+        int a;
+        if (n_pos == pos) {
+            a = sign1;
+        } else {
+            std::string a_str(s.substr(pos, n_pos - pos));
+            try {
+                a = sign1 * std::stoi(a_str);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+        size_t b_pos = n_pos + 1;
+        while (b_pos < s.size() && is_ws_ch(s[b_pos])) b_pos++;
+        if (b_pos >= s.size()) return std::make_pair(a, 0);
+        int sign2 = 1;
+        if (s[b_pos] == '+' || s[b_pos] == '-') {
+            if (s[b_pos] == '-') sign2 = -1;
+            b_pos++;
+        }
+        while (b_pos < s.size() && is_ws_ch(s[b_pos])) b_pos++;
+        if (b_pos >= s.size()) return std::nullopt;
+        std::string b_str(s.substr(b_pos));
+        try {
+            int b = sign2 * std::stoi(b_str);
+            return std::make_pair(a, b);
+        } catch (...) {
+            return std::nullopt;
+        }
+    } else {
+        std::string num(s.substr(pos));
+        try {
+            int b = sign1 * std::stoi(num);
+            return std::make_pair(0, b);
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+}
+
+
 
 bool operator<(const Specificity& lhs, const Specificity& rhs) {
     if (lhs.a != rhs.a) return lhs.a < rhs.a;
@@ -166,6 +271,89 @@ private:
             if (*name == "visited") { out.kind = SimpleKind::PseudoVisited; return out; }
             if (*name == "hover")   { out.kind = SimpleKind::PseudoHover;   return out; }
             if (*name == "root")    { out.kind = SimpleKind::PseudoRoot;    return out; }
+
+            // ADR-038: structural pseudo-classes (no-arg forms)
+            if (*name == "first-child")   { out.kind = SimpleKind::PseudoFirstChild;  return out; }
+            if (*name == "last-child")    { out.kind = SimpleKind::PseudoLastChild;   return out; }
+            if (*name == "only-child")    { out.kind = SimpleKind::PseudoOnlyChild;   return out; }
+            if (*name == "empty")         { out.kind = SimpleKind::PseudoEmpty;       return out; }
+            if (*name == "first-of-type") { out.kind = SimpleKind::PseudoFirstOfType; return out; }
+            if (*name == "last-of-type")  { out.kind = SimpleKind::PseudoLastOfType;  return out; }
+            if (*name == "only-of-type")  { out.kind = SimpleKind::PseudoOnlyOfType;  return out; }
+
+            // ADR-038: structural pseudo-classes with (An+B) argument
+            auto parse_nth_pseudo = [&](SimpleKind k)
+                    -> std::optional<SimpleSelector> {
+                if (peek() != '(') { failed_ = true; return std::nullopt; }
+                advance();
+                std::string arg;
+                int depth = 1;
+                while (!at_end()) {
+                    char ch = peek();
+                    if (ch == '(') depth++;
+                    else if (ch == ')') {
+                        depth--;
+                        if (depth == 0) { advance(); break; }
+                    }
+                    arg.push_back(ch);
+                    advance();
+                }
+                if (depth != 0) { failed_ = true; return std::nullopt; }
+                auto ab = parse_nth_arg(arg);
+                if (!ab) { failed_ = true; return std::nullopt; }
+                SimpleSelector result;
+                result.kind = k;
+                result.nth_a = ab->first;
+                result.nth_b = ab->second;
+                return result;
+            };
+
+            if (*name == "nth-child")        return parse_nth_pseudo(SimpleKind::PseudoNthChild);
+            if (*name == "nth-last-child")   return parse_nth_pseudo(SimpleKind::PseudoNthLastChild);
+            if (*name == "nth-of-type")      return parse_nth_pseudo(SimpleKind::PseudoNthOfType);
+            if (*name == "nth-last-of-type") return parse_nth_pseudo(SimpleKind::PseudoNthLastOfType);
+
+            // ADR-038 Commit 2: logical pseudo-classes
+            auto parse_logical_pseudo = [&](SimpleKind k)
+                    -> std::optional<SimpleSelector> {
+                if (peek() != '(') { failed_ = true; return std::nullopt; }
+                advance();
+                SimpleSelector result;
+                result.kind = k;
+                while (true) {
+                    skip_ws();
+                    auto comp = parse_compound();
+                    if (!comp) { failed_ = true; return std::nullopt; }
+                    result.sub_args.push_back(std::move(comp->simples));
+                    skip_ws();
+                    if (at_end()) { failed_ = true; return std::nullopt; }
+                    if (peek() == ',') { advance(); continue; }
+                    if (peek() == ')') { advance(); break; }
+                    failed_ = true;
+                    return std::nullopt;
+                }
+                return result;
+            };
+            if (*name == "not")   return parse_logical_pseudo(SimpleKind::PseudoNot);
+            if (*name == "is")    return parse_logical_pseudo(SimpleKind::PseudoIs);
+            if (*name == "where") return parse_logical_pseudo(SimpleKind::PseudoWhere);
+
+            // ADR-038 Commit 3: language pseudo-class :lang(tag)
+            if (*name == "lang") {
+                if (peek() != '(') { failed_ = true; return std::nullopt; }
+                advance();
+                skip_ws();
+                auto tag = parse_ident();
+                if (!tag) { failed_ = true; return std::nullopt; }
+                skip_ws();
+                if (peek() != ')') { failed_ = true; return std::nullopt; }
+                advance();
+                SimpleSelector result;
+                result.kind = SimpleKind::PseudoLang;
+                result.name = std::move(*tag);
+                return result;
+            }
+
             failed_ = true;  // unknown pseudo-class
             return std::nullopt;
         }
@@ -275,7 +463,64 @@ Specificity Selector::specificity() const {
                 case SimpleKind::PseudoLink:
                 case SimpleKind::PseudoVisited:
                 case SimpleKind::PseudoHover:
-                case SimpleKind::PseudoRoot: ++out.b; break;
+                case SimpleKind::PseudoRoot:
+                // ADR-038: all structural pseudos are class-level
+                // specificity (0,1,0), same as :link / :hover / etc.
+                case SimpleKind::PseudoFirstChild:
+                case SimpleKind::PseudoLastChild:
+                case SimpleKind::PseudoOnlyChild:
+                case SimpleKind::PseudoEmpty:
+                case SimpleKind::PseudoFirstOfType:
+                case SimpleKind::PseudoLastOfType:
+                case SimpleKind::PseudoOnlyOfType:
+                case SimpleKind::PseudoNthChild:
+                case SimpleKind::PseudoNthLastChild:
+                case SimpleKind::PseudoNthOfType:
+                case SimpleKind::PseudoNthLastOfType:
+                case SimpleKind::PseudoLang: ++out.b; break;
+                // ADR-038 Commit 2: :not() and :is() take the max
+                // specificity of their arguments; :where() is always 0.
+                case SimpleKind::PseudoNot:
+                case SimpleKind::PseudoIs: {
+                    Specificity max_arg;
+                    for (const auto& arg_compound : s.sub_args) {
+                        Specificity arg_spec;
+                        for (const auto& sub : arg_compound) {
+                            switch (sub.kind) {
+                                case SimpleKind::Id: ++arg_spec.a; break;
+                                case SimpleKind::Class:
+                                case SimpleKind::Attribute:
+                                case SimpleKind::PseudoLink:
+                                case SimpleKind::PseudoVisited:
+                                case SimpleKind::PseudoHover:
+                                case SimpleKind::PseudoRoot:
+                                case SimpleKind::PseudoFirstChild:
+                                case SimpleKind::PseudoLastChild:
+                                case SimpleKind::PseudoOnlyChild:
+                                case SimpleKind::PseudoEmpty:
+                                case SimpleKind::PseudoFirstOfType:
+                                case SimpleKind::PseudoLastOfType:
+                                case SimpleKind::PseudoOnlyOfType:
+                                case SimpleKind::PseudoNthChild:
+                                case SimpleKind::PseudoNthLastChild:
+                                case SimpleKind::PseudoNthOfType:
+                                case SimpleKind::PseudoNthLastOfType:
+                                case SimpleKind::PseudoLang: ++arg_spec.b; break;
+                                case SimpleKind::Type: ++arg_spec.c; break;
+                                case SimpleKind::Universal: break;
+                                case SimpleKind::PseudoNot:
+                                case SimpleKind::PseudoIs:
+                                case SimpleKind::PseudoWhere: break;  // recurse: rare, skip
+                            }
+                        }
+                        if (max_arg < arg_spec) max_arg = arg_spec;
+                    }
+                    out.a += max_arg.a;
+                    out.b += max_arg.b;
+                    out.c += max_arg.c;
+                    break;
+                }
+                case SimpleKind::PseudoWhere: break;  // always 0,0,0
                 case SimpleKind::Type:      ++out.c; break;
                 case SimpleKind::Universal: break;
             }
@@ -312,6 +557,81 @@ const dom::Node* previous_sibling(const dom::Node* node) {
 
 bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+// ADR-038: sibling position helpers. All operate on ELEMENT
+// siblings only (text/comment nodes don't count for :first-child
+// et al. per CSS spec).
+int sibling_index(const dom::Element& el) {
+    const dom::Node* parent = el.parent();
+    if (!parent) return -1;
+    int idx = 0;
+    for (const auto& c : parent->children()) {
+        if (c->type() != dom::NodeType::Element) continue;
+        if (c.get() == &el) return idx;
+        idx++;
+    }
+    return -1;
+}
+
+int sibling_count(const dom::Element& el) {
+    const dom::Node* parent = el.parent();
+    if (!parent) return 0;
+    int count = 0;
+    for (const auto& c : parent->children()) {
+        if (c->type() == dom::NodeType::Element) count++;
+    }
+    return count;
+}
+
+int same_type_index(const dom::Element& el) {
+    const dom::Node* parent = el.parent();
+    if (!parent) return -1;
+    int idx = 0;
+    for (const auto& c : parent->children()) {
+        if (c->type() != dom::NodeType::Element) continue;
+        const auto& child_el = static_cast<const dom::Element&>(*c);
+        if (c.get() == &el) return idx;
+        if (child_el.tag() == el.tag()) idx++;
+    }
+    return -1;
+}
+
+int same_type_count(const dom::Element& el) {
+    const dom::Node* parent = el.parent();
+    if (!parent) return 0;
+    int count = 0;
+    for (const auto& c : parent->children()) {
+        if (c->type() != dom::NodeType::Element) continue;
+        const auto& child_el = static_cast<const dom::Element&>(*c);
+        if (child_el.tag() == el.tag()) count++;
+    }
+    return count;
+}
+
+// ADR-038: An+B match. index_1based is 1-based (CSS uses 1-based).
+// Matches if index_1based == a*n + b for some n >= 0.
+bool matches_nth(int index_1based, int a, int b) {
+    if (a == 0) return index_1based == b;
+    const int diff = index_1based - b;
+    if (diff % a != 0) return false;
+    const int n = diff / a;
+    return n >= 0;
+}
+
+// ADR-038: :empty semantics. No element children AND no
+// non-whitespace text content. Comments don't count.
+bool is_empty_element(const dom::Element& el) {
+    for (const auto& c : el.children()) {
+        if (c->type() == dom::NodeType::Element) return false;
+        if (c->type() == dom::NodeType::Text) {
+            const auto& t = static_cast<const dom::TextNode&>(*c);
+            for (char ch : t.data()) {
+                if (!is_ws(ch)) return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool contains_word(std::string_view text, std::string_view word) {
@@ -407,6 +727,62 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el,
             return p == nullptr ||
                    p->type() == dom::NodeType::Document;
         }
+        // ADR-038: structural pseudo-classes
+        case SimpleKind::PseudoFirstChild:
+            return sibling_index(el) == 0;
+        case SimpleKind::PseudoLastChild:
+            return sibling_index(el) == sibling_count(el) - 1;
+        case SimpleKind::PseudoOnlyChild:
+            return sibling_count(el) == 1;
+        case SimpleKind::PseudoEmpty:
+            return is_empty_element(el);
+        case SimpleKind::PseudoFirstOfType:
+            return same_type_index(el) == 0;
+        case SimpleKind::PseudoLastOfType:
+            return same_type_index(el) == same_type_count(el) - 1;
+        case SimpleKind::PseudoOnlyOfType:
+            return same_type_count(el) == 1;
+        case SimpleKind::PseudoNthChild:
+            return matches_nth(sibling_index(el) + 1, s.nth_a, s.nth_b);
+        case SimpleKind::PseudoNthLastChild:
+            return matches_nth(sibling_count(el) - sibling_index(el),
+                               s.nth_a, s.nth_b);
+        case SimpleKind::PseudoNthOfType:
+            return matches_nth(same_type_index(el) + 1, s.nth_a, s.nth_b);
+        case SimpleKind::PseudoNthLastOfType:
+            return matches_nth(same_type_count(el) - same_type_index(el),
+                               s.nth_a, s.nth_b);
+        // ADR-038 Commit 2: logical pseudo-classes
+        case SimpleKind::PseudoNot: {
+            for (const auto& arg_compound : s.sub_args) {
+                bool all_match = true;
+                for (const auto& sub : arg_compound) {
+                    if (!matches_simple(sub, el, state)) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if (all_match) return false;  // :not() -> NOT any
+            }
+            return true;
+        }
+        case SimpleKind::PseudoIs:
+        case SimpleKind::PseudoWhere: {
+            for (const auto& arg_compound : s.sub_args) {
+                bool all_match = true;
+                for (const auto& sub : arg_compound) {
+                    if (!matches_simple(sub, el, state)) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if (all_match) return true;
+            }
+            return false;
+        }
+        // ADR-038 Commit 3: language pseudo-class
+        case SimpleKind::PseudoLang:
+            return matches_lang(find_ancestor_lang(el), s.name);
     }
     return false;
 }

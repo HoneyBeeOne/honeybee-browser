@@ -8,6 +8,7 @@ add_executable(honeybee_tests
   test_selectors.cpp
   test_stylesheet.cpp
     test_calc.cpp
+    test_pseudos.cpp
   test_cascade.cpp
   test_hover_sensitivity.cpp
   test_ua_stylesheet.cpp
