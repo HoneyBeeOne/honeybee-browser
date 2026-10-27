@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clear` property** (ADR-036): floats with `clear:right |
+  left | both` now jump below prior same-direction floats
+  instead of overlapping at the same edge; non-float blocks
+  with `clear` jump below active floats. Zero visible delta
+  on current pages (byte-identical PNG, layout height
+  unchanged at 62295), but defensively correct for articles
+  with consecutive same-side thumbnails and heading-with-
+  `clear:both` section patterns. **Fifth misdiagnosis in the
+  arc's correction record**: ADR-036's original spec
+  hypothesized attribute selectors and floats were broken;
+  diagnostic proved both already worked (attribute selectors
+  since ADR-008, floats since ADR-031). The amendment (#188)
+  and Implementation section preserve the correction
+  alongside the original claim. **Nav overlap at x=324**
+  (visible since ADR-029) identified as a separate,
+  currently-unidentified element, deferred to its own
+  diagnostic cycle.
 - **Layout-integrated `<img>`** (ADR-035): `<img>` elements now
   reserve layout space from intrinsic dimensions via a new
   `ImageDimLookup` callback threaded through `layout()` (default
