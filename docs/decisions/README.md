@@ -39,11 +39,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 034 | [`<img>` Element Paint + `position: absolute`](034-img-absolute.md) | PNG image fetch/decode/paint (paint-time); absolute containing-block tracking |
 | 035 | [Layout-Integrated `<img>`](035-img-layout.md) | Intrinsic dims reserve space; tagline unhide; thumbnails no longer overlap |
 | 036 | [Attribute Selectors + `clear`](036-attr-clear.md) | `[attr~=val]` etc.; float stacking via `clear`; thumbnail right-anchoring |
+| 037 | [CSS Value Functions: calc() / min() / max() / clamp()](037-calc.md) | Math expression evaluator + var()-inside-calc; search icon sized correctly |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 036 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 037 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
