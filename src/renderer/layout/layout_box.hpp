@@ -117,6 +117,12 @@ struct LayoutBox final : LayoutNode {
     // rect. Handles data: URLs (search icon).
     std::string background_image_url;
 
+    // ADR-039: paint clips children to box content bounds when
+    // true. Set during layout from `overflow: hidden`. Children
+    // render normally (positions computed as if not clipped);
+    // paint wraps their draw in a Cairo clip rectangle.
+    bool clip_children = false;
+
     const dom::Element* element = nullptr;
     std::vector<std::unique_ptr<LayoutNode>> children;
 
