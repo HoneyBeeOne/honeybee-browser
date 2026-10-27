@@ -44,6 +44,24 @@ enum class SimpleKind {
     PseudoVisited,  // :visited (ADR-018)
     PseudoHover,    // :hover   (ADR-018)
     PseudoRoot,     // :root    (ADR-026)
+    // ADR-038: structural pseudo-classes
+    PseudoFirstChild,
+    PseudoLastChild,
+    PseudoOnlyChild,
+    PseudoEmpty,
+    PseudoFirstOfType,
+    PseudoLastOfType,
+    PseudoOnlyOfType,
+    PseudoNthChild,
+    PseudoNthLastChild,
+    PseudoNthOfType,
+    PseudoNthLastOfType,
+    // ADR-038 Commit 2: logical pseudo-classes
+    PseudoNot,
+    PseudoIs,
+    PseudoWhere,
+    // ADR-038 Commit 3: language pseudo-class
+    PseudoLang,
 };
 
 enum class AttributeMatch {
@@ -61,6 +79,13 @@ struct SimpleSelector {
     std::string name;
     AttributeMatch attr_match = AttributeMatch::Presence;
     std::string attr_value;
+    // ADR-038: An+B arguments for :nth-* pseudos (a=0 for plain integers)
+    int nth_a = 0;
+    int nth_b = 0;
+    // ADR-038 Commit 2: argument list for :not() / :is() / :where().
+    // Outer vector = OR alternatives (comma list); inner vector =
+    // compound (AND of simples). Empty for all non-logical pseudos.
+    std::vector<std::vector<SimpleSelector>> sub_args;
 };
 
 struct CompoundSelector {
