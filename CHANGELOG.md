@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **First image rendering** (ADR-034): `<img>` elements now
+  paint. PNG via Cairo (`cairo_image_surface_create_from_png_stream`),
+  SVG via librsvg (`rsvg_handle_new_from_data` +
+  `rsvg_handle_render_document`), format-dispatched on magic
+  bytes. Decoded surfaces cached per URL, cleared on page load.
+  **The Wikipedia wordmark renders as the first `<img>` in
+  HoneyBee's history**, at the top-left of the header, using
+  viewBox aspect preservation for the 25th-anniversary
+  path-only SVG asset. `background-image` url() also extracted
+  and painted (search icon infrastructure works, deferred due
+  to `calc()` size). `position: absolute` completed from
+  ADR-033. Two SVG bugs found and documented: intrinsic size
+  is 1x1 (fixed via viewBox fallback), protocol-relative URLs
+  (`//host/path`) resolve incorrectly (deferred). Tagline hidden
+  as documented workaround until ADR-035 integrates image
+  layout.
 - **Position layout: relative + fixed** (ADR-033): `Position`
   enum on `LayoutBox` (Static / Relative / Absolute / Fixed /
   Sticky). `layout_element` parses `position` from ComputedStyle.
