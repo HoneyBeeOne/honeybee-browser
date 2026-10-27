@@ -34,6 +34,7 @@ target_link_libraries(honeybee_lib PUBLIC
   PkgConfig::CURL
   PkgConfig::CAIRO
   PkgConfig::PANGOCAIRO
+        PkgConfig::RSVG
 )
 
 # lexbor is a private implementation detail of the HTML parser.

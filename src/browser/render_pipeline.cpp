@@ -1,4 +1,13 @@
 #include "render_pipeline.hpp"
+#include "net/client.hpp"
+#include "base/url.hpp"
+
+// ADR-034: SVG decode + data URL handling.
+#include <librsvg/rsvg.h>
+
+#include <cstdio>
+#include <cstring>
+#include <string_view>
 
 #include <functional>
 #include <string>
@@ -198,6 +207,12 @@ void RenderPipeline::render_with_css(
     std::unique_ptr<renderer::dom::Document> doc,
     std::string merged_css,
     float viewport_width) {
+
+    // ADR-034: new page load invalidates image cache.
+    for (auto& [url, surf] : image_cache_) {
+        if (surf) cairo_surface_destroy(surf);
+    }
+    image_cache_.clear();
     // ADR-018: hovered_element is a raw pointer into doc_. When
     // doc_ is replaced (below), the old DOM is destroyed and
     // hovered_element becomes dangling. The next relayout()
@@ -303,8 +318,174 @@ void RenderPipeline::relayout(float viewport_width) {
     prev_hovered_ = state_.hovered_element;
 }
 
+RenderPipeline::~RenderPipeline() {
+    for (auto& [url, surf] : image_cache_) {
+        if (surf) cairo_surface_destroy(surf);
+    }
+    image_cache_.clear();
+}
+
+namespace {
+
+// ADR-034: percent-decode a data: URL payload.
+std::string percent_decode(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            try {
+                int v = std::stoi(std::string(s.substr(i+1, 2)), nullptr, 16);
+                out.push_back(static_cast<char>(v));
+                i += 2;
+                continue;
+            } catch (...) {}
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+// ADR-034: decode a data: URL into raw bytes.
+std::string decode_data_url(const std::string& url) {
+    auto comma = url.find(',');
+    if (comma == std::string::npos) return {};
+    std::string meta = url.substr(5, comma - 5);
+    std::string payload = url.substr(comma + 1);
+    if (meta.find(";base64") != std::string::npos) {
+        static const std::string table =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string out;
+        out.reserve(payload.size() * 3 / 4);
+        int buf = 0, bits = 0;
+        for (char c : payload) {
+            if (c == '=') break;
+            auto pos = table.find(c);
+            if (pos == std::string::npos) continue;
+            buf = (buf << 6) | static_cast<int>(pos);
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out.push_back(static_cast<char>((buf >> bits) & 0xFF));
+            }
+        }
+        return out;
+    }
+    return percent_decode(payload);
+}
+
+}  // namespace
+
+cairo_surface_t* RenderPipeline::get_image_surface(
+    const std::string& url) const {
+    auto it = image_cache_.find(url);
+    if (it != image_cache_.end()) return it->second;
+
+    const std::string resolved =
+        url.rfind("data:", 0) == 0
+            ? url
+            : resolve_url(url, state_.base_url);
+
+    std::string bytes;
+    if (resolved.rfind("data:", 0) == 0) {
+        bytes = decode_data_url(resolved);
+    } else {
+        auto resp = net::fetch(resolved);
+        if (!resp.success()) return nullptr;
+        bytes = std::move(resp.body);
+    }
+    if (bytes.empty()) return nullptr;
+
+    cairo_surface_t* surf = nullptr;
+
+    // PNG magic: 89 50 4E 47
+    if (bytes.size() >= 8 &&
+        static_cast<unsigned char>(bytes[0]) == 0x89 &&
+        bytes[1] == 'P' && bytes[2] == 'N' && bytes[3] == 'G') {
+        struct ReadCtx { const std::string* s; size_t pos; };
+        ReadCtx ctx{&bytes, 0};
+        auto cb = [](void* closure, unsigned char* data,
+                     unsigned int len) -> cairo_status_t {
+            auto* c = static_cast<ReadCtx*>(closure);
+            const size_t remain = c->s->size() - c->pos;
+            if (remain == 0) return CAIRO_STATUS_READ_ERROR;
+            const size_t n = len < remain ? len : remain;
+            std::memcpy(data, c->s->data() + c->pos, n);
+            c->pos += n;
+            return CAIRO_STATUS_SUCCESS;
+        };
+        surf = cairo_image_surface_create_from_png_stream(cb, &ctx);
+        if (surf && cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+            cairo_surface_destroy(surf);
+            surf = nullptr;
+        }
+    }
+    // SVG
+    else if (bytes.find("<svg") != std::string::npos ||
+             bytes.rfind("<?xml", 0) == 0) {
+        GError* err = nullptr;
+        RsvgHandle* h = rsvg_handle_new_from_data(
+            reinterpret_cast<const guint8*>(bytes.data()),
+            static_cast<gsize>(bytes.size()), &err);
+        if (h && !err) {
+            // ADR-034: Wikipedia's wordmark/tagline SVGs declare
+            // width="1" height="1" (or use CSS 100%), so their
+            // intrinsic size is 1x1. The correct design dimensions
+            // are in viewBox -- parse it from raw bytes. Fall back
+            // to intrinsic size, then 256x256.
+            double iw = 0.0, ih = 0.0;
+            {
+                auto vb_pos = bytes.find("viewBox");
+                if (vb_pos != std::string::npos) {
+                    auto eq = bytes.find('=', vb_pos);
+                    auto q1 = (eq != std::string::npos)
+                        ? bytes.find_first_of("\"'", eq) : std::string::npos;
+                    auto q2 = (q1 != std::string::npos)
+                        ? bytes.find_first_of("\"'", q1 + 1) : std::string::npos;
+                    if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                        std::string vb = bytes.substr(q1 + 1, q2 - q1 - 1);
+                        double vx = 0, vy = 0;
+                        if (std::sscanf(vb.c_str(), "%lf %lf %lf %lf",
+                                        &vx, &vy, &iw, &ih) == 4) {
+                            if (iw <= 0.0 || ih <= 0.0) { iw = 0; ih = 0; }
+                        }
+                    }
+                }
+            }
+            if (iw <= 0.0 || ih <= 0.0) {
+                rsvg_handle_get_intrinsic_size_in_pixels(h, &iw, &ih);
+            }
+            if (iw <= 0.0 || ih <= 0.0) { iw = 256.0; ih = 256.0; }
+            // Render at 4x for sharpness when scaled by paint_image.
+            int sw = static_cast<int>(iw * 4);
+            int sh = static_cast<int>(ih * 4);
+            if (sw < 1) sw = 1; if (sw > 4096) sw = 4096;
+            if (sh < 1) sh = 1; if (sh > 4096) sh = 4096;
+            cairo_surface_t* tmp = cairo_image_surface_create(
+                CAIRO_FORMAT_ARGB32, sw, sh);
+            cairo_t* tcr = cairo_create(tmp);
+            RsvgRectangle viewport = {0, 0,
+                static_cast<double>(sw), static_cast<double>(sh)};
+            gboolean ok = rsvg_handle_render_document(h, tcr, &viewport, &err);
+            cairo_destroy(tcr);
+            if (ok && !err) surf = tmp;
+            else cairo_surface_destroy(tmp);
+        }
+        if (h) g_object_unref(h);
+        if (err) g_error_free(err);
+    }
+
+    image_cache_[url] = surf;
+    return surf;
+}
+
 void RenderPipeline::paint(cairo_t* cr) const {
-    renderer::paint::paint(cr, layout_root_, &draw_line_with_pango);
+    renderer::paint::ImageProvider images;
+    images.get_surface = [this](const std::string& url) {
+        return get_image_surface(url);
+    };
+    images.base_url = state_.base_url;
+    renderer::paint::paint(
+        cr, layout_root_, &draw_line_with_pango, &images);
 }
 
 std::string RenderPipeline::title() const {

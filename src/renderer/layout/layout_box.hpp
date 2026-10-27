@@ -111,6 +111,12 @@ struct LayoutBox final : LayoutNode {
     // are stored but treated as Static in v1.
     Position position = Position::Static;
 
+    // ADR-034: background-image url() extracted from CSS during
+    // layout. Empty when no background-image. Paint fetches +
+    // decodes (PNG via Cairo, SVG via librsvg) and draws at box
+    // rect. Handles data: URLs (search icon).
+    std::string background_image_url;
+
     const dom::Element* element = nullptr;
     std::vector<std::unique_ptr<LayoutNode>> children;
 
