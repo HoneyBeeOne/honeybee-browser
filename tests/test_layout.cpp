@@ -1741,6 +1741,100 @@ TEST_CASE("position: relative offsets ignored in v1 layout",
     CHECK(r->x < 50.0f);
 }
 
+// =============================================================
+// ADR-036: clear property.
+// =============================================================
+
+TEST_CASE("clear:right on float jumps below prior right-float",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f1'>F1</div><div class='f2'>F2</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f1{float:right;width:100px;height:100px;clear:right}"
+        ".f2{float:right;width:100px;height:100px;clear:right}");
+    const auto* f1 = find_class(doc.root, "f1");
+    const auto* f2 = find_class(doc.root, "f2");
+    REQUIRE(f1 != nullptr);
+    REQUIRE(f2 != nullptr);
+    CHECK(f2->y >= f1->y + f1->height - 1.0f);
+}
+
+TEST_CASE("no clear: two float:right overlap at right edge",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f1'>F1</div><div class='f2'>F2</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f1{float:right;width:100px;height:100px}"
+        ".f2{float:right;width:100px;height:100px}");
+    const auto* f1 = find_class(doc.root, "f1");
+    const auto* f2 = find_class(doc.root, "f2");
+    REQUIRE(f1 != nullptr);
+    REQUIRE(f2 != nullptr);
+    CHECK(near(f1->y, f2->y, 2.0f));
+}
+
+TEST_CASE("clear:right on float:left does not jump",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f1'>F1</div><div class='f2'>F2</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f1{float:right;width:100px;height:100px}"
+        ".f2{float:left;width:100px;height:100px;clear:right}");
+    const auto* f1 = find_class(doc.root, "f1");
+    const auto* f2 = find_class(doc.root, "f2");
+    REQUIRE(f1 != nullptr);
+    REQUIRE(f2 != nullptr);
+    CHECK(near(f1->y, f2->y, 2.0f));
+}
+
+TEST_CASE("clear:both on float jumps below prior float",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f1'>F1</div><div class='f2'>F2</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f1{float:right;width:100px;height:100px}"
+        ".f2{float:right;width:100px;height:100px;clear:both}");
+    const auto* f1 = find_class(doc.root, "f1");
+    const auto* f2 = find_class(doc.root, "f2");
+    REQUIRE(f1 != nullptr);
+    REQUIRE(f2 != nullptr);
+    CHECK(f2->y >= f1->y + f1->height - 1.0f);
+}
+
+TEST_CASE("clear:both on non-float block jumps below float",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f'>F</div><div class='b'>B</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f{float:right;width:100px;height:100px}"
+        ".b{height:50px;clear:both}");
+    const auto* f = find_class(doc.root, "f");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(f != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(b->y >= f->y + f->height - 1.0f);
+}
+
+TEST_CASE("no clear on non-float block narrows beside float",
+          "[layout][clear][adr-036]") {
+    auto doc = run(
+        "<div class='c'><div class='f'>F</div><div class='b'>B</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".c{width:500px}"
+        ".f{float:right;width:100px;height:100px}"
+        ".b{height:50px}");
+    const auto* f = find_class(doc.root, "f");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(f != nullptr);
+    REQUIRE(b != nullptr);
+    CHECK(b->y < f->y + f->height - 1.0f);
+}
+
 // ADR-032: paint-authoritative visibility/opacity culling.
 // =============================================================
 
