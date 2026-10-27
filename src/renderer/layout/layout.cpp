@@ -164,7 +164,8 @@ LayoutBox layout_element(const dom::Element& el,
                          float parent_content_width,
                          float parent_font_size,
                          float root_font_size,
-                         Direction parent_dir) {
+                         Direction parent_dir,
+                         ImageDimLookup image_dims) {
     LayoutBox box;
     box.element = &el;
 
@@ -460,7 +461,7 @@ LayoutBox layout_element(const dom::Element& el,
                             layout_element(child_el, styles, measurer,
                                            0.0f, 0.0f, content_w,
                                            own_font_size, root_font_size,
-                                           own_dir));
+                                           own_dir, image_dims));
                         float top_off = 0.0f, left_off = 0.0f;
                         if (auto t = child_style->get("top");
                             t && *t != "auto") {
@@ -489,7 +490,7 @@ LayoutBox layout_element(const dom::Element& el,
                         layout_element(child_el, styles, measurer,
                                        content_x, cursor_y, content_w,
                                        own_font_size, root_font_size,
-                                       own_dir));
+                                       own_dir, image_dims));
                     if (float_dir == "right") {
                         // Shift right edge to content right edge.
                         const float target_right =
@@ -549,7 +550,7 @@ LayoutBox layout_element(const dom::Element& el,
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, narrow_x, cursor_y,
                                    narrow_w, own_font_size, root_font_size,
-                                   own_dir));
+                                   own_dir, image_dims));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
             } else if (child->type() == dom::NodeType::Text) {
@@ -633,7 +634,7 @@ LayoutBox layout_element(const dom::Element& el,
             // First pass: natural size for basis resolution.
             LayoutBox natural = layout_element(
                 child_el, styles, measurer, 0.0f, 0.0f, content_w,
-                own_font_size, root_font_size, own_dir);
+                own_font_size, root_font_size, own_dir, image_dims);
             const float natural_main =
                 is_row ? natural.width : natural.height;
 
@@ -727,7 +728,7 @@ LayoutBox layout_element(const dom::Element& el,
                 fc.final_box = std::make_unique<LayoutBox>(
                     layout_element(*fc.el, styles, measurer, x, y, cw,
                                    own_font_size, root_font_size,
-                                   own_dir));
+                                   own_dir, image_dims));
                 const float cross_size =
                     is_row ? fc.final_box->height : fc.final_box->width;
                 if (cross_size > container_cross) {
@@ -834,7 +835,7 @@ LayoutBox layout_element(const dom::Element& el,
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, cell_x, 0.0f,
                                    cell_w, own_font_size, root_font_size,
-                                   own_dir));
+                                   own_dir, image_dims));
                 PlacedChild pc;
                 pc.box = std::move(child_box);
                 pc.row = row;
@@ -891,6 +892,102 @@ LayoutBox layout_element(const dom::Element& el,
         layout_block_children();
     }
 
+    // ADR-035: reserve layout space for <img> from intrinsic
+    // dimensions. Explicit CSS width (or height) wins; the other
+    // axis is aspect-derived. Neither set: use intrinsic (CSS
+    // spec fallback). Callback null/invalid: existing (h=0).
+    if (image_dims && el.tag() == "img") {
+        const std::string src_attr = el.get_attribute("src");
+        if (!src_attr.empty()) {
+            const ImageDim d = image_dims(src_attr);
+            if (d.valid && d.width > 0.0f && d.height > 0.0f) {
+                float want_w = 0.0f;
+                float want_h = 0.0f;
+                if (style) {
+                    if (auto w = style->get("width");
+                        w && !w->empty() && *w != "auto") {
+                        const float p = parse_length(*w, ctx);
+                        if (p > 0.0f) want_w = p;
+                    }
+                    if (auto h = style->get("height");
+                        h && !h->empty() && *h != "auto") {
+                        const float p = parse_length(*h, ctx);
+                        if (p > 0.0f) want_h = p;
+                    }
+                }
+                if (want_w > 0.0f && want_h > 0.0f) {
+                    // both explicit
+                } else if (want_w > 0.0f) {
+                    want_h = want_w * (d.height / d.width);
+                } else if (want_h > 0.0f) {
+                    want_w = want_h * (d.width / d.height);
+                } else {
+                    want_w = d.width;
+                    want_h = d.height;
+                }
+                if (want_w > content_w && content_w > 0.0f) {
+                    want_h = want_h * (content_w / want_w);
+                    want_w = content_w;
+                }
+                box.width = want_w
+                          + box.padding[3] + box.padding[1]
+                          + box.border[3] + box.border[1];
+                box.height = want_h
+                           + box.padding[0] + box.padding[2]
+                           + box.border[0] + box.border[2];
+                return box;
+            }
+        }
+    }
+
+    // ADR-035: reserve layout space for <img> from intrinsic
+    // dimensions. Explicit CSS width (or height) wins; the other
+    // axis is aspect-derived. Neither set: use intrinsic (CSS
+    // spec fallback). Callback null/invalid: existing (h=0).
+    if (image_dims && el.tag() == "img") {
+        const std::string src_attr = el.get_attribute("src");
+        if (!src_attr.empty()) {
+            const ImageDim d = image_dims(src_attr);
+            if (d.valid && d.width > 0.0f && d.height > 0.0f) {
+                float want_w = 0.0f;
+                float want_h = 0.0f;
+                if (style) {
+                    if (auto w = style->get("width");
+                        w && !w->empty() && *w != "auto") {
+                        const float p = parse_length(*w, ctx);
+                        if (p > 0.0f) want_w = p;
+                    }
+                    if (auto h = style->get("height");
+                        h && !h->empty() && *h != "auto") {
+                        const float p = parse_length(*h, ctx);
+                        if (p > 0.0f) want_h = p;
+                    }
+                }
+                if (want_w > 0.0f && want_h > 0.0f) {
+                    // both explicit
+                } else if (want_w > 0.0f) {
+                    want_h = want_w * (d.height / d.width);
+                } else if (want_h > 0.0f) {
+                    want_w = want_h * (d.width / d.height);
+                } else {
+                    want_w = d.width;
+                    want_h = d.height;
+                }
+                if (want_w > content_w && content_w > 0.0f) {
+                    want_h = want_h * (content_w / want_w);
+                    want_w = content_w;
+                }
+                box.width = want_w
+                          + box.padding[3] + box.padding[1]
+                          + box.border[3] + box.border[1];
+                box.height = want_h
+                           + box.padding[0] + box.padding[2]
+                           + box.border[0] + box.border[2];
+                return box;
+            }
+        }
+    }
+
     box.width = content_w
               + box.padding[3] + box.padding[1]
               + box.border[3] + box.border[1];
@@ -939,7 +1036,8 @@ Direction resolve_direction(const dom::Element& el, Direction parent_dir) {
 LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,
-                 float viewport_width) {
+                 float viewport_width,
+                 ImageDimLookup image_dims) {
     const dom::Element* root = find_root_element(doc);
     if (!root) return LayoutBox{};
 
@@ -948,7 +1046,7 @@ LayoutBox layout(const dom::Document& doc,
         font_size_of(root_style, kDefaultFontSize, kDefaultFontSize);
 
     return layout_element(*root, styles, measurer, 0.0f, 0.0f, viewport_width,
-                          kDefaultFontSize, root_fs, Direction::Ltr);
+                          kDefaultFontSize, root_fs, Direction::Ltr, image_dims);
 }
 
 
