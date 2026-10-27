@@ -398,6 +398,25 @@ a `position: relative` ancestor, which is where float and
 absolute could interact (e.g., absolute element inside a
 narrowed float zone). That's future work.
 
+## Post-ADR-034 note (2026-10-27)
+
+ADR-034 shipped `<img>` paint with SVG decode. **No interaction
+with float v1 in the first viewport**:
+
+- The infobox is a `<table>` element, not `<img>`. Float layouts
+  the table; image paint doesn't touch it.
+- The one `<img>` inside the infobox (`.infobox-image`, official
+  logo) resolves to `//upload.wikimedia.org/...` -- a
+  protocol-relative URL. Fails to fetch per ADR-034's finding
+  #2. Once `resolve_url` handles protocol-relative srcs, this
+  image will render inside the infobox's float-narrowed cell
+  without interaction with float code.
+
+**When it interacts:** ADR-035 (layout-integrated `<img>`) will
+make `<img>` reserve layout space, which means `<img>` inside a
+float will correctly contribute to the float's height. That's
+the first real float + image interaction. Currently zero.
+
 ## Verification
 
 **Unit tests** (in `tests/test_layout.cpp`, new

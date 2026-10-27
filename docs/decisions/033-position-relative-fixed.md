@@ -443,6 +443,31 @@ in place; ADR-034 will activate it.
 - No `z-index` for fixed: fixed elements paint at tree position.
   Deferred.
 
+## Post-ADR-034 note (2026-10-27)
+
+ADR-034 completed `position: absolute` (deferred from ADR-033):
+
+- Containing-block tracking: walk ancestors for nearest
+  `position != Static`
+- Skip from parent flow (same pattern as ADR-033's `fixed`)
+- Position at `(top, left)` offsets from containing-block
+  content box
+- Percentage offsets work (`parse_length` with cb dims);
+  `calc()` offsets return 0 (deferred)
+
+**Visible delta from this completion on Wikipedia: zero.** The
+one absolute element in the first viewport is
+`span.cdx-text-input__icon` -- a 2x0 empty span. Its artwork is
+`background-image: url(data:image/svg+xml;...)` sized via
+`calc(var(--font-size-medium) + 4px)`. Positioning an empty box
+moves nothing visible; `calc()` for the SVG dimensions is
+deferred.
+
+ADR-034's visible delta comes entirely from its `<img>` half
+(wordmark renders, tagline hidden as workaround). The
+`position: absolute` half is structural completion -- ready for
+future dropdowns, tooltips, infobox overlays.
+
 ## Verification
 
 **Unit tests** (new `[layout][position][adr-033]` tag):

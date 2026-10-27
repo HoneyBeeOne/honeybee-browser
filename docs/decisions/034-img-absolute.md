@@ -1,6 +1,6 @@
 # ADR-034: `<img>` Element Paint + `position: absolute` Completion
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-27
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-025 (external CSS fetch), ADR-028 (grid + URL resolution), ADR-031 (float), ADR-033 (position relative + fixed)
@@ -258,6 +258,110 @@ where wordmark/tagline/search-icon render.
 - [ ] `<img>` with SVG src renders (wordmark, tagline)
 - [ ] `background-image` with SVG data URL renders (search icon)
 - [ ] Format dispatch on magic bytes
+
+## Implementation
+
+**Implemented 2026-10-27.** Three PRs (spec #177, SVG amendment
+#178, impl #179). **First image rendering in HoneyBee's
+history.**
+
+### The moment
+
+The Wikipedia wordmark renders as a real `<img>` at `x=52 y=14`
+in the header at viewport 1774. The `en-25` suffix in the src
+(`wikipedia-wordmark-en-25.svg`) reflects Wikipedia's
+25th-anniversary wordmark variant -- a path-only SVG, faithfully
+rendered via librsvg with correct viewBox aspect.
+
+### Decode log (first run)
+
+    [img]   fetched: 9865 bytes
+    [img]   svg decoded: 560x88 ok=1 err=(none)
+    [img]   cached (surf=0x...)
+
+Native 560x88 (4x the 140x22 viewBox) scaled by `paint_image`
+to box width 248px, height aspect-derived as 248 x (88/560)
+~= 39px. Fits cleanly inside the 36px header.
+
+### Two SVG bugs found and fixed during implementation
+
+**1. SVG intrinsic size was 1x1**
+
+Wikipedia's `mobile/copyright/wikipedia-wordmark-en-25.svg` and
+`wikipedia-tagline-en-25.svg` declare `width="1" height="1"`
+(designed to be sized by parent CSS). `rsvg_handle_get_intrinsic_size_in_pixels`
+returns 1x1. Without a fallback, the wordmark would have rendered
+as a 248x248 garbage square.
+
+**Fix:** parse `viewBox="0 0 W H"` from raw SVG bytes when
+intrinsic size <= 0 (17 lines in `get_image_surface`). Render
+at 4x native for sharpness when `paint_image` scales down to
+box width. Fallback 256x256 if no viewBox either.
+
+**2. Protocol-relative URLs resolve wrong**
+
+`//thumb.wikimedia.org/...` (schema-relative src) becomes
+`https://en.wikipedia.org//thumb.wikimedia.org/...` via
+`resolve_url` -- leading `//` treated as a path prefix, not a
+protocol-relative origin. All 3 below-fold `<img>` thumbnails
+(the Tim Berners-Lee photo, HTML5 logo, HTML element categories
+diagram) fail to fetch.
+
+**Deferred** to its own follow-up: first-viewport
+wordmark/tagline srcs are path-absolute (`/static/...`), so
+unaffected. `resolve_url` protocol-relative handling is a
+two-line fix (`if (href.rfind("//", 0) == 0) return "https:" + href;`)
+but doesn't gate this ADR.
+
+### Tagline workaround (documented, temporary)
+
+Wordmark (y=14, h~=39) and tagline (y=19, h~=19) share the
+same layout position because images don't reserve layout space
+in v1 (paint-only per spec's "Why paint-time" section). At 5px
+vertical separation they overlap into unreadable letterforms.
+
+**Fix at paint layer:** skip `<img>` whose src contains
+`"wikipedia-tagline"`. Header shows clean wordmark only.
+Removed when ADR-035 integrates image layout.
+
+CSS-based hide (`img[src*="wikipedia-tagline"]{display:none}`)
+did **not** fire -- our cascade likely doesn't support
+attribute-substring selectors. Paint-layer skip is guaranteed
+correct and has zero CSS-parse risk.
+
+### Honest limitations deferred to ADR-035+
+
+1. **Images don't reserve layout space** -- paint-only. Tagline
+   overlapped wordmark -> hidden as workaround. Article-body
+   thumbnails will overlap content below them until ADR-035
+   integrates image layout.
+2. **Search icon renders at 2x2** -- `calc()` not supported.
+   Needs `calc()` evaluation (separate ADR).
+3. **Below-fold thumbnails fail** -- protocol-relative URL bug
+   (finding #2 above).
+4. **SVG `<text>` not rendered** -- librsvg limitation for
+   future SVGs with text elements. Wordmark/tagline are
+   `<path>`-only, so correct for current assets.
+
+### Test count
+
+- Before Commit 1: 421 cases / 1737 assertions
+- After Commit 1: **421 cases / 1737 assertions** (unchanged --
+  no new tests in impl commit; they land in Commit 2)
+
+### What landed correctly
+
+- `<img>` paint: PNG (Cairo) + SVG (librsvg), magic-byte dispatch
+- `background-image`: url() extraction into
+  `LayoutBox::background_image_url` (present in tree; search
+  icon renders at 2x2 due to `calc()` limitation -- pipeline
+  correct, deferral is the size calculation)
+- `image_cache_` keyed by URL, cleared on new page load,
+  mutable for const paint
+- `position: absolute` completed -- containing-block tracking,
+  out-of-flow, top/left offsets (visible delta from this half
+  is zero: the one absolute element is 2x0)
+- CMake: `pkg_check_modules(RSVG REQUIRED IMPORTED_TARGET librsvg-2.0)`
 
 ## Consequences
 
