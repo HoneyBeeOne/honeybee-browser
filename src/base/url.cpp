@@ -44,6 +44,15 @@ bool is_valid_url(const std::string& url) {
 
 std::string resolve_url(const std::string& href,
                          const std::string& base) {
+    // ADR-035-prep: protocol-relative URLs (e.g. "//host/path")
+    // inherit the scheme from the base. Without this, they fall
+    // through to relative resolution and become
+    // "https://wiki.org//host/path" (double slash, wrong host).
+    if (href.size() >= 2 && href[0] == '/' && href[1] == '/') {
+        if (base.rfind("http://", 0) == 0) return "http:" + href;
+        return "https:" + href;  // default (also for file:// or schemeless base)
+    }
+
     // Absolute URLs: pass through.
     if (href.size() >= 7 && href.compare(0, 7, "http://") == 0) return href;
     if (href.size() >= 8 && href.compare(0, 8, "https://") == 0) return href;

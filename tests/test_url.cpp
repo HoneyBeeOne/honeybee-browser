@@ -99,3 +99,32 @@ TEST_CASE("resolve_url: root-relative preserves port",
               "/api", "http://localhost:8080/page.html")
           == "http://localhost:8080/api");
 }
+
+
+// =============================================================
+// Protocol-relative URL resolution.
+// =============================================================
+
+TEST_CASE("resolve_url: protocol-relative inherits https scheme",
+          "[url][protocol-relative]") {
+    CHECK(honeybee::resolve_url("//example.com/x", "https://wiki.org/y") ==
+          "https://example.com/x");
+}
+
+TEST_CASE("resolve_url: protocol-relative inherits http scheme",
+          "[url][protocol-relative]") {
+    CHECK(honeybee::resolve_url("//example.com/x", "http://wiki.org/y") ==
+          "http://example.com/x");
+}
+
+TEST_CASE("resolve_url: protocol-relative with schemeless base",
+          "[url][protocol-relative]") {
+    CHECK(honeybee::resolve_url("//example.com/x", "wiki.org/y") ==
+          "https://example.com/x");
+}
+
+TEST_CASE("resolve_url: absolute URL unaffected by protocol-relative fix",
+          "[url][protocol-relative]") {
+    CHECK(honeybee::resolve_url("https://already.com/x", "https://wiki.org/y") ==
+          "https://already.com/x");
+}
