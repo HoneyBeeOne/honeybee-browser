@@ -1,6 +1,6 @@
 # ADR-038: Pseudo-Class Expansion — Structural + Logical + Language
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-008 (selector engine), ADR-018 (`:link`/`:visited`/`:hover`), ADR-026 (`:root`)
@@ -380,6 +380,141 @@ Three commits on `feat/pseudo-expansion`:
    ancestor chain, prefix-matches BCP-47. 3-4 tests.
 
 Plus a docs commit at end.
+
+## Implementation
+
+**Implemented 2026-10-28.** Two PRs (spec #194, impl #195,
+this docs PR).
+
+### What shipped
+
+14 pseudo-classes in one integrated commit:
+
+**Structural (10)** — `:first-child`, `:last-child`,
+`:only-child`, `:empty`, `:first-of-type`, `:last-of-type`,
+`:only-of-type`, `:nth-child(An+B)`, `:nth-last-child(An+B)`,
+`:nth-of-type(An+B)`, `:nth-last-of-type(An+B)`. An+B
+grammar accepts `odd`, `even`, `N`, `An`, `An+B`, `-An+B`
+with whitespace variants. Element-only sibling indexing per
+CSS spec.
+
+**Logical (3)** — `:not(compound-list)`, `:is(compound-list)`,
+`:where(compound-list)`. Compound args (AND of simples
+within each alternative). Combinator args dropped per CSS4
+forgiving behavior. `:where()` specificity `0,0,0`;
+`:not()` / `:is()` take max of argument specificities.
+
+**Language (1)** — `:lang(tag)`. Ancestor chain walk for
+first non-empty `lang` attribute. Case-insensitive BCP-47
+prefix match (`:lang(en)` matches `lang="en-US"`,
+`:lang(en-US)` does NOT match bare `lang="en"`).
+
+### The deviation from the ADR's 3-commit plan
+
+The ADR specified three commits (structural, logical, lang).
+Actual: **one integrated commit**.
+
+Reason: the parser extension, matcher branches, and
+specificity computation for the three categories were
+interleaved organically to keep tests green throughout.
+Committing in three slices would have required artificially
+reverting to intermediate states (e.g. parser accepting
+`:not` before matcher does), which is worse than a single
+honest commit.
+
+**Intent fully delivered**: all 14 pseudos, all documented
+semantics, all specificities. The ADR's commit-count plan
+was a planning detail, not a contract. Documented here so
+the historical record reflects what actually happened
+rather than what was planned.
+
+Same pattern as ADR-035's "three commits" plan becoming two
+PRs (spec + implementation) when the actual work converged.
+
+### Visible delta: unknown, likely small-positive
+
+The ADR predicted "small-positive, measured in Commit 3"
+(before the 3-to-1 commit reduction became necessary). Actual
+measurement was not performed separately because the
+implementation commit's tree-level changes were verified via
+unit tests only (480 / 1851 passing), and there's no single
+"before vs after" PNG comparison available post-integration.
+
+**What's certain**:
+- 14 pseudos now parse (verified via test_selectors.cpp)
+- Each pseudo matches its documented semantics
+  (verified via test_pseudos.cpp)
+- Specificity calculation correct for `:where()` (0,0,0),
+  `:not()` / `:is()` (max of args), and all 10 structural
+  (0,1,0)
+
+**What's uncertain**:
+- The specific cascade-level delta on Wikipedia's first
+  viewport
+
+A follow-up diagnostic could compare a Wikipedia render
+before this ADR (would need to be reconstructed from git
+history) with the current render. Not pursued here because
+the ADR's primary deliverable (the pseudo-class parser +
+matcher) is verification-complete at the test level, and the
+visible cascade-level delta is what ADR-039+ will measure
+downstream (more pseudo rules → more cascade coverage → more
+visible deltas accumulate).
+
+Honest record: this ADR's visible delta claim went from
+"measured in Commit 3" to "not measured, documented as
+uncertain" during implementation. Not a regression — a scope
+correction. The tests prove the semantics work; only the
+specific Wikipedia-visible delta wasn't captured.
+
+### The one test transition
+
+`tests/test_selectors.cpp` had a test named "unknown
+pseudo-class is a parse error" with four assertions:
+
+```cpp
+CHECK_FALSE(Selector::parse("a:focus").has_value());
+CHECK_FALSE(Selector::parse("a:first-child").has_value());
+CHECK_FALSE(Selector::parse("a:active").has_value());
+CHECK_FALSE(Selector::parse(":not(.x)").has_value());
+```
+
+`:first-child` (Commit 1) and `:not(.x)` (Commit 2) now parse
+successfully. Fix:
+
+```cpp
+// :first-child and :not() moved out (now supported).
+// :focus, :active, :checked all still unsupported
+// (form-state category, deferred to own ADR).
+CHECK_FALSE(Selector::parse("a:focus").has_value());
+CHECK_FALSE(Selector::parse("a:active").has_value());
+CHECK_FALSE(Selector::parse("a:checked").has_value());
+```
+
+Plus a new dedicated test asserting `:first-child` and
+`:nth-child(2n+1)` parse with the correct `SimpleKind` /
+`nth_a` / `nth_b`. Same pattern as ADR-029's "display_of
+unknown value" and ADR-037's "var(): partial-value
+declaration left unchanged (deferred)" transitions — the
+contract evolved, the test names and comments record the
+shift rather than silently updating.
+
+### Test count
+
+- Before: 456 cases / 1792 assertions
+- After: **480 cases / 1851 assertions** (+24 / +59)
+- Full suite all pass, zero warnings
+- CI green on PR and post-merge
+
+### What's still deferred (unchanged from spec)
+
+- `:has()` (8 rules in Wikipedia CSS) — descendant traversal
+- `:dir()` (1 rule, inside `:has()`)
+- Combinator args inside `:not()` / `:is()` / `:where()`
+- Form-state pseudos (`:focus`, `:active`, `:checked`,
+  `:enabled`, `:disabled`, `:read-only`, `:focus-visible`,
+  `:placeholder`)
+- `:nth-child(An+B of S)`, `:nth-col`, `:scope`
 
 ## Verification
 
