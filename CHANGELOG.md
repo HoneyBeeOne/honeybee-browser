@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **14 pseudo-classes** (ADR-038): the selector engine's
+  pseudo-class support grew from 4 (`:link`/`:visited`/`:hover`/
+  `:root`) to 18. **Structural (10)**: `:first-child`,
+  `:last-child`, `:only-child`, `:empty`, `:first-of-type`,
+  `:last-of-type`, `:only-of-type`, plus the full `:nth-child(An+B)`
+  family (odd/even/N/An/An+B/-An+B grammar). **Logical (3)**:
+  `:not()`, `:is()`, `:where()` with compound-arg comma lists
+  and CSS4 specificity (`:where()` = `0,0,0`; `:not()` / `:is()` =
+  max of args). **Language (1)**: `:lang(tag)` with ancestor-chain
+  walk and BCP-47 case-insensitive prefix match. On Wikipedia,
+  ~840 previously-dropped rules now participate in the cascade
+  (`:lang` 410, `:not` 374, `:where` 16, `:is` 2, structural 38).
+  Scope expanded from original "structural only" to cover the
+  three categories with measurable usage (structural alone would
+  unlock only ~38 rules; `:nth-child()` in particular has zero
+  uses in the target CSS). Spec's 3-commit plan converged to one
+  integrated commit (documented in Implementation section).
+  Deferred to ADR-039+: `:has()`, `:dir()`, form-state pseudos
+  (`:focus`, `:active`, `:checked`, `:enabled`, `:disabled`),
+  combinator args inside `:not()`/`:is()`/`:where()`.
 - **CSS value functions** (ADR-037): `calc()`, `min()`,
   `max()`, `clamp()` now evaluate. Recursive-descent parser
   with standard precedence, nested functions, unary negation,
