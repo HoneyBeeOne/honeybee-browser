@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Box model completion** (ADR-039 Commit 1, delivered):
+  `height` now applied to all boxes (was `<img>`-only) —
+  closes ADR-037's deferred height gap (search icon
+  `w=20 h=0` → `w=20 h=20`, verified via tree walk + PNG).
+  `min-width` / `max-width` / `min-height` / `max-height`
+  clamps applied after resolution (vw/vh in value skips the
+  clamp, ADR-037 defers those units; percentage heights also
+  skipped pending `parent_content_height` threading).
+  `overflow: hidden` sets `LayoutBox::clip_children`; paint
+  wraps children in Cairo clip. Removed duplicated ADR-035
+  img sizing block (dead code). **Three honest corrections
+  in the ADR's record**: (1) the "185px gap" claim in
+  Commit 1's message was measured from a stale pre-fix PNG;
+  actual state has title y=128 (better than baseline y=145),
+  no gap; (2) `box-sizing: border-box` shipped in Commit 2
+  then reverted in #201 after merged render showed visual
+  regression (gray strip, icon shift) — process failure (no
+  PNG inspection before merge), root cause unmeasured,
+  re-attempt deferred with proper discipline; (3) `border`
+  shorthand not expanded by ADR-012, surfaces as pre-existing
+  limitation (Wikipedia borders currently invisible),
+  deferred to small future ADR.
 - **14 pseudo-classes** (ADR-038): the selector engine's
   pseudo-class support grew from 4 (`:link`/`:visited`/`:hover`/
   `:root`) to 18. **Structural (10)**: `:first-child`,
