@@ -144,6 +144,121 @@ All absolute rules on Wikipedia's first-viewport-adjacent elements use `top`/`le
 - **`:checked`** -- 14 uses, all dropdowns/radios, no first-viewport driver.
 - **`:not()`** -- 391 uses, only first-viewport impact is skip link (already worked around).
 
+## Scope Amendment (2026-10-27): add SVG decode via librsvg
+
+Following the spec's merge (#177), measurement of the actual
+wordmark/tagline files revealed they are **SVG, not PNG**:
+
+    wordmark.bin  9865 bytes  magic: 3c 73 76 67 ("<svg xml")
+    tagline.bin  15219 bytes  magic: 3c 73 76 67 ("<svg xml")
+
+Both files use only `<defs>`, `<g>`, `<path>`, `<svg>` -- exactly
+**3 `<path>` elements each**. Geometric logo curves, no `<text>`,
+no embedded raster, no gradients.
+
+Also measured: **`librsvg-2.0` is available system-wide** (version
+2.58.0, `librsvg2-dev:amd64` installed, `pkg-config --exists
+librsvg-2.0` returns success).
+
+### Scope extension
+
+Extend ADR-034 to include **SVG decode via librsvg**, in addition
+to the spec'd PNG decode via Cairo. This delivers the spec's
+first caveat as a positive:
+
+- Wikipedia wordmark and tagline render as actual images in the
+  header -- the **first `<img>` element** in HoneyBee's history,
+  the first SVG decode, the first non-text paint output
+- Search icon (inline `data:image/svg+xml;utf8,...` in
+  `background-image`) renders as a real magnifying glass inside
+  the search bar
+
+### Additional scope (in addition to what was spec'd)
+
+**`<img>` paint** (extend from PNG-only):
+
+- Decode PNG via `cairo_image_surface_create_from_png_stream`
+- Decode SVG via `rsvg_handle_new_from_data` +
+  `rsvg_handle_render_document` to a Cairo context
+- Format dispatch: sniff first bytes
+  - `89 50 4e 47` = PNG
+  - `3c 73 76 67` or `3c 3f 78 6d` = SVG (`<svg` or `<?xml`)
+  - else: skip (deferred to future format-decoder ADRs)
+- Both cache in `image_cache_` keyed by URL
+
+**`background-image` paint** (new -- not in original spec):
+
+- Extract `url(...)` from ComputedStyle at layout time; store as
+  `background_image_url` string on `LayoutBox`
+- Paint fetch+decode (same PNG/SVG dispatch as `<img>`) at box
+  rect
+- Handles `data:image/svg+xml;utf8,<svg...>` inline data URLs
+  (search icon, hover-state icons) -- these decode directly from
+  the URL content, no fetch
+- v1: no `background-repeat` / `background-size` /
+  `background-position` -- paint at natural size, scaled to box
+  rect
+
+**`position: absolute` completion**: unchanged from spec.
+
+### CMake dependency addition
+
+`CMakeLists.txt` gains:
+
+    pkg_check_modules(RSVG REQUIRED librsvg-2.0)
+
+and the honeybee_lib target links `${RSVG_LIBRARIES}`.
+
+### Updated visible delta prediction
+
+**Spec-only (pre-amendment)**: zero visible delta. PNG-only
+scope, zero PNGs in first viewport.
+
+**Post-amendment**: three visible deltas in the first viewport
+at viewport 1774:
+
+1. **Wikipedia wordmark** (~248x36, in header at x=52 y=14;
+   header is fixed-height 36px from ADR-030, so wordmark fits
+   cleanly)
+2. **Wikipedia tagline** (~248x?), just below wordmark
+3. **Search icon** (magnifying glass, ~18x18, at left edge of
+   search input)
+
+First PNG diff from ADR-030 baseline: header pixels appear
+where wordmark/tagline/search-icon render.
+
+### Honest caveats (unchanged from spec)
+
+1. **Images don't reserve layout space.** Wordmark is inside a
+   fixed-height header (36px from ADR-030) -- overlap is bounded
+   and cosmetically tolerable. Article-body images (thumbnails,
+   below-fold) may overlap following content until ADR-035
+   integrates image layout.
+2. **JPEG, `background-repeat`, `background-size` `calc()`,
+   `background-position` all deferred.**
+3. **`<text>` inside SVG** would need font resolution -- not
+   needed for the 3-path wordmark/tagline SVGs, but a limitation
+   for future SVGs that use `<text>`.
+
+### Additional test plan (extends spec's plan)
+
+- SVG decode round-trip (encode small SVG, decode via librsvg,
+  verify Cairo surface dims)
+- Format dispatch: PNG magic -> PNG decoder; SVG magic -> SVG
+  decoder; unknown -> skip
+- `background-image: url(data:image/svg+xml;utf8,...)` extracted
+  into `box.background_image_url`
+- Cache hit: second paint with same URL does not refetch
+
+### Additional acceptance criteria
+
+- [ ] `CMakeLists.txt` links librsvg-2.0
+- [ ] `image_cache_` handles both PNG and SVG
+- [ ] `background_image_url` set on LayoutBox during layout
+- [ ] `<img>` with SVG src renders (wordmark, tagline)
+- [ ] `background-image` with SVG data URL renders (search icon)
+- [ ] Format dispatch on magic bytes
+
 ## Consequences
 
 **Better:**
