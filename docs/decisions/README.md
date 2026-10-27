@@ -37,11 +37,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 032 | [Visibility + Opacity Paint Support](032-visibility-opacity.md) | Paint culling for `visibility:hidden` / `opacity:0`; precondition for `:checked` |
 | 033 | [Position Layout (relative + fixed)](033-position-relative-fixed.md) | `position: relative` (no-op + context); `fixed` (viewport-anchored out-of-flow); `absolute` deferred |
 | 034 | [`<img>` Element Paint + `position: absolute`](034-img-absolute.md) | PNG image fetch/decode/paint (paint-time); absolute containing-block tracking |
+| 035 | [Layout-Integrated `<img>`](035-img-layout.md) | Intrinsic dims reserve space; tagline unhide; thumbnails no longer overlap |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 034 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 035 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
