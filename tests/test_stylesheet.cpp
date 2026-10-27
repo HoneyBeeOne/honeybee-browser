@@ -425,14 +425,21 @@ TEST_CASE("var(): undefined variable + no fallback drops declaration",
     CHECK(sheet.rules[0].declarations.empty());
 }
 
-TEST_CASE("var(): partial-value declaration left unchanged (deferred)",
-          "[css][stylesheet][adr-026][var]") {
+TEST_CASE("var(): embedded var() in composite value resolved (ADR-037)",
+          "[css][stylesheet][adr-026][adr-037][var]") {
+    // ADR-026 v1 only resolved whole-value var(); embedded var()
+    // in a composite value like "1px solid var(...)" was a
+    // documented deferral.
+    // ADR-037 generalized the resolver to any embedded var()
+    // occurrence (required for var()-inside-calc support, which
+    // needs to resolve var() before parse_length sees calc()).
+    // This test's contract changed: embedded var() now resolves
+    // to its fallback.
     auto sheet = Stylesheet::parse(
         "a { border: 1px solid var(--border-color, #ccc) }");
     REQUIRE(sheet.rules.size() == 1);
     REQUIRE(sheet.rules[0].declarations.size() == 1);
-    CHECK(sheet.rules[0].declarations[0].value
-          == "1px solid var(--border-color, #ccc)");
+    CHECK(sheet.rules[0].declarations[0].value == "1px solid #ccc");
 }
 
 TEST_CASE("var(): non-var value unchanged",

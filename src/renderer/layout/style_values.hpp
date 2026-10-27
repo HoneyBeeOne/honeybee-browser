@@ -32,6 +32,11 @@ float parse_px(std::string_view s);
 // Supports px, em, rem, %. Returns 0 for auto or unknown units.
 float parse_length(std::string_view s, const LengthContext& ctx);
 
+// ADR-037: CSS math expression evaluator. Handles calc(),
+// min(), max(), clamp(). Called from parse_length for values
+// starting with those function names.
+float eval_math_expression(std::string_view s, const LengthContext& ctx);
+
 // True if the trimmed input is exactly "auto".
 bool is_auto(std::string_view s);
 

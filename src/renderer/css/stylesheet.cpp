@@ -86,11 +86,57 @@ VarResult resolve_var_whole(
     const std::unordered_map<std::string, std::string>& vars) {
     const std::string value = trim(raw);
 
-    // Fast path: not a var() at all.
-    if (value.size() < 5 ||
-        value.compare(0, 4, "var(") != 0 ||
-        value.back() != ')') {
+    // ADR-037: scan for embedded var() -- not just whole-value.
+    // If the value contains no "var(" substring at all, it's not
+    // a var expression.
+    if (value.find("var(") == std::string::npos) {
         return {VarResult::NotVar, {}};
+    }
+    // If the whole value IS a single var(...) with balanced parens
+    // closing at the end, use the fast whole-value path below.
+    // Otherwise, scan-and-splice each var() occurrence.
+    {
+        const bool starts_with_var = value.size() >= 5 &&
+            value.compare(0, 4, "var(") == 0;
+        const bool ends_with_paren = !value.empty() && value.back() == ')';
+        bool whole_var = false;
+        if (starts_with_var && ends_with_paren) {
+            // Check that the matching close-paren is the last char
+            int depth = 1;
+            size_t i = 4;
+            while (i < value.size() && depth > 0) {
+                if (value[i] == '(') ++depth;
+                else if (value[i] == ')') --depth;
+                ++i;
+            }
+            whole_var = (depth == 0 && i == value.size());
+        }
+        if (!whole_var) {
+            // Scan-and-splice path
+            std::string result = value;
+            size_t search_pos = 0;
+            while (true) {
+                size_t vs = result.find("var(", search_pos);
+                if (vs == std::string::npos) break;
+                int depth = 1;
+                size_t close = vs + 4;
+                while (close < result.size() && depth > 0) {
+                    if (result[close] == '(') ++depth;
+                    else if (result[close] == ')') --depth;
+                    close++;
+                }
+                if (depth != 0) return {VarResult::Failed, {}};
+                std::string ve = result.substr(vs, close - vs);
+                auto inner = resolve_var_whole(ve, vars);
+                if (inner.kind != VarResult::Resolved) {
+                    return inner;
+                }
+                result = result.substr(0, vs) + inner.value +
+                         result.substr(close);
+                search_pos = vs + inner.value.size();
+            }
+            return {VarResult::Resolved, result};
+        }
     }
 
     // Extract inside of var(...): strip "var(" prefix and ")" suffix.
