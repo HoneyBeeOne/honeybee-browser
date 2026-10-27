@@ -324,6 +324,75 @@ Three commits on `feat/css-variables`:
 3. **Docs** — ADR-026 status -> Implemented, README + CHANGELOG with
    measured visual delta.
 
+## Post-ADR-037 note (2026-10-27)
+
+ADR-037 extended `var()` resolution to work inside `calc()`
+and any other embedded value position.
+
+### What ADR-026 deferred, and why
+
+ADR-026's v1 resolved only whole-value `var()`:
+
+```css
+.x { color: var(--color) }         /* resolves */
+.x { border: 1px solid var(--c) }  /* stayed raw */
+.x { width: calc(var(--size) + 4px) }  /* stayed raw */
+```
+
+The v1 code path was `resolve_var_whole` — the "whole" in
+the name was intentional. Composite values were documented
+as a deferred limitation (see the original test "var():
+partial-value declaration left unchanged (deferred)").
+
+### What ADR-037 changed
+
+`resolve_var_whole` gained a **scan-and-splice** path: if
+the value contains `var(` anywhere, walk the string, find
+each `var(...)` occurrence (matched by balanced parens),
+recursively resolve it, and splice the result back. Whole-
+value fast path is retained for the common case.
+
+**Why this was required for ADR-037**: the Wikipedia search
+icon uses `width: calc(var(--font-size-medium,1rem) + 4px)`.
+Without embedded var() resolution, calc received raw `var(...)`
+as an operand and returned 0. The calc parser alone was
+insufficient; the var fix was mandatory.
+
+### The test transition
+
+`test_stylesheet.cpp` originally asserted:
+
+```cpp
+CHECK(decl.value == "1px solid var(--border-color, #ccc)");
+```
+
+with test name "...left unchanged (deferred)". ADR-037
+resolves it:
+
+```cpp
+CHECK(decl.value == "1px solid #ccc");
+```
+
+Test renamed to "...resolved (ADR-037)" with comment
+documenting the transition. Same pattern as ADR-029's
+"display_of unknown value" test — the deferred contract is
+now delivered, and the test name/comment record the shift
+rather than silently updating.
+
+### What ADR-026 still owns
+
+- Whole-value `var()` resolution (unchanged, still the fast
+  path)
+- `:root` custom property registration (`--name` declarations)
+- The cascade's `resolve_var_whole` call site
+
+### What ADR-037 added
+
+- Scan-and-splice for embedded `var()` anywhere in a value
+- Recursive resolution (nested `calc(var(--a) + calc(var(--b) * 2))`)
+- Compatibility with all math functions (`calc()`, `min()`,
+  `max()`, `clamp()`)
+
 ## Verification
 
 **Unit tests**:

@@ -1,6 +1,6 @@
 # ADR-037: CSS Value Functions — calc() / min() / max() / clamp() (with var()-inside)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-27
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-013 (length units), ADR-026 (var() resolution), ADR-027 (@media + narrow calc for queries)
@@ -302,6 +302,106 @@ Three commits on `feat/calc`:
 3. **Docs** — ADR-037 status → Implemented, Post-ADR-037
    note in ADR-026 (var-inside-calc fix recorded),
    CHANGELOG, README.
+
+## Implementation
+
+**Implemented 2026-10-27.** Three PRs (spec #191, impl #192,
+this docs PR). First spec-driven ADR after the arc's pivot
+from "fix Wikipedia" to "implement CSS spec features."
+
+### What shipped
+
+**`eval_math_expression()`** (~280 lines in
+`style_values.cpp`):
+
+- Recursive descent, standard precedence (`* /` before `+ -`)
+- Nested parens + nested `calc()`/`min()`/`max()`/`clamp()`
+- Unary negation
+- `min(n-ary)`, `max(n-ary)`, `clamp(ternary)`
+- Units: `px`, `em`, `rem`, `%`, `pt` (vh/vw deferred)
+- **Every operand converts to px at parse time**, so
+  mixed-unit arithmetic (`2em + 8px`) works via
+  common-unit-at-parse-time
+
+**`resolve_var_whole()` scan-and-splice extension** (~50
+lines in `stylesheet.cpp`):
+
+- Old: only whole-value `var()` resolved
+- New: any `var()` occurrence resolves, recursively
+- Fixes ADR-026's deferred limitation ("partial-value
+  declaration left unchanged")
+- Required for `calc(var(--font-size-medium,1rem) + 4px)`
+  to work — the exact Wikipedia search-icon case
+
+### Measured visible delta (viewport 1774)
+
+| Check | Before | After |
+|---|---|---|
+| Search icon `width` | 2 | **20** |
+| Search icon `height` | 0 | **0** (unchanged) |
+
+Width grew correctly via calc(). Height stayed at 0
+because `layout_element` does not currently apply `height`
+from ComputedStyle to non-`<img>` boxes. **Pre-existing gap
+unrelated to calc** — calc evaluates the value correctly,
+layout just doesn't consume it for the height property on
+generic boxes. ADR-035's img-sizing block applies width AND
+height, but only for `<img>`.
+
+**Deferred to ADR-040 (box model completion).** Documented
+honestly, not expanded in ADR-037's scope.
+
+### What this unblocks (verified via test suite)
+
+- `calc()` arithmetic: `+`, `-`, `*`, `/` with correct
+  precedence
+- mixed-unit arithmetic (`em + px`, `% + px`, `rem + px`)
+- nested `calc()` / `min()` / `max()` / `clamp()`
+- unary negation, parenthesized grouping
+- `var()` embedded in any value position (calc, composite
+  values, nested)
+- composite-with-var patterns (`border: 1px solid var(--color)`)
+  that ADR-026 deferred
+
+### What stays deferred
+
+- `height` on non-img boxes (ADR-040)
+- `vh` / `vw` (need `viewport_height` in LengthContext)
+- vertical `%` inside calc (same)
+- `calc()` in grid-track sizing / font-size (different code
+  paths, unchanged)
+- `attr()`, `counter()` (depend on pseudo-elements, ADR-039)
+
+### Test count
+
+- Before: 431 cases / 1765 assertions
+- After: **456 cases / 1792 assertions** (+25 / +27)
+- Full suite all pass, zero warnings
+- CI green on PR and post-merge
+
+### The `test_stylesheet.cpp` transition
+
+One existing test documented ADR-026's deferred behavior:
+
+```cpp
+TEST_CASE("var(): partial-value declaration left unchanged (deferred)") {
+    CHECK(decl.value == "1px solid var(--border-color, #ccc)");
+}
+```
+
+ADR-037's scan-and-splice extension resolves that var(). The
+test now reads:
+
+```cpp
+TEST_CASE("var(): embedded var() in composite value resolved (ADR-037)") {
+    CHECK(decl.value == "1px solid #ccc");
+}
+```
+
+Same pattern as ADR-029's "display_of unknown value" test:
+**the contract was deferred, now it's resolved, and the test
+name + comment record the transition** rather than being
+silently updated.
 
 ## Verification
 

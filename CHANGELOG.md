@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CSS value functions** (ADR-037): `calc()`, `min()`,
+  `max()`, `clamp()` now evaluate. Recursive-descent parser
+  with standard precedence, nested functions, unary negation,
+  mixed-unit arithmetic (em + px, % + px, rem + px) via
+  convert-to-px-at-parse-time. Units: px/em/rem/%/pt (vh/vw
+  deferred). `var()` resolution extended from whole-value-only
+  to **any embedded position** (calc, composite values,
+  nested) — fixes ADR-026's deferred limitation and unblocks
+  `calc(var(--size) + 4px)`. **Partial visible delta**:
+  Wikipedia search icon width 2 -> 20 (correct), height 0
+  (unchanged — `height` on non-img boxes still unapplied,
+  deferred to ADR-040 box model). First spec-driven ADR after
+  the pivot from "fix Wikipedia" to "implement missing CSS
+  spec features."
 - **`clear` property** (ADR-036): floats with `clear:right |
   left | both` now jump below prior same-direction floats
   instead of overlapping at the same edge; non-float blocks
