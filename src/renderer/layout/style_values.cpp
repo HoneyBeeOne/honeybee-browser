@@ -3,6 +3,9 @@
 #include <cctype>
 #include <string>
 #include <string_view>
+#include <cstring>
+#include <vector>
+#include <algorithm>
 #include <unordered_map>
 
 namespace honeybee::renderer::layout {
@@ -51,11 +54,350 @@ float parse_px(std::string_view s) {
     }
 }
 
+// =============================================================
+// ADR-037: CSS math expression evaluator.
+//
+// Supports calc(), min(), max(), clamp() with standard operator
+// precedence (* / before + -). Every operand is converted to PX
+// immediately (em/rem/%/pt resolved via LengthContext), so
+// mixed-unit arithmetic like "2em + 8px" works via common-unit-
+// at-parse-time. Unitless operands stay unitless. Final Number
+// results are treated as px (documented limitation).
+//
+// Deferred (per ADR-037): vh/vw/vmin/vmax (need viewport_height
+// in LengthContext); vertical percentages inside calc.
+// =============================================================
+
+namespace {
+
+enum class MathUnit : std::uint8_t {
+    Number, Px,
+};
+
+struct MathVal {
+    float value = 0.0f;
+    MathUnit unit = MathUnit::Number;
+    bool valid = false;
+};
+
+// ADR-037: trim leading/trailing whitespace, return substring.
+// Used by min/max/clamp comma-splitting in eval_math_expression.
+std::string_view trim_ws(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' ||
+                          s.front() == '\n' || s.front() == '\r')) {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' ||
+                          s.back() == '\n' || s.back() == '\r')) {
+        s.remove_suffix(1);
+    }
+    return s;
+}
+
+void skip_ws(std::string_view s, size_t& pos) {
+    while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t' ||
+                              s[pos] == '\n' || s[pos] == '\r')) ++pos;
+}
+
+MathVal parse_operand(std::string_view s, size_t& pos,
+                      const LengthContext& ctx) {
+    MathVal out;
+    skip_ws(s, pos);
+    if (pos >= s.size()) return out;
+
+    size_t start = pos;
+    if (s[pos] == '-' || s[pos] == '+') ++pos;
+
+    size_t num_start = pos;
+    while (pos < s.size() &&
+           ((s[pos] >= '0' && s[pos] <= '9') || s[pos] == '.')) ++pos;
+    if (pos == num_start) { pos = start; return out; }
+
+    size_t unit_start = pos;
+    while (pos < s.size() &&
+           ((s[pos] >= 'a' && s[pos] <= 'z') || s[pos] == '%')) ++pos;
+
+    std::string_view num_part = s.substr(start, unit_start - start);
+    std::string_view unit_part = s.substr(unit_start, pos - unit_start);
+
+    float n = 0.0f;
+    try { n = std::stof(std::string(num_part)); }
+    catch (...) { return out; }
+
+    if (unit_part.empty()) {
+        out.value = n;
+        out.unit = MathUnit::Number;
+        out.valid = true;
+        return out;
+    }
+    if (unit_part == "px") {
+        out.value = n;
+    } else if (unit_part == "em") {
+        const float ref = ctx.on_font_size_property
+                              ? ctx.parent_font_size
+                              : ctx.font_size;
+        out.value = n * ref;
+    } else if (unit_part == "rem") {
+        out.value = n * ctx.root_font_size;
+    } else if (unit_part == "%") {
+        out.value = (n / 100.0f) * ctx.parent_content_width;
+    } else if (unit_part == "pt") {
+        out.value = n * (96.0f / 72.0f);
+    } else {
+        return out;
+    }
+    out.unit = MathUnit::Px;
+    out.valid = true;
+    return out;
+}
+
+MathVal combine(MathVal l, MathVal r, char op) {
+    MathVal out;
+    if (!l.valid || !r.valid) return out;
+
+    if (op == '*') {
+        if (l.unit == MathUnit::Px && r.unit == MathUnit::Px) return out;
+        out.value = l.value * r.value;
+        if (l.unit == MathUnit::Px || r.unit == MathUnit::Px)
+            out.unit = MathUnit::Px;
+        else
+            out.unit = MathUnit::Number;
+        out.valid = true;
+        return out;
+    }
+    if (op == '/') {
+        if (r.value == 0.0f) return out;
+        if (l.unit == MathUnit::Px && r.unit == MathUnit::Number) {
+            out.value = l.value / r.value;
+            out.unit = MathUnit::Px;
+            out.valid = true;
+            return out;
+        }
+        if (l.unit == MathUnit::Number && r.unit == MathUnit::Number) {
+            out.value = l.value / r.value;
+            out.unit = MathUnit::Number;
+            out.valid = true;
+            return out;
+        }
+        if (l.unit == MathUnit::Px && r.unit == MathUnit::Px) {
+            out.value = l.value / r.value;
+            out.unit = MathUnit::Number;
+            out.valid = true;
+            return out;
+        }
+        return out;
+    }
+    if (op == '+' || op == '-') {
+        if (l.unit == MathUnit::Px && r.unit == MathUnit::Px) {
+            out.value = (op == '+') ? (l.value + r.value)
+                                    : (l.value - r.value);
+            out.unit = MathUnit::Px;
+            out.valid = true;
+            return out;
+        }
+        if (l.unit == MathUnit::Number && r.unit == MathUnit::Number) {
+            out.value = (op == '+') ? (l.value + r.value)
+                                    : (l.value - r.value);
+            out.unit = MathUnit::Number;
+            out.valid = true;
+            return out;
+        }
+        return out;
+    }
+    return out;
+}
+
+MathVal eval_expr(std::string_view s, size_t& pos,
+                  const LengthContext& ctx);
+
+MathVal eval_primary(std::string_view s, size_t& pos,
+                     const LengthContext& ctx) {
+    skip_ws(s, pos);
+    if (pos >= s.size()) return {};
+
+    // Nested math function: calc(...), min(...), max(...), clamp(...)
+    // Detect function name followed by '(' and recursively evaluate.
+    {
+        static const char* kFuncs[] = {"calc(", "min(", "max(", "clamp("};
+        for (const char* fn : kFuncs) {
+            const size_t flen = std::strlen(fn);
+            if (s.size() - pos >= flen &&
+                s.compare(pos, flen, fn) == 0) {
+                // Find matching close-paren
+                int depth = 1;
+                size_t close = pos + flen;
+                while (close < s.size() && depth > 0) {
+                    if (s[close] == '(') ++depth;
+                    else if (s[close] == ')') --depth;
+                    ++close;
+                }
+                if (depth != 0) return {};
+                const auto sub = s.substr(pos, close - pos);
+                const float v = eval_math_expression(sub, ctx);
+                pos = close;
+                MathVal out;
+                out.value = v;
+                out.unit = MathUnit::Px;
+                out.valid = true;
+                return out;
+            }
+        }
+    }
+
+    // Parenthesized sub-expression
+    if (s[pos] == '(') {
+        ++pos;
+        MathVal inner = eval_expr(s, pos, ctx);
+        skip_ws(s, pos);
+        if (pos < s.size() && s[pos] == ')') ++pos;
+        return inner;
+    }
+    return parse_operand(s, pos, ctx);
+}
+
+MathVal eval_term(std::string_view s, size_t& pos,
+                  const LengthContext& ctx) {
+    MathVal l = eval_primary(s, pos, ctx);
+    if (!l.valid) return l;
+    while (pos < s.size()) {
+        skip_ws(s, pos);
+        if (pos >= s.size()) break;
+        char op = s[pos];
+        if (op != '*' && op != '/') break;
+        ++pos;
+        MathVal r = eval_primary(s, pos, ctx);
+        l = combine(l, r, op);
+        if (!l.valid) return l;
+    }
+    return l;
+}
+
+MathVal eval_expr(std::string_view s, size_t& pos,
+                  const LengthContext& ctx) {
+    MathVal l = eval_term(s, pos, ctx);
+    if (!l.valid) return l;
+    while (pos < s.size()) {
+        skip_ws(s, pos);
+        if (pos >= s.size()) break;
+        char op = s[pos];
+        if (op != '+' && op != '-') break;
+        ++pos;
+        MathVal r = eval_term(s, pos, ctx);
+        l = combine(l, r, op);
+        if (!l.valid) return l;
+    }
+    return l;
+}
+
+float resolve_to_px(const MathVal& v) {
+    if (!v.valid) return 0.0f;
+    return v.value;
+}
+
+std::vector<std::string_view> split_commas(std::string_view inner) {
+    std::vector<std::string_view> out;
+    size_t start = 0;
+    int depth = 0;
+    for (size_t i = 0; i < inner.size(); ++i) {
+        if (inner[i] == '(') ++depth;
+        else if (inner[i] == ')') --depth;
+        else if (inner[i] == ',' && depth == 0) {
+            out.push_back(inner.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    out.push_back(inner.substr(start));
+    return out;
+}
+
+}  // namespace
+
+float eval_math_expression(std::string_view s, const LengthContext& ctx) {
+    if (s.empty()) return 0.0f;
+
+    // Extract function name + inner content
+    auto name_end = s.find('(');
+    if (name_end == std::string_view::npos) return 0.0f;
+    const std::string_view name = s.substr(0, name_end);
+    if (s.back() != ')') return 0.0f;
+    std::string_view inner = s.substr(name_end + 1, s.size() - name_end - 2);
+
+    if (name == "calc") {
+        size_t pos = 0;
+        MathVal v = eval_expr(inner, pos, ctx);
+        return resolve_to_px(v);
+    }
+
+    if (name == "min" || name == "max") {
+        // Split by top-level commas
+        std::vector<std::string_view> parts;
+        size_t start = 0;
+        int depth = 0;
+        for (size_t i = 0; i < inner.size(); ++i) {
+            if (inner[i] == '(') ++depth;
+            else if (inner[i] == ')') --depth;
+            else if (inner[i] == ',' && depth == 0) {
+                parts.push_back(trim_ws(inner.substr(start, i - start)));
+                start = i + 1;
+            }
+        }
+        parts.push_back(trim_ws(inner.substr(start)));
+        if (parts.empty()) return 0.0f;
+
+        float result = 0.0f;
+        bool first = true;
+        for (auto part : parts) {
+            size_t p = 0;
+            MathVal v = eval_expr(part, p, ctx);
+            if (!v.valid) return 0.0f;
+            const float px = resolve_to_px(v);
+            if (first) { result = px; first = false; }
+            else if (name == "min") result = std::min(result, px);
+            else result = std::max(result, px);
+        }
+        return result;
+    }
+
+    if (name == "clamp") {
+        std::vector<std::string_view> parts;
+        size_t start = 0;
+        int depth = 0;
+        for (size_t i = 0; i < inner.size(); ++i) {
+            if (inner[i] == '(') ++depth;
+            else if (inner[i] == ')') --depth;
+            else if (inner[i] == ',' && depth == 0) {
+                parts.push_back(trim_ws(inner.substr(start, i - start)));
+                start = i + 1;
+            }
+        }
+        parts.push_back(trim_ws(inner.substr(start)));
+        if (parts.size() != 3) return 0.0f;
+        float lo = 0, pref = 0, hi = 0;
+        size_t p = 0; MathVal v = eval_expr(parts[0], p, ctx);
+        lo = resolve_to_px(v);
+        p = 0; v = eval_expr(parts[1], p, ctx);
+        pref = resolve_to_px(v);
+        p = 0; v = eval_expr(parts[2], p, ctx);
+        hi = resolve_to_px(v);
+        return std::max(lo, std::min(pref, hi));
+    }
+
+    return 0.0f;
+}
+
 float parse_length(std::string_view s, const LengthContext& ctx) {
     s = trim(s);
     if (s.empty()) return 0.0f;
-    if (has_internal_ws(s)) return 0.0f;
     if (s == "auto") return 0.0f;
+
+    // ADR-037: math expression dispatch (must precede has_internal_ws
+    // because calc() values legitimately contain internal whitespace).
+    if (s.rfind("calc(", 0) == 0 || s.rfind("min(", 0) == 0 ||
+        s.rfind("max(", 0) == 0 || s.rfind("clamp(", 0) == 0) {
+        return eval_math_expression(s, ctx);
+    }
+
+    if (has_internal_ws(s)) return 0.0f;
 
     enum Unit { PX, EM, REM, PCT } unit;
     size_t suffix_len = 0;
