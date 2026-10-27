@@ -94,7 +94,21 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
         }
     }
 
+    // ADR-039: clip children to content bounds when
+    // overflow: hidden. Save / clip / paint / restore.
+    if (box.clip_children) {
+        cairo_save(cr);
+        const float cx = box.x + box.padding[3];
+        const float cy = box.y + box.padding[0];
+        const float cw = box.width - box.padding[3] - box.padding[1];
+        const float ch = box.height - box.padding[0] - box.padding[2];
+        cairo_rectangle(cr, cx, cy,
+                        cw > 0.0f ? cw : 0.0f,
+                        ch > 0.0f ? ch : 0.0f);
+        cairo_clip(cr);
+    }
     paint_children(cr, box.children, drawer, images);
+    if (box.clip_children) cairo_restore(cr);
 }
 
 void paint_children(

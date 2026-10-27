@@ -977,50 +977,80 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
-    // ADR-035: reserve layout space for <img> from intrinsic
-    // dimensions. Explicit CSS width (or height) wins; the other
-    // axis is aspect-derived. Neither set: use intrinsic (CSS
-    // spec fallback). Callback null/invalid: existing (h=0).
-    if (image_dims && el.tag() == "img") {
-        const std::string src_attr = el.get_attribute("src");
-        if (!src_attr.empty()) {
-            const ImageDim d = image_dims(src_attr);
-            if (d.valid && d.width > 0.0f && d.height > 0.0f) {
-                float want_w = 0.0f;
-                float want_h = 0.0f;
-                if (style) {
-                    if (auto w = style->get("width");
-                        w && !w->empty() && *w != "auto") {
-                        const float p = parse_length(*w, ctx);
-                        if (p > 0.0f) want_w = p;
-                    }
-                    if (auto h = style->get("height");
-                        h && !h->empty() && *h != "auto") {
-                        const float p = parse_length(*h, ctx);
-                        if (p > 0.0f) want_h = p;
-                    }
+    // ADR-039: box model completion.
+
+    // (1) min-width / max-width clamps. Applied after the width
+    // resolution above. auto/none are no-ops. vw/vh in
+    // max-width skipped -- ADR-037 defers those units; a
+    // max-width that resolves to 0 due to vw would collapse
+    // the element (worse than current no-clamp behavior).
+    if (style) {
+        if (auto mw = style->get("min-width")) {
+            if (!is_auto(*mw) && *mw != "none") {
+                const float min_w = parse_length(*mw, ctx);
+                if (min_w > content_w) content_w = min_w;
+            }
+        }
+        if (auto xw = style->get("max-width")) {
+            if (!is_auto(*xw) && *xw != "none" &&
+                xw->find("vw") == std::string::npos &&
+                xw->find("vh") == std::string::npos) {
+                const float max_w = parse_length(*xw, ctx);
+                if (max_w > 0.0f && max_w < content_w) content_w = max_w;
+            }
+        }
+    }
+
+    // (2) explicit height from ComputedStyle. Applies to all
+    // non-early-return boxes (regular elements + img with failed
+    // decode; img with valid dims returns early from the img
+    // block above). This is ADR-037's deferred height gap --
+    // search icon w=20 h=0 becomes w=20 h=20.
+    //
+    // v1 limitation: percentage heights skipped. LengthContext
+    // has only parent_content_width, no parent_content_height.
+    // `height: 100%` on <html>/<body> would resolve to viewport
+    // WIDTH (1774px) which is catastrophic. Deferred until
+    // parent_content_height threading (ADR-040).
+    if (style) {
+        if (auto h = style->get("height");
+            h && !is_auto(*h) && h->find('%') == std::string::npos) {
+            const float eh = parse_length(*h, ctx);
+            if (eh > 0.0f) cursor_y = content_y + eh;
+        }
+    }
+
+    // (3) min-height / max-height clamps. Same vw/vh skip rule.
+    if (style) {
+        if (auto mh = style->get("min-height")) {
+            if (!is_auto(*mh) && *mh != "none" &&
+                mh->find('%') == std::string::npos) {
+                const float min_h = parse_length(*mh, ctx);
+                if (min_h > (cursor_y - content_y)) {
+                    cursor_y = content_y + min_h;
                 }
-                if (want_w > 0.0f && want_h > 0.0f) {
-                    // both explicit
-                } else if (want_w > 0.0f) {
-                    want_h = want_w * (d.height / d.width);
-                } else if (want_h > 0.0f) {
-                    want_w = want_h * (d.width / d.height);
-                } else {
-                    want_w = d.width;
-                    want_h = d.height;
+            }
+        }
+        if (auto xh = style->get("max-height")) {
+            if (!is_auto(*xh) && *xh != "none" &&
+                xh->find("vh") == std::string::npos &&
+                xh->find("vw") == std::string::npos &&
+                xh->find('%') == std::string::npos) {
+                const float max_h = parse_length(*xh, ctx);
+                if (max_h > 0.0f && max_h < (cursor_y - content_y)) {
+                    cursor_y = content_y + max_h;
                 }
-                if (want_w > content_w && content_w > 0.0f) {
-                    want_h = want_h * (content_w / want_w);
-                    want_w = content_w;
-                }
-                box.width = want_w
-                          + box.padding[3] + box.padding[1]
-                          + box.border[3] + box.border[1];
-                box.height = want_h
-                           + box.padding[0] + box.padding[2]
-                           + box.border[0] + box.border[2];
-                return box;
+            }
+        }
+    }
+
+    // (4) overflow: hidden -> paint clips children to content
+    // bounds. "hidden" and "hidden auto" both set the flag
+    // (v1 treats two-value form as hidden on both axes).
+    if (style) {
+        if (auto ov = style->get("overflow")) {
+            if (ov->find("hidden") != std::string::npos) {
+                box.clip_children = true;
             }
         }
     }
