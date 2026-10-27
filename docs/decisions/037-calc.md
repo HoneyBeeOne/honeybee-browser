@@ -403,6 +403,45 @@ Same pattern as ADR-029's "display_of unknown value" test:
 name + comment record the transition** rather than being
 silently updated.
 
+## Post-ADR-039 note (2026-10-28)
+
+ADR-039 closed this ADR's deferred height gap.
+
+### The deferral recorded in ADR-037
+
+ADR-037's Implementation section (the "Measured delta" and
+"Honest caveat" paragraphs) documented:
+
+> Search icon width: 2 → 20 (calc works)
+> Search icon height: 0 (unchanged)
+> `height` on non-img boxes still unapplied, deferred to
+> ADR-040 (box model).
+
+### What ADR-039 Commit 1 delivered
+
+`height` applied to all boxes, with percentage heights
+skipped (no `parent_content_height` in `LengthContext` —
+deferred to ADR-040+).
+
+**Search icon now**: `w=20 h=20`. Verified by tree walk
+(`span.cdx-text-input__icon`) and by rendered PNG (icon
+visible in header at correct size).
+
+`calc()` from ADR-037 resolves the height value; ADR-039's
+height block applies it. The two together close the gap.
+
+### What remains from ADR-037's deferral
+
+- Percentage heights (`height: 100%`) — `parent_content_height`
+  threading, ADR-040+
+- `vw`/`vh` in `calc()` for max-width — same threading
+- `calc()` in grid-track sizing / font-size — different code
+  paths, unchanged
+
+ADR-037's core deliverable (`calc()` / `min()` / `max()` /
+`clamp()` + var-inside-calc) remains fully working. ADR-039
+extended what consumes those values, not what produces them.
+
 ## Verification
 
 **Unit tests** (new `[css][calc][adr-037]` tag):

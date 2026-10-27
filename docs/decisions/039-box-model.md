@@ -1,6 +1,6 @@
 # ADR-039: Box Model Completion — height, min/max clamps, box-sizing, overflow
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (layout), ADR-013 (length units), ADR-035 (`<img>` layout), ADR-037 (calc + math functions), ADR-038 (pseudo-classes)
@@ -316,6 +316,138 @@ Two commits on `feat/box-model`:
    box-sizing awareness. ~25 lines in layout.cpp. 4-6 tests.
 
 Plus a docs commit.
+
+## Implementation
+
+**Implemented 2026-10-28.** Four PRs: spec #198, Commit 1
+(#199), Commit 2 (#200), and Commit 2 revert (#201) + this
+docs PR. **Partial delivery with three honest corrections
+recorded.**
+
+### What shipped (Commit 1, #199 — verified)
+
+- `height` applied to all boxes (was img-only). Percentage
+  heights skipped in v1 (no `parent_content_height` in
+  `LengthContext`; `height: 100%` on `<html>`/`<body>`
+  would resolve against viewport width, collapsing layout).
+- `min-width` / `max-width` clamps. vw/vh in value skips
+  clamp (ADR-037 defers those units).
+- `min-height` / `max-height` clamps. Same vw/vh/percentage
+  skip rules.
+- `overflow: hidden` sets `LayoutBox::clip_children`;
+  `paint.cpp` wraps children in Cairo clip.
+- Removed duplicated ADR-035 img sizing block (dead code
+  from earlier mis-applied patch).
+
+**Verified delta**: search icon `w=20 h=0` → **`w=20 h=20`**
+(ADR-037's deferred height gap CLOSED). Layout height
+62283px (baseline 62295, −12). Article title at y=128
+(baseline y=145, −17 — slightly better, not worse).
+
+### What was reverted (Commit 2, #200 → reverted by #201)
+
+**`box-sizing: border-box`** shipped in #200 then reverted
+in #201 after the merged render showed a visual regression:
+
+- **Gray strip at x≈0-110, full height** (was not there
+  pre-Commit-2)
+- Search icon shifted x=386 → x=438
+
+**Root cause**: unmeasured. Some element's box-sizing-aware
+width shrank and either revealed a background or left a gap.
+Diagnosis deferred to the re-attempt's phase.
+
+**Process failure**: Commit 2 merged without rendering and
+visually inspecting `/tmp/wiki-adr039-c2.png` first. Every
+commit since ADR-034 was visually verified or docs-only;
+Commit 2 broke that pattern.
+
+**Two-commit split worked as designed**: revert of #200
+leaves #199's verified state intact. `git revert a073031`
+was the whole action. Commit 1 stayed; only Commit 2 was
+undone. That's the isolation strategy's payoff.
+
+### Three honest corrections in this ADR's record
+
+**Correction 1: "185px gap" was a misdiagnosis**
+
+Commit 1's message claimed: "Article title y=145 → y=330"
+with a 185px gap introduced. That measurement was taken from
+`/tmp/wiki-adr039-c1.png` — the **broken pre-fix render**
+where percentage height had collapsed layout to 1774px. The
+fixed render (`/tmp/wiki-adr039-c1-fixed.png`, layout height
+62283) was never opened before writing the commit message.
+
+**Actual measured state**: article title y=128 (was y=145,
+i.e. 17px *higher* not 185px lower). No gap. The
+implementation is not just fine — it's slightly better than
+baseline.
+
+Per the arc's pattern (ADR-028's grid misdiagnosis): the
+original claim stays in commit history. This correction
+section preserves both versions in the record.
+
+**Correction 2: `box-sizing` regression — reverted, process
+failure recorded**
+
+Covered above. Commit 2's visual regression is preserved in
+commit history; revert preserves the verified state on main.
+Root cause unmeasured.
+
+**Correction 3: `border` shorthand limitation surfaced**
+
+Commit 2's initial tests used `border: 5px solid black`
+which ADR-012 does not expand (only `border-width` longhand
+is expanded). Tests were corrected to use `border-width:
+5px`; the box-sizing implementation itself was correct.
+
+**Real-world impact**: Wikipedia uses `border: 1px solid X`
+shorthand in many places. Those borders are currently
+**invisible** — pre-existing limitation, not introduced by
+ADR-039. Deferred to a small future ADR ("border shorthand
+expansion", ~20 lines).
+
+### Test count
+
+- Before ADR-039 Commit 1: 480 cases / 1851 assertions
+- After Commit 1 (#199): **494 cases / 1881 assertions**
+  (+14 / +30)
+- After Commit 2 (#200): 500 / 1894
+- After Revert (#201): **494 / 1881** (returned to
+  Commit 1 state)
+- Full suite all pass, zero warnings throughout
+- CI green on PR and post-merge for #199, #200 (merged
+  despite regression), #201 (revert)
+
+### What remains deferred (unchanged from spec, plus new items)
+
+- `box-sizing: border-box` — re-attempt with proper
+  verification discipline
+- `parent_content_height` threading — unblocks percentage
+  heights
+- `overflow: auto | scroll` — scrollbar + event subsystem
+- `overflow-wrap`, `aspect-ratio`
+- **NEW**: `border` shorthand expansion (surfaced by
+  Commit 2's test fix)
+- **NEW**: box-sizing root cause diagnostic
+
+### The discipline this ADR exercised
+
+Two patterns preserved:
+
+1. **Two-commit risk isolation** — worked as designed.
+   Commit 2's regression didn't contaminate Commit 1.
+2. **Revert-with-record** — reverting Commit 2 preserved
+   the original commit in git history, added an honest
+   revert commit explaining the regression, and left the
+   verified Commit 1 state on main. Same principle as
+   ADR-028's correction-in-place, applied to a merged
+   regression rather than a misdiagnosis.
+
+**New process lesson**: visual verification is not optional
+between commit and merge. The two-stage measurement
+(ADR-029 onward) applies to risk-isolated commits just as it
+does to full ADRs — Commit 2's verification step was skipped.
 
 ## Verification
 
