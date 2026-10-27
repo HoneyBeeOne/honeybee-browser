@@ -287,6 +287,158 @@ intentional). Better as its own focused diagnostic.
 - **`:not()` with attribute arguments** — e.g. `:not([attr])`
   — future selector work
 
+## Scope Amendment (2026-10-27): attribute selectors and floats already work; navbox is the actual defect
+
+Following this spec's merge, the Commit-1 diagnostic (originally
+scoped as "verify attribute selector support") **refuted the
+spec's premise in two places**. Both findings are recorded below
+with the original spec preserved unchanged above.
+
+### Finding 1: attribute selectors are fully implemented
+
+`selectors.hpp` already has:
+
+```cpp
+enum class SimpleKind {
+    // ...
+    Attribute,
+    // ...
+};
+enum class AttributeMatch {
+    Presence, Exact, Prefix, Suffix, Contains, Word, Hyphen,
+};
+struct SimpleSelector {
+    SimpleKind kind;
+    std::string name;
+    AttributeMatch attr_match;
+    std::string attr_value;
+};
+```
+
+`selectors.cpp` has the full parser (30+ lines handling `[`,
+quoted/unquoted values, the `^$*~|` modifier tokens) and the
+full matcher (`matches_attribute`, 20+ lines with `starts_with`,
+`ends_with`, `find`, word-token, hyphen-separated branches).
+
+**Tested 10/10 forms matched** including the exact Wikipedia
+rule `figure[typeof~='mw:File/Thumb']`. ADR-008 shipped full
+attribute selector support five ADRs ago; the spec's "our
+cascade likely doesn't support `[attr~=val]`" was wrong.
+
+### Finding 2: thumbnails already float correctly
+
+The HTML is:
+
+```html
+<figure class="mw-default-size mw-halign-left" typeof="mw:File/Thumb">
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb">
+```
+
+Per `figure[typeof~='mw:File/Thumb'].mw-halign-left { clear:left; float:left }`
+and `.mw-halign-right { clear:right; float:right }` — both rules
+match. First thumbnail's `<img>` sits at `x=346` in the tree,
+which is **exactly** content-x + the CSS `margin-left:1.4em` of
+a left-floating figure. Second sits at right edge. **Thumbnails
+were floating correctly all along.**
+
+ADR-035's "partial" finding was itself a misreading — correct
+behavior interpreted as a defect because the visible PNG also
+showed the navbox overlap, which was easy to conflate with the
+thumbnails.
+
+### Finding 3: the `float:none !important` override is @media-gated
+
+The `body.skin--responsive figure { float:none !important }`
+rule lives inside `@media all and (max-width:calc(640px - 1px))`.
+It does **not** apply at viewport 1774. Our @media filter is
+correct.
+
+### The actual remaining visible defect: navbox at x=324
+
+Every screenshot since ADR-029 shows nav-like content at
+`x=324` overlapping the article intro. That's a
+`<table class="navbox">` or `.sidebar` variant. ADR-031's
+`.sidebar{display:none !important}` viewport rule isn't
+matching it — likely a different class token
+(`.navbox`, `.navbox-styles`, `.navbox-inner`, or a sidebar
+variant with distinct class).
+
+**This is what ADR-035's PNG actually showed** — not
+thumbnails. The misdiagnosis cascade (ADR-035 "partial" →
+ADR-036 "attribute selectors missing" → measurement) ends
+here: it's a specific class-token miss.
+
+### Reframed decision
+
+Two features still ship in ADR-036, but the scope is now
+honestly measured:
+
+**1. `clear` property support (~40-50 lines)**
+
+Even though floats already work at the page level, `clear`
+genuinely isn't implemented. Consequence: consecutive
+same-side floats (two `float: right` thumbnails in a row)
+would overlap at the right edge instead of stacking
+vertically. The current HTML article happens to have only one
+`float: right` thumbnail and two `float: left` thumbnails,
+so the overlap doesn't manifest yet — but it will the moment
+an article has consecutive same-side figures.
+
+`clear` is genuinely useful defensively. Same pattern as
+ADR-032's paint culling: no visible delta today, but
+preconditions a future correct render.
+
+- `clear: right` on a float → jump below prior right float
+- `clear: left` on a float → jump below prior left float
+- `clear: both` on a float → jump below both
+- `clear: right | left | both` on a non-float block → same
+- `clear: none` → default no-op
+
+**2. Navbox/sidebar class-token hide (~15 lines)**
+
+Commit 1's diagnostic identifies the exact element at
+`x=324` and its class token. Commit 2 adds
+`.<token>{display:none !important}` to the desktop
+viewport_css (following ADR-029's `#p-lang-btn`, ADR-030's
+`.mw-jump-link`, ADR-031's `.sidebar` pattern). This is a
+workaround, documented as temporary until proper
+`position: sticky` / `display: flow-root` / grid support
+reaches the sidebar/table internals — but it fixes the
+**actual visible defect** the arc has been carrying since
+ADR-029.
+
+### What does NOT ship
+
+- **Attribute selector work**: already exists, no implementation
+- **Float correctness**: already correct, no implementation
+
+### Visible delta prediction (revised)
+
+| Check | Before | After |
+|---|---|---|
+| Navbox content at x=324 (overlapping intro) | visible | **hidden** |
+| Article intro paragraph | overlapped | **clean** |
+| Consecutive same-side floats | overlap | **stack** (defensive; not manifested in current article) |
+| First-viewport PNG | navbox visible | **navbox gone** |
+| Thumbnail floats | already correct | unchanged |
+
+First ADR since ADR-030 whose PNG change is a **fix to an
+existing defect** rather than a new feature.
+
+### Fifth misdiagnosis in the arc
+
+The arc's correction record now has:
+1. ADR-028 — grid was correct, header was the bug
+2. ADR-031 — float "overlap" was intro text misread
+3. ADR-034 — SVG intrinsic was 1x1, not 220x35
+4. ADR-035 — "partial" finding was actually correct behavior
+5. **ADR-036 (this amendment)** — attribute selectors and
+   floats both already work; the whole spec premise was a
+   cascade of misreadings from ADR-035
+
+Each preserved in place. The pattern holds: measure before
+assuming, preserve corrections alongside original claims.
+
 ## Consequences
 
 **Better:**
