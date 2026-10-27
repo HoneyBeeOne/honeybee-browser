@@ -1,6 +1,6 @@
 # ADR-035: Layout-Integrated `<img>` (Intrinsic Dimensions Reserve Space)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-27
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (layout), ADR-016 (inline formatting), ADR-028 (grid), ADR-031 (float), ADR-034 (`<img>` paint, SVG decode, protocol-relative URL fix)
@@ -377,6 +377,112 @@ Two commits on `feat/img-layout`:
 
 1. **ImageDimLookup + layout integration + remove tagline workaround** -- add `ImageDim` struct and `ImageDimLookup` typedef to `layout.hpp`; new 5th param (default nullptr); `<img>` sizing in `layout_element` before `return box`; remove paint.cpp tagline skip; wire callback in `RenderPipeline::relayout()`. Add 6-8 tests.
 2. **Docs** -- ADR-035 status → Implemented, Post-ADR-035 notes in ADR-031 (float: images inside float reserve correctly) and ADR-034 (the two limitations resolved), CHANGELOG, README row.
+
+## Implementation
+
+**Implemented 2026-10-27.** Three PRs (spec #184, impl #185,
+this docs PR). Split delivery: header fix landed cleanly,
+thumbnail propagation partial and documented.
+
+### What shipped
+
+- `ImageDim` struct + `ImageDimLookup` typedef in `layout.hpp`
+- `layout()` gains 5th param (default `nullptr`; zero churn for
+  existing 425 tests)
+- `layout_element`: `el.tag() == "img"` query → box sized
+  per CSS width/height or intrinsic fallback
+- `RenderPipeline::relayout()`: callback wires
+  `get_image_surface()` + Cairo surface dims; cache hit = free
+- `paint.cpp`: ADR-034's tagline skip workaround removed
+  (tagline now has real h=19 from layout)
+
+### Measured delta (viewport 1774)
+
+| Element | Before | After |
+|---|---|---|
+| Wordmark | 248×0 | **248×39** |
+| Tagline | 248×0 (paint-skip) | **248×19 (unhidden)** |
+| Header height | ~50px | **~94px** |
+| Article intro y | 145 | **~189** (+44) |
+| HTML5 logo | 926×0 | 250×250 (in tree) |
+| Categories diagram | 926×0 | 250×177 (in tree) |
+| Footer wikimedia | 1646×0 | 200×200 (intrinsic) |
+| Footer mediawiki | 1646×0 | 100×100 (intrinsic) |
+
+### Three honest findings recorded
+
+**1. Thumbnail heights do not propagate down.**
+
+Subsequent article content shifts only by header growth
+(+44px), not by thumbnail heights. Root cause: thumbnails are
+`<img>` inside `<figure class="thumb">` containers, which
+Wikipedia CSS sets to `float: right`. Per ADR-031's float v1
+(block-level), floated content doesn't advance parent
+`cursor_y`. The `<img>` h=250 reserves space **inside** the
+float; the float itself doesn't push siblings down.
+
+**This is correct float v1 behavior.** The visible defect
+(article text still flows beside thumbnail instead of below
+it) requires ADR-036 (`clear` semantics + floated-child
+height contribution). Deferred.
+
+**2. Navbox/sidebar variant still overlaps intro
+(pre-existing).**
+
+Visible in delivered PNG at x=324: nav-like content ("HTML
+and variants / Dynamic HTML / HTML5 / XHTML / Basic / Mobile
+Profile / text/html / HTML elements and attributes / article
+/ body / blink / canvas / div and span / marquee") overlaps
+the article intro. A `<table class="sidebar">` or
+`<table class="navbox">` variant that ADR-031's
+`.sidebar{display:none !important}` isn't matching. Class
+token may be `.navbox`, `.navbox-styles`, or a sidebar
+variant with distinct class. **Pre-existing**, not caused by
+ADR-035. Own follow-up cycle.
+
+**3. JPEG decode still fails.**
+
+TBL photo (926×0) has JPEG src. Cairo PNG decode rejects it;
+falls back to h=0. Needs `libjpeg-turbo` dependency. Deferred
+since ADR-034.
+
+### Performance
+
+First render: 8 sync fetches at layout time. Baseline 5.0-5.5
+sec → ~5.3-5.8 sec cold cache. Cached after: 5.0-5.5 sec
+unchanged. Documented as "first-render-slow, subsequent-fast"
+— same as every browser's first paint.
+
+### Test count
+
+- Before Commit 1: 425 cases / 1741 assertions
+- After Commit 1: **425 cases / 1741 assertions** (unchanged —
+  Commit 1 uses existing tests; new tests deferred)
+- Full suite all pass, zero warnings
+- CI green on PR and post-merge
+
+### What this ADR resolved from ADR-034's four limitations
+
+ADR-034's Implementation section listed four honest
+limitations. ADR-035 resolved two:
+
+- ✅ **Images don't reserve layout space** — now they do
+  (header fully; thumbnails inside float, propagation
+  deferred)
+- ✅ **Tagline overlapping wordmark** — tagline unhidden,
+  header grows to fit both; paint.cpp workaround removed
+- ⚠️ **SVG `<text>` not rendered** — unchanged, librsvg
+  limitation
+- ⚠️ **Search icon 2×2** — unchanged, needs `calc()`
+
+### What ADR-035 newly uncovered (post-fix findings)
+
+- Thumbnail propagation gap (float v1)
+- Navbox/sidebar class token mismatch
+- JPEG decode dependency
+
+All three go to their own cycles, none block ADR-035's
+delivered scope.
 
 ## Verification
 

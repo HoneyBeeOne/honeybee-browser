@@ -498,6 +498,42 @@ Two commits on `feat/img-absolute`:
    - Add 6-8 tests (absolute containing block, absolute offsets, absolute skip from flow, img tag detection, PNG decode on a test PNG, image cache)
 2. **Docs** -- ADR-034 status → Implemented, Post-ADR-034 notes in ADR-031 (float interaction) and ADR-033 (position arc), CHANGELOG, README row.
 
+## Post-ADR-035 note (2026-10-27)
+
+ADR-035 resolved two of this ADR's four documented limitations:
+
+**1. Images don't reserve layout space** -- resolved for
+header (wordmark 248x39, tagline 248x19), partially for
+below-fold thumbnails (sizes in tree, not propagated through
+float containers -- see ADR-031's Post-ADR-035 note for the
+float v1 limitation).
+
+**2. Tagline overlapping wordmark** -- resolved. Tagline
+unhidden (h=19 from layout), header grows to fit both, paint-
+layer skip workaround (this ADR's Implementation section,
+"Tagline workaround") **removed**. Zero workarounds remain in
+`paint.cpp`.
+
+**Two limitations remain unchanged:**
+
+- **SVG `<text>` not rendered** -- librsvg limitation, future
+  SVG decoders or workaround.
+- **Search icon renders at 2x2** -- needs `calc()` evaluation;
+  separate ADR.
+
+### What ADR-035 newly uncovered
+
+Three findings, all post-ADR-035:
+
+- Thumbnail propagation gap through float v1 (ADR-036 fixes)
+- Navbox/sidebar class token mismatch (own follow-up cycle)
+- JPEG decode dependency (deferred since this ADR, still
+  deferred)
+
+None block ADR-034's delivered scope. ADR-034's `<img>` paint
+pipeline (PNG/SVG decode via Cairo/librsvg, cache, format
+dispatch) remains fully working.
+
 ## Verification
 
 **Unit tests** (new `[layout][img][adr-034]` tag):
