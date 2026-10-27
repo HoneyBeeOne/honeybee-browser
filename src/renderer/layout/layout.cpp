@@ -172,17 +172,6 @@ LayoutBox layout_element(const dom::Element& el,
     const Direction own_dir = resolve_direction(el, parent_dir);
 
     const css::ComputedStyle* style = lookup(styles, el);
-
-    // ADR-039 Commit 2: box-sizing: border-box changes what
-    // width/height mean (border-box instead of content-box).
-    // Applies to width, height, min/max clamps uniformly.
-    bool border_box = false;
-    if (style) {
-        if (auto bs = style->get("box-sizing");
-            bs && *bs == "border-box") {
-            border_box = true;
-        }
-    }
         // ADR-034: extract background-image url(...) if present.
     // Paint fetches + decodes (PNG via Cairo, SVG via librsvg)
     // and draws at box rect. Handles data: URLs (search icon).
@@ -276,15 +265,7 @@ LayoutBox layout_element(const dom::Element& el,
         const auto w = style->get("width");
         if (w && !is_auto(*w)) {
             const float ew = parse_length(*w, ctx);
-            if (ew > 0.0f) {
-                if (border_box) {
-                    content_w = ew - box.padding[3] - box.padding[1]
-                                  - box.border[3] - box.border[1];
-                    if (content_w < 0.0f) content_w = 0.0f;
-                } else {
-                    content_w = ew;
-                }
-            }
+            if (ew > 0.0f) content_w = ew;
         }
     }
     if (content_w < 0.0f) content_w = 0.0f;
@@ -1007,11 +988,7 @@ LayoutBox layout_element(const dom::Element& el,
         if (auto mw = style->get("min-width")) {
             if (!is_auto(*mw) && *mw != "none") {
                 const float min_w = parse_length(*mw, ctx);
-                const float min_content_w = border_box
-                    ? (min_w - box.padding[3] - box.padding[1]
-                             - box.border[3] - box.border[1])
-                    : min_w;
-                if (min_content_w > content_w) content_w = min_content_w;
+                if (min_w > content_w) content_w = min_w;
             }
         }
         if (auto xw = style->get("max-width")) {
@@ -1019,13 +996,7 @@ LayoutBox layout_element(const dom::Element& el,
                 xw->find("vw") == std::string::npos &&
                 xw->find("vh") == std::string::npos) {
                 const float max_w = parse_length(*xw, ctx);
-                const float max_content_w = border_box
-                    ? (max_w - box.padding[3] - box.padding[1]
-                             - box.border[3] - box.border[1])
-                    : max_w;
-                if (max_content_w >= 0.0f && max_content_w < content_w) {
-                    content_w = max_content_w;
-                }
+                if (max_w > 0.0f && max_w < content_w) content_w = max_w;
             }
         }
     }
@@ -1045,18 +1016,7 @@ LayoutBox layout_element(const dom::Element& el,
         if (auto h = style->get("height");
             h && !is_auto(*h) && h->find('%') == std::string::npos) {
             const float eh = parse_length(*h, ctx);
-            if (eh > 0.0f) {
-                if (border_box) {
-                    const float content_eh = eh - box.padding[0]
-                                               - box.padding[2]
-                                               - box.border[0]
-                                               - box.border[2];
-                    cursor_y = content_y +
-                               (content_eh > 0.0f ? content_eh : 0.0f);
-                } else {
-                    cursor_y = content_y + eh;
-                }
-            }
+            if (eh > 0.0f) cursor_y = content_y + eh;
         }
     }
 
@@ -1066,12 +1026,8 @@ LayoutBox layout_element(const dom::Element& el,
             if (!is_auto(*mh) && *mh != "none" &&
                 mh->find('%') == std::string::npos) {
                 const float min_h = parse_length(*mh, ctx);
-                const float min_content_h = border_box
-                    ? (min_h - box.padding[0] - box.padding[2]
-                             - box.border[0] - box.border[2])
-                    : min_h;
-                if (min_content_h > (cursor_y - content_y)) {
-                    cursor_y = content_y + min_content_h;
+                if (min_h > (cursor_y - content_y)) {
+                    cursor_y = content_y + min_h;
                 }
             }
         }
@@ -1081,13 +1037,8 @@ LayoutBox layout_element(const dom::Element& el,
                 xh->find("vw") == std::string::npos &&
                 xh->find('%') == std::string::npos) {
                 const float max_h = parse_length(*xh, ctx);
-                const float max_content_h = border_box
-                    ? (max_h - box.padding[0] - box.padding[2]
-                             - box.border[0] - box.border[2])
-                    : max_h;
-                if (max_content_h >= 0.0f &&
-                    max_content_h < (cursor_y - content_y)) {
-                    cursor_y = content_y + max_content_h;
+                if (max_h > 0.0f && max_h < (cursor_y - content_y)) {
+                    cursor_y = content_y + max_h;
                 }
             }
         }
