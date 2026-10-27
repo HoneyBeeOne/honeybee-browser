@@ -486,6 +486,21 @@ LayoutBox layout_element(const dom::Element& el,
                 // cursor_y, track vertical extent for follow-ups.
                 if (float_dir == "left" || float_dir == "right") {
                     flush_inline_run();
+                    // ADR-036: clear on a float forces it below prior
+                    // same-direction (or both-direction) floats.
+                    std::string clear_dir = "none";
+                    if (child_style) {
+                        if (auto c = child_style->get("clear")) {
+                            clear_dir = *c;
+                        }
+                    }
+                    const bool must_jump =
+                        (clear_dir == "both") ||
+                        (clear_dir == "right" && float_dir == "right") ||
+                        (clear_dir == "left"  && float_dir == "left");
+                    if (must_jump && float_bottom > cursor_y) {
+                        cursor_y = float_bottom;
+                    }
                     auto probe = std::make_unique<LayoutBox>(
                         layout_element(child_el, styles, measurer,
                                        content_x, cursor_y, content_w,
@@ -522,6 +537,28 @@ LayoutBox layout_element(const dom::Element& el,
                     continue;
                 }
                 flush_inline_run();
+
+                // ADR-036: clear on a non-float block forces it
+                // below any active float of the same (or both)
+                // direction.
+                {
+                    std::string clear_dir = "none";
+                    if (child_style) {
+                        if (auto c = child_style->get("clear")) {
+                            clear_dir = *c;
+                        }
+                    }
+                    const bool clear_right =
+                        (clear_dir == "both" || clear_dir == "right");
+                    const bool clear_left =
+                        (clear_dir == "both" || clear_dir == "left");
+                    if ((clear_right && float_right_w > 0.0f) ||
+                        (clear_left  && float_left_w  > 0.0f)) {
+                        if (float_bottom > cursor_y) {
+                            cursor_y = float_bottom;
+                        }
+                    }
+                }
 
                 // ADR-031: narrow block content if its actual
                 // starting y (cursor_y + margin_top) falls within
