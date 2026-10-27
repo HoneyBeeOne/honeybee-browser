@@ -1,6 +1,6 @@
 # ADR-036: Attribute Selectors + `clear` Property
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-27
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-031 (float v1), ADR-034 (`<img>` paint), ADR-035 (image layout integration)
@@ -490,6 +490,112 @@ Three commits on `feat/attr-selectors-clear`:
    notes in ADR-031 (float interaction: `clear` now honored)
    and ADR-035 (timing correction + thumbnail propagation now
    delivered), CHANGELOG.
+
+## Implementation
+
+**Implemented 2026-10-27.** Three PRs after the amendment:
+spec amendment #188 (docs), impl #189 (clear), this docs PR.
+
+The original spec's premise was refuted before any code was
+written. This section records what actually shipped and
+preserves the fifth misdiagnosis in the arc's correction
+record.
+
+### What shipped
+
+**`clear` property support** (~37 lines in `layout_block_children`,
+6 tests in `[layout][clear][adr-036]`):
+
+- `clear:right` on a float -> jump below prior `float:right`
+- `clear:left` on a float -> jump below prior `float:left`
+- `clear:both` on a float -> jump below prior same-side float
+- `clear:none` -> no-op
+- Same forms on a non-float block -> jump below active float
+
+Reads `clear` from ComputedStyle, checks `float_bottom >
+cursor_y` before advancing, and clears `float_right_w` /
+`float_left_w` after jumping so following narrow-blocks
+aren't pinned to a float they've cleared past.
+
+### What did NOT ship
+
+Two features from the original spec's scope were refuted by
+measurement before implementation:
+
+**1. Attribute selectors (already implemented in ADR-008)**
+
+`selectors.hpp` has `SimpleKind::Attribute` + full
+`AttributeMatch` enum (`Presence`, `Exact`, `Prefix`,
+`Suffix`, `Contains`, `Word`, `Hyphen`). `selectors.cpp`
+has the parser (30+ lines handling `[`, quoted/unquoted
+values, `^$*~|` modifiers) and matcher (`matches_attribute`,
+20+ lines). Tested 10/10 forms matched including the exact
+Wikipedia rule `figure[typeof~='mw:File/Thumb']`.
+
+**2. Float correctness (already correct per ADR-031)**
+
+Thumbnails float correctly. First thumbnail's `<img>` at
+`x=346` = content-x + CSS `margin-left:1.4em` of a
+left-floating figure. Second at right edge. The visible
+"partial" finding in ADR-035 was actually the nav overlap
+at `x=324`, not the thumbnails.
+
+### Visible delta: zero, honestly verified
+
+Byte-identical PNG comparison (clear path vs no-clear path,
+same source, same viewport 1774):
+
+    ✓ IDENTICAL
+
+Layout height unchanged at 62295. Current HTML article has
+no consecutive same-side thumbnails, so no overlap manifests.
+The value of `clear` is **defensive**: the moment any article
+has two consecutive `float:right` (or `float:left`) figures,
+without `clear` support they overlap at the right/left edge
+instead of stacking.
+
+### The nav overlap at x=324 is deferred
+
+Every screenshot since ADR-029 shows nav-like content at
+`x=324` overlapping the article intro. Diagnostic in the
+implementation branch:
+
+- `.navbox` (real navbox): at `y=34880`, way below fold --
+  not the overlap
+- `.sidebar`: **not found** in tree -- hidden or absent
+- `.nomobile`: only `.shortdescription.nomobile` at `y=233`,
+  23px tall -- not the overlap
+- `navbox2` substring search over class/id for
+  `navbox|sidebar|nomobile`: only found descendants of the
+  real navbox at `y=34880`
+
+**The element is unidentified.** Deferred to a separate
+diagnostic cycle: dump every Box at `x<500, y<900` sorted by
+y, identify the one that isn't a maintenance banner / article
+paragraph.
+
+### Fifth misdiagnosis in the arc's correction record
+
+The pattern now has five instances, each preserved in place:
+
+| ADR | What measurement refuted |
+|---|---|
+| 028 | Grid misdiagnosis -- "grid placement bug" was 585px header |
+| 031 | Float overlap -- "infobox duplication" was intro text |
+| 034 | SVG intrinsic -- "220x35" was actually 1x1 (viewBox fallback) |
+| 035 | "Partial" thumbnail finding was correct behavior |
+| **036** | **Whole spec premise** -- attribute selectors and floats already worked |
+
+Each ADR carries its original claim above the correction.
+This is the arc's most consistent behavior: **measurement
+catches the misreading, the record preserves both versions**.
+
+### Test count
+
+- Before Commit 1: 425 cases / 1741 assertions
+- After Commit 1: **431 cases / 1765 assertions** (+6 / +24)
+- Full suite all pass, zero warnings
+- CI green on PR and post-merge
 
 ## Verification
 

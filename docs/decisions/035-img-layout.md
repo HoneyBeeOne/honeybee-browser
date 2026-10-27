@@ -484,6 +484,71 @@ limitations. ADR-035 resolved two:
 All three go to their own cycles, none block ADR-035's
 delivered scope.
 
+## Post-ADR-036 note (2026-10-27)
+
+This ADR's "partial thumbnail propagation" finding was **a
+misreading**, and ADR-036's diagnostic proved it.
+
+### What the finding claimed
+
+ADR-035's Implementation section (the "Honest partial" bullet)
+stated: "subsequent article content shifts only by header
+growth (+44px), NOT by thumbnail heights. Root cause: the
+thumbnails are `<img>` inside `<figure class="thumb">`
+containers, which Wikipedia CSS sets to `float: right`."
+
+### What measurement actually showed
+
+ADR-036's Commit-1 diagnostic tested `figure[typeof~='mw:File/Thumb']`
+matching (10/10 forms matched including the exact Wikipedia rule).
+The first thumbnail's `<img>` sits at `x=346` = content-x + CSS
+`margin-left:1.4em` of a left-floating figure. Second at right
+edge. **Thumbnails were floating correctly all along.**
+
+The visible overlap in ADR-035's PNG (which motivated the
+"partial" finding) was the **nav-like content at x=324** --
+a separate element, still unidentified (see ADR-036's
+Implementation section, "The nav overlap at x=324 is
+deferred").
+
+### Why the misreading happened
+
+The nav overlap is at the same x-coordinate as the thumbnail
+column. Combined with the screenshot's narrow scope (first
+viewport, where thumbnails are below fold but nav is
+visible), the nav content was visually easy to conflate with
+thumbnails. The tree-level measurement that would have
+distinguished them (thumbnail at y=1297+, nav at y<900) wasn't
+run at ADR-035 time; only layout-height and img-box dimensions
+were measured.
+
+### What remains true in ADR-035
+
+- **Header fix**: wordmark 248x39, tagline 248x19 unhidden,
+  header grows to fit both -- **fully delivered**, confirmed
+  by screenshot
+- **`<img>` intrinsic dimensions** reaching layout -- **fully
+  delivered**
+- **Below-fold thumbnails** at correct positions -- **fully
+  delivered** (was already correct per ADR-031, ADR-035's
+  img sizing made the intrinsic dims accurate inside the
+  float)
+- **JPEG decode** still fails -- deferred as before
+- **Search icon 2x2** still -- deferred as before
+
+The **"partial"** framing was wrong; the actual delivery was
+**full** for image layout, with a separate nav overlap that
+ADR-035 didn't cause and couldn't have fixed.
+
+### The correction
+
+Same pattern as every prior correction in the arc: original
+finding preserved above, correction added below, both in
+the record. No rewriting of the historical claim.
+
+Fifth misdiagnosis in the arc (per ADR-036's Implementation
+section).
+
 ## Verification
 
 **Unit tests** (new `[layout][img-dim][adr-035]` tag, all with stub callback):

@@ -447,6 +447,41 @@ Until then, ADR-031's float v1 is unchanged; the ADR-035
 integration simply makes float-contained `<img>` sizes
 accurate, without changing flow.
 
+## Post-ADR-036 note (2026-10-27)
+
+ADR-036 shipped `clear` property support, extending float v1's
+handling:
+
+- `clear:right|left|both` on a float -> jump below prior
+  same-direction float
+- Same forms on a non-float block -> jump below active float
+- `clear:none` -> no-op
+
+**Visible delta: zero.** Byte-identical PNG comparison (with
+and without clear, same source, viewport 1774). Current HTML
+article has no consecutive same-side thumbnails, so no overlap
+manifests; the value is defensive.
+
+**What clear fixes (that float v1 didn't):**
+
+Before ADR-036, two consecutive `float:right` figures overlapped
+at the right edge -- the second figure started at the same
+cursor_y as the first because neither forced a jump. This
+matches CSS spec's "floats stack" behavior only when a
+`clear` is applied between them; ADR-031 shipped without it
+because current Wikipedia articles didn't exercise the case.
+
+After ADR-036, an article with two `float:right; clear:right`
+figures correctly stacks them: the second figure starts at
+`float_bottom` of the first, not beside it.
+
+**What clear does not fix (still deferred to ADR-037):**
+
+- `display: flow-root` -- article body height still doesn't
+  include float heights
+- Nav overlap at x=324 -- unrelated defect, own diagnostic
+  cycle (see ADR-036's Implementation section)
+
 ## Verification
 
 **Unit tests** (in `tests/test_layout.cpp`, new
