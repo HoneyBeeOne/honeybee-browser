@@ -343,7 +343,108 @@ correct and has zero CSS-parse risk.
    future SVGs with text elements. Wordmark/tagline are
    `<path>`-only, so correct for current assets.
 
+### Post-Implementation Note (2026-10-27): CI failure discovered
+
+**CI has been failing on `main` since this ADR's implementation
+merged (#179), unnoticed for four merges (#179, #180, #181,
+and the CI fix itself #182 before the workflow correction
+landed).**
+
+Root cause: this ADR introduced
+`pkg_check_modules(RSVG REQUIRED IMPORTED_TARGET librsvg-2.0)`
+in `CMakeLists.txt` (line 57), but
+`.github/workflows/build.yml` was never updated to
+`apt-get install librsvg2-dev` on the runner. Every CI run
+since #179 dies at CMake configure in ~36-41 seconds with:
+
+    -- Checking for module 'librsvg-2.0'
+    --   Package 'librsvg-2.0' not found
+    CMake Error: The following required packages were not found:
+      - librsvg-2.0
+      CMakeLists.txt:57 (pkg_check_modules)
+
+Compare to pre-ADR-034 CI runs (#177, #178) that took ~1m59s
+and passed -- configure succeeded, code built, tests ran.
+
+### The discipline gap
+
+The "merged cleanly" signal throughout this session was
+**local-only**. Local builds pass 421->425 cases / 1737->1741
+assertions with zero warnings. But `gh run list` was never
+checked after any merge in this session. Local `pkg-config
+--exists librsvg-2.0` succeeds (developer machine has
+`librsvg2-dev`); CI does not (workflow install step is
+missing it).
+
+**This is the exact pattern ADR-028 identified** -- "a
+subsystem's local tests can pass while the subsystem is never
+reached in production." Applied to CI itself: local tests
+pass, but the *CI runner* never reaches them because configure
+fails first. Worse than ADR-028's URL bug: that one was
+caught by feature measurement within one cycle. This was
+caught by the user noticing a red badge at 342 workflow runs,
+four merges deep.
+
+### The correction
+
+**Fixed in follow-up PR #182** (`ci: install librsvg2-dev;
+verify all pkg-config deps`):
+
+1. Added `librsvg2-dev` to the workflow's `apt-get install`
+   line
+2. Expanded the "Verify GTK 4 bindings" step to verify all
+   five pkg-config modules the CMakeLists requires:
+   `gtkmm-4.0`, `libcurl`, `cairo`, `pangocairo`,
+   `librsvg-2.0` -- renamed to "Verify CMake pkg-config
+   dependencies" so future missing-dependency breakage fails
+   at a clearly named step, not buried in CMake configure
+   output
+
+PR #182's own CI run went green (1m17s, past configure,
+through build, through tests). Merged to `main` at
+`5561197`. Post-merge CI on `main` runs to completion in
+~1m30s+ (build + test), proving the fix.
+
+### Why this is the ninth correction pattern in the arc
+
+The prior eight correction patterns (ADR-025/026/027 URL-bug
+post-corrections, ADR-028 grid misdiagnosis, ADR-029's three
+corrections, ADR-030 actuals-exceed-prediction, ADR-031
+visual misreading, ADR-032 negative result, ADR-033
+byte-identical validation) were all about **feature-level**
+prediction accuracy.
+
+**This is the first correction about the verification
+methodology itself.** The session's discipline of "measure
+before, measure after, preserve corrections in place" is
+necessary but not sufficient: it also needs "check every
+automated signal that claims success, not just the local
+ones." The `gh run list` command is not decoration -- it's
+the CI half of the measurement discipline.
+
+The fix to the workflow also encodes the lesson
+**structurally**: the verify step now fails fast on missing
+dependencies, so the next missing-dependency breakage is a
+named CI failure, not a red badge buried in a configure log.
+
+### What this means for future ADRs
+
+- Every merge should be followed by `gh run list --limit 1`
+  (or a `--watch`) to confirm CI green before the next block
+  proceeds
+- The workflow's verify step now covers every CMake pkg-config
+  module -- future ADRs adding a new pkg_check_modules
+  requirement must also extend the verify step (visible in
+  the file, hard to forget)
+- Local + CI are both signals; local-only was the gap
+
+Same discipline as ADR-028's URL bug: the correction is
+preserved alongside the original claims. The historical
+record shows both the "merged cleanly" claims and the
+correction that they were measuring the wrong subsystem.
+
 ### Test count
+
 
 - Before Commit 1: 421 cases / 1737 assertions
 - After Commit 1: **421 cases / 1737 assertions** (unchanged --
