@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Layout-integrated `<img>`** (ADR-035): `<img>` elements now
+  reserve layout space from intrinsic dimensions via a new
+  `ImageDimLookup` callback threaded through `layout()` (default
+  `nullptr`, zero churn for existing tests). Explicit CSS width
+  or height wins; the other axis is aspect-derived. Neither set
+  → intrinsic dims (CSS spec fallback). Cache hit = zero cost;
+  first render pays the 8 sync fetches at layout time (~10%
+  slower first paint, cached after). **Wikipedia wordmark
+  (248x39) and tagline (248x19) render correctly in the header**,
+  header grows from ~50px to ~94px to fit both, tagline unhides
+  (paint-layer workaround from ADR-034 removed — zero
+  workarounds left in `paint.cpp`). Footer SVGs render at
+  intrinsic (200x200, 100x100). Below-fold thumbnail heights are
+  in the tree but don't propagate down (float v1 limitation,
+  ADR-036 fixes). JPEG decode still fails (deferred since
+  ADR-034). Three honest findings recorded: thumbnail
+  propagation through float containers, pre-existing
+  navbox/sidebar class token mismatch, JPEG decode dependency.
 - **First image rendering** (ADR-034): `<img>` elements now
   paint. PNG via Cairo (`cairo_image_surface_create_from_png_stream`),
   SVG via librsvg (`rsvg_handle_new_from_data` +

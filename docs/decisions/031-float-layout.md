@@ -417,6 +417,36 @@ make `<img>` reserve layout space, which means `<img>` inside a
 float will correctly contribute to the float's height. That's
 the first real float + image interaction. Currently zero.
 
+## Post-ADR-035 note (2026-10-27)
+
+ADR-035 integrated image intrinsic dimensions into layout.
+**Interaction with float v1 (this ADR) surfaced a real
+limitation**:
+
+Wikipedia thumbnails are `<img>` inside `<figure class="thumb">`
+which CSS sets to `float: right`. With ADR-035, the `<img>`
+inside the figure has real dimensions (h=250 for the HTML5
+logo). But the float container still doesn't contribute its
+height to the parent's `cursor_y` — so article text flows
+beside the thumbnail (narrowed), not below it.
+
+**This is correct float v1 behavior** (block-level float,
+no `clear`, no parent-height contribution). The visible
+article-layout implication is that thumbnail images sit inside
+the article's text flow, which reads oddly for large images.
+
+ADR-036 (layout-integrated float) will resolve:
+- Floated children contribute height to parent when the float
+  is the only child of a block
+- `clear: left | right | both` forces following content below
+  the float
+- This makes thumbnail images push article text down
+  correctly
+
+Until then, ADR-031's float v1 is unchanged; the ADR-035
+integration simply makes float-contained `<img>` sizes
+accurate, without changing flow.
+
 ## Verification
 
 **Unit tests** (in `tests/test_layout.cpp`, new
