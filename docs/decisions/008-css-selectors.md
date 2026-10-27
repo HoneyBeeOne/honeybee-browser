@@ -166,3 +166,30 @@ Formulas like `:nth-child(2n+1)` require arithmetic parsing and index lookup. De
 ## Record of Changes
 
 - **2026-10-19:** Initial decision.
+- **2026-10-22** (backfilled 2026-10-28): ADR-018 added
+  `:link`, `:visited`, `:hover` pseudo-classes with
+  `RenderState`-aware matching (visited-URL set, hovered-
+  element ancestor walk). This ADR's changelog did not record
+  the extension at the time.
+- **2026-10-26** (backfilled 2026-10-28): ADR-026 added
+  `:root` pseudo-class (matches `<html>`: element with null
+  parent or Document-type parent). Not recorded in this ADR's
+  changelog at the time.
+- **2026-10-28:** ADR-038 extended pseudo-class support from
+  4 to 18 across three CSS categories. Structural (10):
+  `:first-child`, `:last-child`, `:only-child`, `:empty`,
+  `:first-of-type`, `:last-of-type`, `:only-of-type`,
+  `:nth-child(An+B)`, `:nth-last-child(An+B)`,
+  `:nth-of-type(An+B)`, `:nth-last-of-type(An+B)` (An+B
+  grammar includes odd/even/N/An/An+B/-An+B). Logical (3):
+  `:not()`, `:is()`, `:where()` with compound-arg comma
+  lists; `:where()` contributes zero specificity,
+  `:not()`/`:is()` contribute max of argument specificities.
+  Language (1): `:lang(tag)` with ancestor-chain `lang`
+  attribute walk and case-insensitive BCP-47 prefix match.
+  All extensions use the ADR-008 `SimpleKind` +
+  `SimpleSelector` + `matches_simple` dispatch framework
+  with zero changes to `dom::Node`, `CompoundSelector`,
+  `Selector`, or the combinator matcher. Cost per new
+  pseudo-class: ~15-25 lines (parser branch + matcher case
+  + specificity), plus tests.
