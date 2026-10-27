@@ -296,8 +296,25 @@ void RenderPipeline::relayout(float viewport_width) {
         renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
         viewport_width);
 
+    // ADR-035: thread an image-dimension lookup so <img>
+    // elements reserve layout space. Cache hit = zero cost.
+    // First render = 8 sync fetches (5.0 -> 5.4-5.8 sec).
+    auto image_dims = [this](const std::string& url)
+            -> renderer::layout::ImageDim {
+        cairo_surface_t* s = get_image_surface(url);
+        if (!s) return {};
+        const int iw = cairo_image_surface_get_width(s);
+        const int ih = cairo_image_surface_get_height(s);
+        if (iw <= 0 || ih <= 0) return {};
+        return {
+            static_cast<float>(iw),
+            static_cast<float>(ih),
+            true
+        };
+    };
     layout_root_ = renderer::layout::layout(
-        *doc_, styles_cache_, &measure_with_pango, viewport_width);
+        *doc_, styles_cache_, &measure_with_pango, viewport_width,
+        image_dims);
 
     // ADR-023: detect hover level and precompute hover-sensitive
     // elements for Level 1. Costs ~0.1ms per render on Wikipedia

@@ -10,12 +10,26 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 
 #include "renderer/css/cascade.hpp"
 #include "renderer/dom/node.hpp"
 #include "renderer/layout/layout_box.hpp"
 
 namespace honeybee::renderer::layout {
+
+// ADR-035: image dimension lookup. Called during layout for
+// each <img> element to get intrinsic dimensions. Returned dims
+// reserve layout space (aspect-derive from either axis, or use
+// intrinsic if neither CSS axis is set). nullptr default
+// preserves pre-ADR-035 behavior (all <img> at h=0).
+struct ImageDim {
+    float width = 0.0f;
+    float height = 0.0f;
+    bool valid = false;
+};
+
+using ImageDimLookup = std::function<ImageDim(const std::string&)>;
 
 // Lays out `doc` into a LayoutBox tree.
 // `viewport_width` is the DrawingArea's width in pixels.
@@ -24,7 +38,8 @@ namespace honeybee::renderer::layout {
 LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,
-                 float viewport_width);
+                 float viewport_width,
+                 ImageDimLookup image_dims = nullptr);
 
 // Read the display property from a computed style (ADR-016).
 // Returns Block when the property is missing, empty, or

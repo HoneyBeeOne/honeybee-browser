@@ -87,19 +87,6 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     }
 
     // ADR-034: draw <img> element if this box is one.
-    // SKIP tagline (paint-layer workaround): wordmark and tagline
-    // share the same box position because images don't reserve
-    // layout space in v1. Hiding tagline keeps the header clean.
-    // Removed when ADR-035 integrates image layout.
-    if (images && box.element && box.element->tag() == "img") {
-        std::string src_attr = box.element->get_attribute("src");
-        if (src_attr.find("wikipedia-tagline") != std::string::npos) {
-            // Skip tagline img -- wordmark overlaps its position.
-            paint_children(cr, box.children, drawer, images);
-            return;
-        }
-    }
-
     if (images && box.element && box.element->tag() == "img") {
         std::string src = box.element->get_attribute("src");
         if (!src.empty()) {
