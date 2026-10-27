@@ -171,7 +171,28 @@ LayoutBox layout_element(const dom::Element& el,
     const Direction own_dir = resolve_direction(el, parent_dir);
 
     const css::ComputedStyle* style = lookup(styles, el);
-        // ADR-033: parse position. Relative/Absolute/Sticky are
+        // ADR-034: extract background-image url(...) if present.
+    // Paint fetches + decodes (PNG via Cairo, SVG via librsvg)
+    // and draws at box rect. Handles data: URLs (search icon).
+    if (style) {
+        if (auto bg = style->get("background-image")) {
+            const std::string& v = *bg;
+            if (v.find("url(") != std::string::npos) {
+                const auto start = v.find("url(") + 4;
+                const auto end = v.find(')', start);
+                if (end != std::string::npos) {
+                    std::string url = v.substr(start, end - start);
+                    while (!url.empty() && (url.front() == ' ' || url.front() == '\t')) url.erase(url.begin());
+                    while (!url.empty() && (url.back() == ' ' || url.back() == '\t')) url.pop_back();
+                    if (!url.empty() && (url.front() == '\'' || url.front() == '"')) url.erase(url.begin());
+                    if (!url.empty() && (url.back() == '\'' || url.back() == '"')) url.pop_back();
+                    box.background_image_url = url;
+                }
+            }
+        }
+    }
+
+    // ADR-033: parse position. Relative/Absolute/Sticky are
     // stored but treated as Static in layout (v1 limitation).
     // Fixed is honored by layout_block_children (skip from flow
     // + viewport anchor).

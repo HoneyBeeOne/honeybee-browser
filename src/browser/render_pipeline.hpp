@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 
 #include "renderer/dom/node.hpp"
 #include "renderer/layout/layout_box.hpp"
@@ -27,6 +28,9 @@ namespace honeybee::browser {
 
 class RenderPipeline {
 public:
+
+    // ADR-034: destructor frees cached decoded image surfaces.
+    ~RenderPipeline();
     // Parse + extract inline styles + cascade + layout at
     // viewport_width. Replaces any previous page.
     // ADR-025: render(html, width) is now a thin wrapper that
@@ -101,6 +105,17 @@ public:
     void restyle();
 
 private:
+
+    // ADR-034: cache of decoded image surfaces keyed by URL.
+    // Cleared on new page load; persists across relayout()
+    // (viewport resize doesn't invalidate decoded images).
+    // Mutable: cached lookup from const paint().
+    mutable std::unordered_map<std::string, cairo_surface_t*> image_cache_;
+
+    // ADR-034: fetch + decode + cache. Returns a surface owned
+    // by image_cache_; nullptr on error. Handles PNG (Cairo),
+    // SVG (librsvg), and data: URLs (percent-decoded inline).
+    cairo_surface_t* get_image_surface(const std::string& url) const;
     std::unique_ptr<renderer::dom::Document> doc_;
     renderer::layout::LayoutBox layout_root_;
     renderer::css::RenderState state_;

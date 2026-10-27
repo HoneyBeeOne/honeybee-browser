@@ -53,6 +53,9 @@ pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
 # the file requires explicit declaration.
 pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
 
+# ADR-034: SVG decode for <img> + background-image.
+pkg_check_modules(RSVG REQUIRED IMPORTED_TARGET librsvg-2.0)
+
 # ----------------------------------------------------------------------------
 # lexbor: vendored HTML parser (submodule in third_party/lexbor)
 # ----------------------------------------------------------------------------
