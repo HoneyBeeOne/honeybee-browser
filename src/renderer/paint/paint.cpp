@@ -2,6 +2,8 @@
 #include "renderer/dom/node.hpp"
 
 
+#include <cmath>
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -58,6 +60,50 @@ void paint_children(
     const LineDrawer& drawer,
     const ImageProvider* images);
 
+// ADR-044: trace a rounded-rect path. Radii in TL, TR, BR, BL
+// order. Each is clamped to min(w/2, h/2) -- Wikipedia's 2px on
+// 100px+ boxes never triggers clamping; simple bound prevents
+// self-overlap on tiny boxes (full CSS SS5.5 proportional clamp
+// deferred).
+void rounded_rect_path(cairo_t* cr, float x, float y,
+                       float w, float h, const float r[4]) {
+    if (w <= 0.0f || h <= 0.0f) return;
+    const float half_min = std::min(w, h) * 0.5f;
+    const float r_tl = std::max(0.0f, std::min(r[0], half_min));
+    const float r_tr = std::max(0.0f, std::min(r[1], half_min));
+    const float r_br = std::max(0.0f, std::min(r[2], half_min));
+    const float r_bl = std::max(0.0f, std::min(r[3], half_min));
+
+    cairo_new_path(cr);
+    // Top-left corner: start on left edge, arc to top edge.
+    if (r_tl > 0.0f) {
+        cairo_arc(cr, x + r_tl, y + r_tl, r_tl, M_PI, 1.5f * M_PI);
+    } else {
+        cairo_move_to(cr, x, y);
+    }
+    // Top edge to TR corner start.
+    cairo_line_to(cr, x + w - r_tr, y);
+    // Top-right corner: top edge to right edge.
+    if (r_tr > 0.0f) {
+        cairo_arc(cr, x + w - r_tr, y + r_tr, r_tr,
+                  1.5f * M_PI, 2.0f * M_PI);
+    }
+    // Right edge to BR corner start.
+    cairo_line_to(cr, x + w, y + h - r_br);
+    // Bottom-right corner: right edge to bottom edge.
+    if (r_br > 0.0f) {
+        cairo_arc(cr, x + w - r_br, y + h - r_br, r_br,
+                  0.0f, 0.5f * M_PI);
+    }
+    // Bottom edge to BL corner start.
+    cairo_line_to(cr, x + r_bl, y + h);
+    // Bottom-left corner: bottom edge to left edge.
+    if (r_bl > 0.0f) {
+        cairo_arc(cr, x + r_bl, y + h - r_bl, r_bl, 0.5f * M_PI, M_PI);
+    }
+    cairo_close_path(cr);
+}
+
 void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                const LineDrawer& drawer,
                const ImageProvider* images) {
@@ -93,18 +139,60 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
         cairo_restore(cr);
     }
 
-    fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
+    // ADR-044: if any border-radius > 0, use rounded-rect path
+    // (two-fill: outer border_color ring + inner background_color).
+    // Zero-radius boxes take the existing rect path byte-for-byte.
+    const bool any_radius = box.border_radius[0] > 0.001f
+                         || box.border_radius[1] > 0.001f
+                         || box.border_radius[2] > 0.001f
+                         || box.border_radius[3] > 0.001f;
 
-    const float& bt = box.border[0];
-    const float& br = box.border[1];
-    const float& bb = box.border[2];
-    const float& bl = box.border[3];
-    fill_rect(cr, box.border_color, box.x, box.y, box.width, bt);
-    fill_rect(cr, box.border_color, box.x + box.width - br, box.y,
-              br, box.height);
-    fill_rect(cr, box.border_color, box.x, box.y + box.height - bb,
-              box.width, bb);
-    fill_rect(cr, box.border_color, box.x, box.y, bl, box.height);
+    if (any_radius) {
+        const float bt = box.border[0], br = box.border[1];
+        const float bb = box.border[2], bl = box.border[3];
+
+        // Outer: fill with border_color (visible ring when
+        // border-width > 0 AND border_color.a > 0). Transparent
+        // border_color produces no visible ring -- correct.
+        rounded_rect_path(cr, box.x, box.y, box.width, box.height,
+                          box.border_radius);
+        cairo_set_source_rgba(cr, box.border_color.r, box.border_color.g,
+                              box.border_color.b, box.border_color.a);
+        cairo_fill(cr);
+
+        // Inner: fill with background_color (inset by border).
+        // Radius reduced by border-width per corner, clamped to 0.
+        const float inner_x = box.x + bl;
+        const float inner_y = box.y + bt;
+        const float inner_w = box.width  - bl - br;
+        const float inner_h = box.height - bt - bb;
+        if (inner_w > 0.0f && inner_h > 0.0f) {
+            const float inner_r[4] = {
+                std::max(0.0f, box.border_radius[0] - bt),
+                std::max(0.0f, box.border_radius[1] - bt),
+                std::max(0.0f, box.border_radius[2] - bb),
+                std::max(0.0f, box.border_radius[3] - bb),
+            };
+            rounded_rect_path(cr, inner_x, inner_y, inner_w, inner_h,
+                              inner_r);
+            cairo_set_source_rgba(cr, box.background.r, box.background.g,
+                                  box.background.b, box.background.a);
+            cairo_fill(cr);
+        }
+    } else {
+        fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
+
+        const float& bt = box.border[0];
+        const float& br = box.border[1];
+        const float& bb = box.border[2];
+        const float& bl = box.border[3];
+        fill_rect(cr, box.border_color, box.x, box.y, box.width, bt);
+        fill_rect(cr, box.border_color, box.x + box.width - br, box.y,
+                  br, box.height);
+        fill_rect(cr, box.border_color, box.x, box.y + box.height - bb,
+                  box.width, bb);
+        fill_rect(cr, box.border_color, box.x, box.y, bl, box.height);
+    }
 
     // ADR-034: draw background-image if present.
     if (images && !box.background_image_url.empty()) {

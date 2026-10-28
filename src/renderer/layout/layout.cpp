@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -336,6 +337,54 @@ LayoutBox layout_element(const dom::Element& el,
                 }
             }
         }
+
+        // ADR-044: parse border-radius. Shorthand (single
+        // value) fills all four corners; per-corner longhands
+        // override. Percentage and `inherit` deferred (leave 0;
+        // documented -- radio buttons display:none in target).
+        // Elliptical and multi-value: take first token only
+        // (0 uses; documented deviation for future).
+        auto parse_radius_token = [&](const char* prop)
+                -> std::optional<float> {
+            const auto v = style->get(prop);
+            if (!v || v->empty()) return std::nullopt;
+            if (*v == "inherit" || *v == "unset" || *v == "initial") {
+                return std::nullopt;
+            }
+            std::string first = *v;
+            // Elliptical form `5px / 10px`: take before the slash.
+            if (auto slash = first.find('/');
+                slash != std::string::npos) {
+                first = first.substr(0, slash);
+            }
+            // Multi-value form: take first whitespace-delimited token.
+            std::string token;
+            for (char c : first) {
+                if (c == ' ' || c == '\t') break;
+                token.push_back(c);
+            }
+            if (token.empty()) return std::nullopt;
+            // Percentage deferred (needs box's own dimensions,
+            // not parent's; parse_length's ctx would give a
+            // semantically wrong value). Documented deviation.
+            if (token.back() == '%') return std::nullopt;
+            return parse_length(token, ctx);
+        };
+
+        if (const auto sh = parse_radius_token("border-radius"); sh) {
+            box.border_radius[0] = *sh;
+            box.border_radius[1] = *sh;
+            box.border_radius[2] = *sh;
+            box.border_radius[3] = *sh;
+        }
+        if (const auto v = parse_radius_token("border-top-left-radius"); v)
+            box.border_radius[0] = *v;
+        if (const auto v = parse_radius_token("border-top-right-radius"); v)
+            box.border_radius[1] = *v;
+        if (const auto v = parse_radius_token("border-bottom-right-radius"); v)
+            box.border_radius[2] = *v;
+        if (const auto v = parse_radius_token("border-bottom-left-radius"); v)
+            box.border_radius[3] = *v;
     }
 
     box.x = x_before_margin + box.margin[3];
