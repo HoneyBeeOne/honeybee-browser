@@ -408,6 +408,114 @@ bool try_expand_grid_template(std::string_view value, bool important,
     return true;
 }
 
+// ADR-040: border shorthand helpers.
+bool is_border_width_token(std::string_view s) {
+    if (s.empty()) return false;
+    if (s == "0" || s == "thin" || s == "medium" || s == "thick") return true;
+    const char c = s[0];
+    return (c >= '0' && c <= '9') || c == '.';
+}
+
+bool is_border_style_keyword(std::string_view s) {
+    return s == "none" || s == "hidden" || s == "solid" ||
+           s == "dashed" || s == "dotted" || s == "double" ||
+           s == "groove" || s == "ridge" || s == "inset" ||
+           s == "outset";
+}
+
+struct BorderTriple {
+    std::string width;
+    std::string style;  // empty => don't emit border-style
+    std::string color;
+    bool has_color = false;
+};
+
+bool parse_border_tokens(const auto& tokens, BorderTriple& out) {
+    if (tokens.empty() || tokens.size() > 3) return false;
+
+    // Normalize to std::string once (few tokens; cheap copy).
+    std::vector<std::string> t;
+    t.reserve(tokens.size());
+    for (const auto& tok : tokens) t.emplace_back(tok);
+
+    if (t.size() == 1) {
+        const std::string& tok = t[0];
+        if (tok == "0" || tok == "none") {
+            out.width = "0";
+            return true;
+        }
+        if (!is_border_width_token(tok)) return false;
+        out.width = tok;
+        // Style left empty => paint draws solid (documented deviation).
+        return true;
+    }
+
+    if (t.size() == 2) {
+        if (!is_border_width_token(t[0])) return false;
+        out.width = t[0];
+        if (is_border_style_keyword(t[1])) {
+            out.style = t[1];
+        } else {
+            // 2-token width+color form.
+            out.color = t[1];
+            out.has_color = true;
+            // Style left empty => paint draws solid (documented deviation).
+        }
+        return true;
+    }
+
+    // 3-token: <width> <style> <color>
+    if (!is_border_width_token(t[0])) return false;
+    if (!is_border_style_keyword(t[1])) return false;
+    out.width = t[0];
+    out.style = t[1];
+    out.color = t[2];
+    out.has_color = true;
+    // CSS spec SS8.5.3: none/hidden => width 0 for rendering.
+    if (out.style == "none" || out.style == "hidden") {
+        out.width = "0";
+    }
+    return true;
+}
+
+bool try_expand_border(std::string_view value, bool important,
+                       std::vector<Declaration>& out) {
+    BorderTriple t;
+    if (!parse_border_tokens(split_tokens(value), t)) return false;
+    out.push_back({"border-width", t.width, important});
+    if (!t.style.empty()) {
+        out.push_back({"border-style", t.style, important});
+    }
+    if (t.has_color) {
+        out.push_back({"border-color", t.color, important});
+    }
+    return true;
+}
+
+bool try_expand_border_side(std::string_view property,
+                            std::string_view value, bool important,
+                            std::vector<Declaration>& out) {
+    std::string_view side;
+    if (property == "border-top") side = "top";
+    else if (property == "border-right") side = "right";
+    else if (property == "border-bottom") side = "bottom";
+    else if (property == "border-left") side = "left";
+    else return false;
+
+    BorderTriple t;
+    if (!parse_border_tokens(split_tokens(value), t)) return false;
+
+    const std::string prefix = "border-" + std::string(side) + "-";
+    out.push_back({prefix + "width", t.width, important});
+    if (!t.style.empty()) {
+        out.push_back({prefix + "style", t.style, important});
+    }
+    if (t.has_color) {
+        out.push_back({prefix + "color", t.color, important});
+    }
+    return true;
+}
+
 void expand_shorthand(std::string_view property, std::string_view value,
                       bool important, std::vector<Declaration>& out) {
     // ADR-028: grid-template shorthand.
@@ -427,6 +535,21 @@ void expand_shorthand(std::string_view property, std::string_view value,
     // ADR-029: flex-flow shorthand.
     if (property == "flex-flow") {
         if (try_expand_flex_flow(value, important, out)) return;
+        // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-040: border shorthand (3 longhands).
+    if (property == "border") {
+        if (try_expand_border(value, important, out)) return;
+        // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-040: per-side border shorthands.
+    if (property == "border-top" || property == "border-right" ||
+        property == "border-bottom" || property == "border-left") {
+        if (try_expand_border_side(property, value, important, out)) return;
         // Malformed: drop declaration entirely.
         return;
     }
