@@ -68,6 +68,31 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     // paint_box().
     if (!box.visible) return;
 
+    // ADR-043: draw box-shadow before background (CSS z-order:
+    // shadow renders behind the element's own background/border).
+    // Only non-inset, non-blurred shadows render in v1; inset
+    // and blurred shadows are parsed and stored but skipped
+    // here (deferrals in ADR-043).
+    if (box.box_shadow_has
+        && !box.box_shadow_inset
+        && box.box_shadow_blur <= 0.0001f) {
+        const float sx = box.x + box.box_shadow_ox - box.box_shadow_spread;
+        const float sy = box.y + box.box_shadow_oy - box.box_shadow_spread;
+        const float sw = box.width  + 2.0f * box.box_shadow_spread;
+        const float sh = box.height + 2.0f * box.box_shadow_spread;
+        // CSS spec: "outer box-shadow is drawn outside the
+        // border edge only; it is clipped inside the border-
+        // box." Even-odd clip of (shadow_rect, box_rect)
+        // produces the L-shaped outside-only region.
+        cairo_save(cr);
+        cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+        cairo_rectangle(cr, sx, sy, sw, sh);
+        cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+        cairo_clip(cr);
+        fill_rect(cr, box.box_shadow_color, sx, sy, sw, sh);
+        cairo_restore(cr);
+    }
+
     fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
 
     const float& bt = box.border[0];

@@ -99,6 +99,17 @@ struct LayoutBox final : LayoutNode {
     Color background = Color::transparent();
     Color border_color = Color::transparent();
 
+    // ADR-043: parsed box-shadow (non-inset, non-blurred
+    // rendered in v1; inset / blur / multi parsed and stored
+    // but skipped at paint). `box_shadow_has` gates painting.
+    float box_shadow_ox = 0.0f;
+    float box_shadow_oy = 0.0f;
+    float box_shadow_blur = 0.0f;
+    float box_shadow_spread = 0.0f;
+    Color box_shadow_color = Color::transparent();
+    bool  box_shadow_inset = false;
+    bool  box_shadow_has = false;
+
     // ADR-032: paint-authoritative culling signal. Set during
     // layout from ComputedStyle's visibility/opacity. When false,
     // paint skips this box and its entire subtree. Layout does
