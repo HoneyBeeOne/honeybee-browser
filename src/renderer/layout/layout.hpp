@@ -41,6 +41,20 @@ LayoutBox layout(const dom::Document& doc,
                  float viewport_width,
                  ImageDimLookup image_dims = nullptr);
 
+// ADR-042: layout with pseudo-element synthesis. Runs the normal
+// layout() tree, then walks it to synthesize ::before / ::after
+// boxes from pseudo_styles. Only `content: ''` (empty literal)
+// supported in v1; literal text and attr()/counter()/url()
+// deferred. Pseudo boxes with position:absolute are positioned
+// against their owning element's content box (same rules as
+// ADR-042 Commit 1's block-parent absolutes).
+LayoutBox layout_with_pseudo(const dom::Document& doc,
+                             const css::ComputedStyleMap& styles,
+                             const css::PseudoStyleMap& pseudo_styles,
+                             TextMeasurer measurer,
+                             float viewport_width,
+                             ImageDimLookup image_dims = nullptr);
+
 // Read the display property from a computed style (ADR-016).
 // Returns Block when the property is missing, empty, or
 // unrecognized. Takes a nullable pointer to match the pattern
