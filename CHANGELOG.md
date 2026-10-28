@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separate issue). Search field border blocked on ADR-029 header
   layout.
 
+- **Pseudo-elements parse + cascade** (ADR-041, Commit 1): `::before` / `::after`
+  selectors now parse and their declarations enter
+  `pseudo_styles` in the cascade result. 14 new tests,
+  504 -> 518 cases.
+
+  **Zero visual change in this commit** — pseudo-box synthesis
+  (the visible-delta step) is deferred to ADR-042 because the
+  primary target requires `position: absolute` (ADR-033 parses
+  but doesn't lay out) plus flex-parent pseudo synthesis.
+  ADR-041's stated 4 first-viewport changes did not manifest;
+  the parse + cascade layer is the real, tested deliverable.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

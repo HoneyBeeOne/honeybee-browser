@@ -378,3 +378,49 @@ once the header layout is complete.
 - After ADR-040: 504 cases, 1927 assertions
 - Zero warnings, zero failures
 
+
+
+## Post-ADR-041 correction
+
+ADR-040's Implementation section recorded a deferred prediction:
+`h1#firstHeading`'s bottom underline would appear once border
+shorthand expansion shipped. It did not, and ADR-040 tracked it
+as "rule-reaching-cascade issue, root cause deferred".
+
+**Post-ADR-041 diagnostic resolved the mechanism**:
+
+- h1's `border-bottom-width: 1px` IS set by ADR-040's
+  expansion (confirmed via ComputedStyle dump)
+- A higher-specificity rule wins:
+  `.vector-page-titlebar .firstHeading { border: 0 }` --
+  specificity (0,2,0) beats `h1 { border-bottom: 1px solid
+  #a2a9b1 }` -- specificity (0,0,1)
+- **The actual visible underline** on real Wikipedia is
+  `.vector-page-titlebar::after`:
+
+      .vector-page-titlebar::after {
+          content: '';
+          display: block;
+          position: absolute;
+          bottom: 0; left: 0; right: 0;
+          height: 1px;
+          background-color: var(--border-color-base, #a2a9b1);
+      }
+
+So **ADR-040's expansion was correct**. The h1-specific
+prediction was based on misreading which rule draws the visual
+line.
+
+Post-ADR-041 Commit 1, pseudo-elements are parsed and their
+ComputedStyles are cascaded into `pseudo_styles` -- the
+structure is in place. But the underline won't appear until
+**ADR-042** lands because:
+
+1. `.vector-page-titlebar` is `display: flex` (ADR-029) --
+   pseudo needs flex-parent synthesis (ADR-042)
+2. `position: absolute` needs real layout (ADR-033 parses it
+   but treats it as static) -- ADR-042
+
+When ADR-042 lands, the title underline appears, and ADR-040's
+prediction finally becomes visually true (though via a
+different mechanism than originally believed).

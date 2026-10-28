@@ -1,6 +1,6 @@
 # ADR-041: Pseudo-elements (`::before` / `::after`)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting), ADR-018 (link state), ADR-033 (position: absolute), ADR-038 (pseudo-classes), ADR-040 (border shorthand -- h1 prediction corrected here)
@@ -376,3 +376,104 @@ ADR-041 is complete when:
 **Explicit claim**: title underline, edit brackets, and citation
 backlinks appear in the first viewport. This closes ADR-040's
 h1 misdiagnosis with the correct mechanism.
+
+## Implementation
+
+Shipped as Commit 1 of the planned three-commit cycle. Commit 2
+(visible pseudo-box synthesis) was **not attempted** because the
+diagnostic before Commit 2 revealed ADR-041's visible-delta
+prediction was wrong. Commit 3 (this doc update) closes the
+cycle honestly.
+
+### What shipped (Commit 1)
+
+- `PseudoElement` enum (`None | Before | After`)
+- `SimpleKind::PseudoElementBefore/After` markers
+- Parser recognizes `::before` / `::after` / `:before` / `:after`
+- Three-arg `Selector::matches(node, state, target)` overload
+- `CascadeResult { element_styles, pseudo_styles }`
+- `PseudoStyles { before, after }` per element
+- `cascade_with_pseudo()` — new public API
+- `cascade()` overloads become thin wrappers (zero caller churn)
+- `cascade_subtree` (ADR-022 targeted restyle) — temp
+  `CascadeResult` + `element_styles` copy (byte-identical)
+- 14 new tests in `tests/test_pseudo_elements.cpp`
+  (7 parse, 7 cascade)
+
+**Test count**: 504 -> 518 cases, 1927 -> 1980 assertions.
+**Behavior-neutral confirmed**: no visual change in Commit 1.
+
+### What did NOT ship (deferred to ADR-042)
+
+ADR-041 predicted 4 first-viewport changes. **None of them
+actually manifest after Commit 1.** Diagnostic before Commit 2:
+
+1. **Title underline** (`.vector-page-titlebar::after`) —
+   parent is `display: flex` (ADR-029), so the pseudo would
+   be laid out as a flex-row item (right side), not as an
+   underline under the title. AND the pseudo declares
+   `position: absolute; bottom: 0; left: 0; right: 0;
+   height: 1px` — ADR-033 parses `absolute` but treats it as
+   static. **Blocked on: flex-parent pseudo synthesis +
+   laid-out absolute positioning.** Both are ADR-042 scope.
+
+2. **`[edit]` brackets** — parent is inline context, content
+   is `content: '['` (literal string). Inline-pseudo-text
+   synthesis is a different code path (inline-run flattening).
+   Deferred to ADR-042 or later.
+
+3. **`↑` citation backlinks** — `content: counter(...)`.
+   Deferred per ADR-041's own scope section.
+
+Commit 2 was **not attempted** because writing block-parent
+synthesis without flex-parent + absolute handling would
+produce ~0-3 minor decorative bars in second-viewport content,
+not the first-viewport delta the ADR claimed. Shipping that
+would be the ADR-039 trap: mixed-risk partial work merged
+without a clean visible win.
+
+### Honest correction to ADR-041's own claims
+
+ADR-041's "Explicit claim" section (below) predicted 4 first-
+viewport changes. **That prediction was wrong.**
+
+The parse + cascade layer is correct and tested. The visible
+delta requires ADR-042 (position: absolute + flex-parent
+pseudo-elements). Same pattern as ADR-028's misdiagnosis
+correction and ADR-040's h1 prediction correction — the
+record gets fixed when a later stage reveals an earlier
+measurement was wrong.
+
+### Acceptance criteria, honestly closed
+
+- [x] `PseudoElement` enum added
+- [x] Parser recognizes `::before` / `::after`
+- [x] `Selector::matches(node, PseudoElement)` overload
+- [x] `CascadeResult` struct with pseudo maps
+- [x] All existing callers updated (via wrapper, zero churn)
+- [ ] Pseudo-box synthesis in `layout_element` --
+      **DEFERRED to ADR-042**
+- [ ] `content: ''` / `content: 'text'` produce boxes --
+      **DEFERRED to ADR-042**
+- [ ] `content: attr(...)` etc. produce no box --
+      **DEFERRED to ADR-042**
+- [x] 14+ new unit tests (14 in `test_pseudo_elements.cpp`)
+- [ ] Wikipedia PNG verification: title underline + edit
+      brackets + citation backlinks --
+      **DEFERRED to ADR-042** (nothing visible to verify)
+- [ ] No unintended layout shift -- **N/A** (no visual
+      change in Commit 1)
+- [x] ADR-040 Post-ADR-041 correction recorded (below)
+- [x] `main` green: 504 -> 518 cases, 1927 -> 1980 assertions
+- [x] ADR-041 status -> Implemented in docs commit
+
+ADR-042 will verify the deferred visible delta end-to-end
+with PNG inspection before merge (per ADR-039 / ADR-040 /
+ADR-041's discipline).
+
+### What's ready for ADR-042
+
+The parse + cascade layer (this ADR's Commit 1) is the exact
+foundation ADR-042 needs. `pseudo_styles` is populated
+correctly; ADR-042's layout synthesis just reads it.
+
