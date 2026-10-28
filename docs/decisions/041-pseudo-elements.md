@@ -477,3 +477,39 @@ The parse + cascade layer (this ADR's Commit 1) is the exact
 foundation ADR-042 needs. `pseudo_styles` is populated
 correctly; ADR-042's layout synthesis just reads it.
 
+
+
+## Post-ADR-042 note
+
+**ADR-041's deferred visible delta has been delivered** by
+ADR-042.
+
+ADR-041's Commit 1 (parse + cascade) shipped correctly. Its
+Commit 2 (visible pseudo synthesis) was deferred because the
+primary target `.vector-page-titlebar::after` needs
+`position: absolute` layout, which was ADR-033's deferral.
+
+ADR-042 Commit 1 implemented absolute positioning for block
+parents. ADR-042 Commit 2 added pseudo synthesis (via a
+post-walk over the layout tree) that reads ADR-041's
+`pseudo_styles` map and synthesizes `::before` / `::after`
+boxes for elements with pseudo rules.
+
+**Measured visible delta on Wikipedia**: the title "HTML"
+underline now appears, verified via before/after PNG
+comparison.
+
+What's now working end-to-end:
+- `::before` / `::after` parse and cascade (ADR-041)
+- `content: ''` (empty literal) synthesis via absolute
+  positioning (ADR-042)
+- Pseudo `background-color`, `width`, `height`, `border`,
+  `padding`, `position: absolute` all applied
+
+Still deferred (from ADR-041):
+- `content: 'literal text'` (inline path -- brackets,
+  backlink arrows)
+- `content: attr() / counter() / url()`
+- `::first-line`, `::first-letter`, `::selection`,
+  `::marker`, `::placeholder`
+- State-aware pseudo-elements (`:hover::after` etc.)

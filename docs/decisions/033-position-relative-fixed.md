@@ -527,3 +527,33 @@ absolute element with real offsets (`span.cdx-text-input__icon`)
 is treated as static in v1. The value is structural — it
 prepares ADR-034 (absolute) and establishes the position
 pattern.
+
+
+## Post-ADR-042 note
+
+ADR-042 implemented `position: relative` (containing block
+marker) and `position: absolute` (out-of-flow, positioned
+against parent's content box). This closes two of the three
+deferrals recorded above:
+
+**Now handled**:
+- `position: relative`: element becomes a containing block
+  for absolute descendants. Visual offsets (top/left on the
+  relative element itself) still deferred -- relative
+  elements stay at their static position in v1.
+- `position: absolute`: element is out-of-flow, positioned
+  against direct parent's content box. top/bottom/left/right
+  parsed and applied. Over-constrained: left/top win
+  (CSS SS10.3.7 LTR).
+
+**Still deferred**:
+- `position: sticky`: needs scroll state -- separate ADR if
+  needed.
+- Multi-level containing block walk-up: v1 uses direct
+  parent only. Covers 100% of first-viewport cases.
+- Percentages in top/bottom/left/right: needs
+  `parent_content_height` (ADR-043 candidate).
+
+See ADR-042 for full details and the PNG-verified visual
+delta (title underline finally appears via
+`.vector-page-titlebar::after`).
