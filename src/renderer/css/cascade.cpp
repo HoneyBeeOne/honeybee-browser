@@ -53,10 +53,11 @@ bool media_matches(const std::optional<MediaQuery>& mq, float vw) {
 void apply_rule(const Rule& rule, const dom::Element& el,
                 Origin origin, std::size_t& counter,
                 const RenderState& state, float viewport_width,
-                ComputedStyle& style) {
-    ++g_apply_rule_call_count;
+                PseudoElement target, ComputedStyle& style) {
+    // ADR-041: preserve counter's original meaning (element only).
+    if (target == PseudoElement::None) ++g_apply_rule_call_count;
     if (!media_matches(rule.media, viewport_width)) return;
-    auto spec = rule.selectors.matches(el, state);
+    auto spec = rule.selectors.matches(el, state, target);
     if (!spec) return;
 
     for (const auto& d : rule.declarations) {
@@ -81,20 +82,58 @@ void compute_styles(const dom::Node& node,
                     const Stylesheet& author_sheet,
                     const RenderState& state,
                     float viewport_width,
-                    ComputedStyleMap& out) {
+                    CascadeResult& out) {
     if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
-        ComputedStyle style;
-        std::size_t counter = 0;
-        for (const auto& rule : ua_sheet.rules) {
-            apply_rule(rule, el, Origin::UserAgent, counter, state,
-                       viewport_width, style);
+
+        // Element cascade (target=None).
+        {
+            ComputedStyle style;
+            std::size_t counter = 0;
+            for (const auto& rule : ua_sheet.rules) {
+                apply_rule(rule, el, Origin::UserAgent, counter, state,
+                           viewport_width, PseudoElement::None, style);
+            }
+            for (const auto& rule : author_sheet.rules) {
+                apply_rule(rule, el, Origin::Author, counter, state,
+                           viewport_width, PseudoElement::None, style);
+            }
+            out.element_styles[&el] = std::move(style);
         }
-        for (const auto& rule : author_sheet.rules) {
-            apply_rule(rule, el, Origin::Author, counter, state,
-                       viewport_width, style);
+
+        // ::before cascade.
+        {
+            ComputedStyle style;
+            std::size_t counter = 0;
+            for (const auto& rule : ua_sheet.rules) {
+                apply_rule(rule, el, Origin::UserAgent, counter, state,
+                           viewport_width, PseudoElement::Before, style);
+            }
+            for (const auto& rule : author_sheet.rules) {
+                apply_rule(rule, el, Origin::Author, counter, state,
+                           viewport_width, PseudoElement::Before, style);
+            }
+            if (!style.declarations.empty()) {
+                out.pseudo_styles[&el].before = std::move(style);
+            }
         }
-        out[&el] = std::move(style);
+
+        // ::after cascade.
+        {
+            ComputedStyle style;
+            std::size_t counter = 0;
+            for (const auto& rule : ua_sheet.rules) {
+                apply_rule(rule, el, Origin::UserAgent, counter, state,
+                           viewport_width, PseudoElement::After, style);
+            }
+            for (const auto& rule : author_sheet.rules) {
+                apply_rule(rule, el, Origin::Author, counter, state,
+                           viewport_width, PseudoElement::After, style);
+            }
+            if (!style.declarations.empty()) {
+                out.pseudo_styles[&el].after = std::move(style);
+            }
+        }
     }
     for (const auto& child : node.children()) {
         compute_styles(*child, ua_sheet, author_sheet, state,
@@ -148,12 +187,32 @@ ComputedStyle::get(const std::string& property) const {
     return it->second.value;
 }
 
+CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
+                                  const Stylesheet& author_sheet,
+                                  const dom::Document& doc,
+                                  float viewport_width) {
+    return cascade_with_pseudo(ua_sheet, author_sheet, doc,
+                               RenderState{}, viewport_width);
+}
+
+CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
+                                  const Stylesheet& author_sheet,
+                                  const dom::Document& doc,
+                                  const RenderState& state,
+                                  float viewport_width) {
+    CascadeResult out;
+    compute_styles(doc, ua_sheet, author_sheet, state, viewport_width,
+                   out);
+    propagate_inheritance(doc, out.element_styles);
+    return out;
+}
+
 ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const Stylesheet& author_sheet,
                          const dom::Document& doc,
                          float viewport_width) {
-    return cascade(ua_sheet, author_sheet, doc, RenderState{},
-                   viewport_width);
+    return cascade_with_pseudo(ua_sheet, author_sheet, doc, viewport_width)
+        .element_styles;
 }
 
 ComputedStyleMap cascade(const Stylesheet& author_sheet,
@@ -167,11 +226,8 @@ ComputedStyleMap cascade(const Stylesheet& ua_sheet,
                          const dom::Document& doc,
                          const RenderState& state,
                          float viewport_width) {
-    ComputedStyleMap out;
-    compute_styles(doc, ua_sheet, author_sheet, state, viewport_width,
-                   out);
-    propagate_inheritance(doc, out);
-    return out;
+    return cascade_with_pseudo(ua_sheet, author_sheet, doc, state,
+                               viewport_width).element_styles;
 }
 
 // ADR-022: targeted cascade primitives.
@@ -187,8 +243,19 @@ void cascade_subtree(const dom::Element& el,
     // are intentionally left unfilled -- the caller runs
     // propagate_inheritance after erasing + re-cascading all dirty
     // subtrees, so inheritance is computed once for the whole tree.
+    //
+    // ADR-041: compute_styles now produces CascadeResult
+    // (element + pseudo styles). cascade_subtree's contract is
+    // element-only (targeted restyle discards pseudo styles --
+    // they're recomputed by the caller's full cascade pass when
+    // needed). Temp CascadeResult + copy keeps behavior
+    // byte-identical to pre-ADR-041.
+    CascadeResult tmp;
     compute_styles(el, ua_sheet, author_sheet, state, viewport_width,
-                   out);
+                   tmp);
+    for (auto& [el_ptr, style] : tmp.element_styles) {
+        out[el_ptr] = std::move(style);
+    }
 }
 
 void erase_subtree(const dom::Element& el, ComputedStyleMap& out) {

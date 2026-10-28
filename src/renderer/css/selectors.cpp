@@ -265,8 +265,21 @@ private:
         }
         if (c == ':') {
             advance();
+            // ADR-041: ::pseudo-element form (double colon).
+            if (peek() == ':') {
+                advance();
+                auto pe = parse_ident();
+                if (!pe) { failed_ = true; return std::nullopt; }
+                if (*pe == "before") { out.kind = SimpleKind::PseudoElementBefore; return out; }
+                if (*pe == "after")  { out.kind = SimpleKind::PseudoElementAfter;  return out; }
+                failed_ = true;  // unknown pseudo-element
+                return std::nullopt;
+            }
             auto name = parse_ident();
             if (!name) { failed_ = true; return std::nullopt; }
+            // ADR-041: legacy single-colon pseudo-element forms
+            if (*name == "before")  { out.kind = SimpleKind::PseudoElementBefore; return out; }
+            if (*name == "after")   { out.kind = SimpleKind::PseudoElementAfter;  return out; }
             if (*name == "link")    { out.kind = SimpleKind::PseudoLink;    return out; }
             if (*name == "visited") { out.kind = SimpleKind::PseudoVisited; return out; }
             if (*name == "hover")   { out.kind = SimpleKind::PseudoHover;   return out; }
@@ -507,6 +520,8 @@ Specificity Selector::specificity() const {
                                 case SimpleKind::PseudoNthLastOfType:
                                 case SimpleKind::PseudoLang: ++arg_spec.b; break;
                                 case SimpleKind::Type: ++arg_spec.c; break;
+                                case SimpleKind::PseudoElementBefore:
+                                case SimpleKind::PseudoElementAfter: ++arg_spec.c; break;
                                 case SimpleKind::Universal: break;
                                 case SimpleKind::PseudoNot:
                                 case SimpleKind::PseudoIs:
@@ -522,6 +537,9 @@ Specificity Selector::specificity() const {
                 }
                 case SimpleKind::PseudoWhere: break;  // always 0,0,0
                 case SimpleKind::Type:      ++out.c; break;
+                // ADR-041: pseudo-elements are type-level (0,0,1).
+                case SimpleKind::PseudoElementBefore:
+                case SimpleKind::PseudoElementAfter: ++out.c; break;
                 case SimpleKind::Universal: break;
             }
         }
@@ -678,6 +696,12 @@ bool matches_attribute(const SimpleSelector& s, const dom::Element& el) {
 bool matches_simple(const SimpleSelector& s, const dom::Element& el,
                     const RenderState& state) {
     switch (s.kind) {
+        // ADR-041: pseudo-element markers are filtered in
+        // matches_compound before reaching here. These cases exist
+        // only to silence -Wswitch; they are unreachable.
+        case SimpleKind::PseudoElementBefore:
+        case SimpleKind::PseudoElementAfter:
+            return false;
         case SimpleKind::Universal:
             return true;
         case SimpleKind::Type:
@@ -790,6 +814,10 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el,
 bool matches_compound(const CompoundSelector& c, const dom::Element& el,
                       const RenderState& state) {
     for (const auto& s : c.simples) {
+        // ADR-041: pseudo-element markers are validated against
+        // the target in Selector::matches, not here.
+        if (s.kind == SimpleKind::PseudoElementBefore ||
+            s.kind == SimpleKind::PseudoElementAfter) continue;
         if (!matches_simple(s, el, state)) return false;
     }
     return true;
@@ -839,21 +867,45 @@ SelectorList::matches(const dom::Node& node) const {
 }
 
 bool Selector::matches(const dom::Node& node,
-                       const RenderState& state) const {
+                       const RenderState& state,
+                       PseudoElement target) const {
     if (parts.empty()) return false;
+    // ADR-041: extract pseudo-element from rightmost compound.
+    PseudoElement own = PseudoElement::None;
+    for (const auto& s : parts.back().compound.simples) {
+        if (s.kind == SimpleKind::PseudoElementBefore) {
+            own = PseudoElement::Before; break;
+        }
+        if (s.kind == SimpleKind::PseudoElementAfter) {
+            own = PseudoElement::After; break;
+        }
+    }
+    if (own != target) return false;
     return matches_from(*this, &node, parts.size() - 1, state);
+}
+
+bool Selector::matches(const dom::Node& node,
+                       const RenderState& state) const {
+    return matches(node, state, PseudoElement::None);
+}
+
+std::optional<Specificity>
+SelectorList::matches(const dom::Node& node,
+                      const RenderState& state,
+                      PseudoElement target) const {
+    std::optional<Specificity> best;
+    for (const auto& sel : selectors) {
+        if (!sel.matches(node, state, target)) continue;
+        const auto spec = sel.specificity();
+        if (!best || *best < spec) best = spec;
+    }
+    return best;
 }
 
 std::optional<Specificity>
 SelectorList::matches(const dom::Node& node,
                       const RenderState& state) const {
-    std::optional<Specificity> best;
-    for (const auto& sel : selectors) {
-        if (!sel.matches(node, state)) continue;
-        const auto spec = sel.specificity();
-        if (!best || *best < spec) best = spec;
-    }
-    return best;
+    return matches(node, state, PseudoElement::None);
 }
 
 } // namespace honeybee::renderer::css

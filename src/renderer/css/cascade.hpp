@@ -51,7 +51,35 @@ struct ComputedStyle {
 using ComputedStyleMap =
     std::unordered_map<const dom::Element*, ComputedStyle>;
 
+// ADR-041: per-element pseudo-element ComputedStyles.
+struct PseudoStyles {
+    ComputedStyle before;
+    ComputedStyle after;
+};
+
+using PseudoStyleMap =
+    std::unordered_map<const dom::Element*, PseudoStyles>;
+
+// ADR-041: full cascade output including pseudo-element styles.
+struct CascadeResult {
+    ComputedStyleMap element_styles;
+    PseudoStyleMap pseudo_styles;
+};
+
 bool is_inherited(std::string_view property);
+
+// ADR-041: cascade with pseudo-element synthesis. Also computes
+// ::before and ::after ComputedStyles for every element.
+CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
+                                  const Stylesheet& author_sheet,
+                                  const dom::Document& doc,
+                                  float viewport_width = 1024.0f);
+
+CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
+                                  const Stylesheet& author_sheet,
+                                  const dom::Document& doc,
+                                  const RenderState& state,
+                                  float viewport_width = 1024.0f);
 
 // Two-sheet form (ADR-014): apply ua_sheet first, then
 // author_sheet. Author normal declarations override UA normal

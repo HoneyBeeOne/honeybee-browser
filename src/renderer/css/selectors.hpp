@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -33,6 +34,9 @@ struct Specificity {
     friend bool operator<(const Specificity&, const Specificity&);
     friend bool operator==(const Specificity&, const Specificity&) = default;
 };
+
+// ADR-041: pseudo-element targets for ::before / ::after.
+enum class PseudoElement : std::uint8_t { None, Before, After };
 
 enum class SimpleKind {
     Type,
@@ -62,6 +66,9 @@ enum class SimpleKind {
     PseudoWhere,
     // ADR-038 Commit 3: language pseudo-class
     PseudoLang,
+    // ADR-041: pseudo-element markers (::before / ::after)
+    PseudoElementBefore,
+    PseudoElementAfter,
 };
 
 enum class AttributeMatch {
@@ -113,6 +120,13 @@ struct Selector {
     // then walk backwards through parents/siblings per combinator.
     bool matches(const dom::Node& node) const;
 
+    // ADR-041: pseudo-element-aware match. Returns true only
+    // if the selector's pseudo-element (extracted from the
+    // rightmost compound) matches `target`. Selectors with no
+    // pseudo-element only match target=None.
+    bool matches(const dom::Node& node, const RenderState& state,
+                 PseudoElement target) const;
+
     // ADR-018: state-aware match. Delegates to the state-free
     // version in Commit 1; Commit 2 will use state for
     // :link / :visited / :hover.
@@ -129,6 +143,11 @@ struct SelectorList {
     // Specificity of the highest-specificity selector in the list
     // that matches `node`, or nullopt if none match.
     std::optional<Specificity> matches(const dom::Node& node) const;
+
+    // ADR-041: pseudo-element-aware match.
+    std::optional<Specificity> matches(const dom::Node& node,
+                                       const RenderState& state,
+                                       PseudoElement target) const;
 
     // ADR-018: state-aware match. Delegates in Commit 1.
     std::optional<Specificity> matches(const dom::Node& node,
