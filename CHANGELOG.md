@@ -31,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-041's stated 4 first-viewport changes did not manifest;
   the parse + cascade layer is the real, tested deliverable.
 
+- **Position: relative + absolute** (ADR-042): `position: relative`
+  marks a containing block; `position: absolute` children are
+  out-of-flow and positioned against their parent's content
+  box. All four offsets (top/bottom/left/right) with auto and
+  over-constrained rules.
+
+  **Pseudo-element synthesis**: `::before` / `::after` boxes
+  are now synthesized into the layout tree from the pseudo
+  styles ADR-041 parses. `content: ''` (empty literal)
+  supported; literal text, `attr()`, `counter()`, `url()`
+  deferred.
+
+  **Visible delta (PNG-verified)**: title "HTML" underline
+  appears via `.vector-page-titlebar::after`. This closes
+  ADR-040's prediction (via the mechanism ADR-041 identified)
+  and ADR-041's deferred visible synthesis.
+
+  Test count: 518 -> 539 cases, 1980 -> 2064 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

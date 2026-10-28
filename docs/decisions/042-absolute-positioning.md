@@ -1,6 +1,6 @@
 # ADR-042: Position (relative / absolute)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting), ADR-028 (grid), ADR-029 (flex), ADR-033 (position: fixed -- parses all four but only lays out Fixed), ADR-041 (pseudo-elements -- visible synthesis deferred waiting for this)
@@ -377,3 +377,92 @@ ADR-042 is complete when:
 This closes ADR-040's h1 prediction (via the mechanism
 ADR-041 correctly identified) and ADR-041's deferred visible
 synthesis.
+
+## Implementation
+
+Implemented on `feat/absolute-positioning` across three commits
+(Commit 1 = absolute + relative layout, Commit 2 = pseudo
+synthesis, Commit 3 = this docs update). **PNG verification
+passed**: the title "HTML" underline appears in the AFTER
+screenshot and does not appear in BEFORE.
+
+### What shipped
+
+**Commit 1 — absolute + relative layout:**
+- `LayoutBox::is_containing_block` field (set when
+  `position != Static`)
+- Block dispatch: `pending_absolutes` vector collects absolute
+  children of a containing block; positioned against parent's
+  content box after normal children finish
+- All four offsets (`top` / `bottom` / `left` / `right`) with
+  proper auto/over-constrained rules
+- Width/height stretch when left+right or top+bottom both set
+- Explicit width/height preserved when only one axis is set
+- Fallback: parent not positioned -> absolute child treated as
+  static (ADR-033 behavior preserved)
+- 13 new tests in `tests/test_layout.cpp`
+
+**Commit 2 — pseudo synthesis:**
+- `apply_pseudo_elements()` -- recursive post-walk over layout
+  tree, synthesizes before + after boxes for elements with
+  `pseudo_styles` entries
+- `apply_one_pseudo()` -- parses `content` (only `''` empty
+  literal supported; literal text, attr(), counter(), url()
+  deferred), positions absolute pseudos against parent's
+  content box (same rules as Commit 1)
+- `layout_with_pseudo()` -- new top-level function; calls
+  `layout()` normally, then post-walks to synthesize pseudos
+- `render_pipeline.cpp` switched to `cascade_with_pseudo()` +
+  `layout_with_pseudo()` (3 call sites)
+- 8 new tests in `tests/test_pseudo_layout.cpp`
+
+**Commit 3 (this commit) -- docs:**
+- ADR-042 status -> Implemented
+- ADR-033 Post-ADR-042 note
+- ADR-041 Post-ADR-042 note
+- README row update
+- CHANGELOG entry
+
+### Measured visible delta (viewport 1774, PNG-verified)
+
+| Element | Before | After | Verdict |
+|---|---|---|---|
+| Title "HTML" underline | None | 1px gray line under title | Confirmed |
+| Sidebar | Intact | Intact | No regression |
+| Body text | Unchanged | Unchanged | No regression |
+| Issue box border | Present (ADR-040) | Present | No regression |
+
+**The ADR-040 prediction is finally visually true**, via the
+mechanism ADR-041 correctly identified (`.vector-page-titlebar
+::after` pseudo-element, absolute-positioned at bottom of
+titlebar) and now possible because ADR-042 Commit 1 taught
+layout how to position absolutes against their parent.
+
+### Test count
+
+- Before ADR-042: 518 cases, 1980 assertions
+- After Commit 1: 531 cases, 2035 assertions (+13 / +55)
+- After Commit 2: 539 cases, 2064 assertions (+8 / +29)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings introduced. Two pre-existing
+`-Wmisleading-indentation` warnings in `render_pipeline.cpp`
+(ADR-022 asset loader) unchanged.
+
+### Deferred (documented, as planned)
+
+- **Flex/grid parent absolutes** -- v1 handles block parents
+  only. First-viewport case (`.vector-page-titlebar::after`)
+  works because pseudo synthesis is post-walk, not routed
+  through flex dispatch.
+- **Multi-level containing block walk-up** -- v1 uses direct
+  parent
+- **`position: sticky`** -- needs scroll state
+- **Percentages in offsets** -- needs `parent_content_height`
+- **`top`/`left` visual offsets on `position: relative`** --
+  relative elements stay at static position
+- **`content: 'literal text'`** -- inline path (brackets,
+  backlink arrows)
+- **`content: attr() / counter() / url()`** -- ADR-041
+  deferred, still deferred
+

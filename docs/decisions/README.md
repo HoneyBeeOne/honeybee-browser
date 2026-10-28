@@ -44,7 +44,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 039 | [Box Model Completion](039-box-model.md) | `height` + `min/max` clamps + `box-sizing` + `overflow: hidden`; closes ADR-037 height gap |
 | 040 | [Border Shorthand Expansion](040-border-shorthand.md) | `border: <width> <style> <color>` + per-side forms; parse-only, first-viewport borders appear |
 | 041 | [Pseudo-elements (::before / ::after)](041-pseudo-elements.md) | Parse + cascade (partial; visible synthesis deferred to ADR-042) |
-| 042 | [Position (relative / absolute)](042-absolute-positioning.md) | `position: relative|absolute` + title underline via pseudo-element absolute positioning |
+| 042 | [Position (relative / absolute)](042-absolute-positioning.md) | `relative` (containing block) + `absolute` (out-of-flow) + pseudo synthesis; title underline appears (PNG-verified) |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
