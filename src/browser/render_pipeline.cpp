@@ -292,9 +292,14 @@ void RenderPipeline::relayout(float viewport_width) {
     sheet_cache_ = renderer::css::Stylesheet::parse(
         merged_css_ + viewport_css);
     last_viewport_width_ = viewport_width;
-    styles_cache_ = renderer::css::cascade(
-        renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
-        viewport_width);
+    // ADR-042: cascade_with_pseudo to also populate pseudo_styles.
+    {
+        auto result = renderer::css::cascade_with_pseudo(
+            renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
+            viewport_width);
+        styles_cache_ = std::move(result.element_styles);
+        pseudo_styles_cache_ = std::move(result.pseudo_styles);
+    }
 
     // ADR-035: thread an image-dimension lookup so <img>
     // elements reserve layout space. Cache hit = zero cost.
@@ -312,9 +317,10 @@ void RenderPipeline::relayout(float viewport_width) {
             true
         };
     };
-    layout_root_ = renderer::layout::layout(
-        *doc_, styles_cache_, &measure_with_pango, viewport_width,
-        image_dims);
+    // ADR-042: layout_with_pseudo to synthesize ::before / ::after.
+    layout_root_ = renderer::layout::layout_with_pseudo(
+        *doc_, styles_cache_, pseudo_styles_cache_,
+        &measure_with_pango, viewport_width, image_dims);
 
     // ADR-023: detect hover level and precompute hover-sensitive
     // elements for Level 1. Costs ~0.1ms per render on Wikipedia
@@ -520,9 +526,14 @@ void RenderPipeline::restyle() {
     // failed render()). Full cascade, same cost as ADR-021.
     if (styles_cache_.empty()) {
         sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
-        styles_cache_ = renderer::css::cascade(
-            renderer::css::ua_stylesheet(), sheet_cache_, *doc_, state_,
-            last_viewport_width_);
+        // ADR-042: cascade_with_pseudo for pseudo_styles.
+        {
+            auto result = renderer::css::cascade_with_pseudo(
+                renderer::css::ua_stylesheet(), sheet_cache_, *doc_,
+                state_, last_viewport_width_);
+            styles_cache_ = std::move(result.element_styles);
+            pseudo_styles_cache_ = std::move(result.pseudo_styles);
+        }
         restyle_walk(layout_root_, styles_cache_);
         prev_hovered_ = state_.hovered_element;
         return;

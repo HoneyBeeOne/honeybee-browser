@@ -129,6 +129,8 @@ private:
     //   prev_hovered_ -- previously-hovered element, used to diff
     //                    against state_.hovered_element in restyle().
     renderer::css::ComputedStyleMap styles_cache_;
+    // ADR-042: parallel cache of pseudo-element styles.
+    renderer::css::PseudoStyleMap pseudo_styles_cache_;
     renderer::css::Stylesheet sheet_cache_;
     const renderer::dom::Element* prev_hovered_ = nullptr;
 
