@@ -2589,3 +2589,167 @@ TEST_CASE("absolute: explicit width/height preserved (no stretch)",
     CHECK(a->width == Catch::Approx(75.0f).margin(1.0f));
     CHECK(a->height == Catch::Approx(25.0f).margin(1.0f));
 }
+
+// =============================================================
+// ADR-043: box-shadow parse + layout fields.
+// =============================================================
+
+TEST_CASE("box-shadow: 0 1px #c8ccd1 parses all fields",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:0 1px #c8ccd1}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_ox == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->box_shadow_oy == Catch::Approx(1.0f).margin(0.1f));
+    CHECK(b->box_shadow_blur == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->box_shadow_spread == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->box_shadow_inset == false);
+}
+
+TEST_CASE("box-shadow: 2px 3px 4px 5px red (all four lengths)",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:2px 3px 4px 5px red}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_ox == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->box_shadow_oy == Catch::Approx(3.0f).margin(0.1f));
+    CHECK(b->box_shadow_blur == Catch::Approx(4.0f).margin(0.1f));
+    CHECK(b->box_shadow_spread == Catch::Approx(5.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: 0 0 5px red (blur only, no spread)",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:0 0 5px red}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_blur == Catch::Approx(5.0f).margin(0.1f));
+    CHECK(b->box_shadow_spread == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: inset keyword sets inset flag",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:inset 0 0 0 1px #36c}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_inset == true);
+    CHECK(b->box_shadow_spread == Catch::Approx(1.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: negative spread parsed correctly",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;"
+        "box-shadow:0 2px 6px -1px rgba(0,0,0,0.2)}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_spread == Catch::Approx(-1.0f).margin(0.1f));
+    CHECK(b->box_shadow_blur == Catch::Approx(6.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: none leaves has=false",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:none}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == false);
+}
+
+TEST_CASE("box-shadow: multi-shadow takes first only",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;"
+        "box-shadow:0 1px red, 0 2px blue}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_oy == Catch::Approx(1.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: 1px (only one length) drops rule",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:1px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == false);
+}
+
+TEST_CASE("box-shadow: foo bar baz (invalid) drops rule",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:foo bar baz}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == false);
+}
+
+TEST_CASE("box-shadow: no rule leaves defaults",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == false);
+    CHECK(b->box_shadow_inset == false);
+    CHECK(b->box_shadow_ox == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: 0 1px red (no blur/spread)",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;box-shadow:0 1px red}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_blur == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->box_shadow_spread == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("box-shadow: inset + 4 lengths + color",
+          "[layout][box-shadow][adr-043]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;"
+        "box-shadow:inset 1px 2px 3px 4px blue}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->box_shadow_has == true);
+    CHECK(b->box_shadow_inset == true);
+    CHECK(b->box_shadow_ox == Catch::Approx(1.0f).margin(0.1f));
+    CHECK(b->box_shadow_oy == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->box_shadow_blur == Catch::Approx(3.0f).margin(0.1f));
+    CHECK(b->box_shadow_spread == Catch::Approx(4.0f).margin(0.1f));
+}

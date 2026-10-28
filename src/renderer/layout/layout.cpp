@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -256,6 +257,85 @@ LayoutBox layout_element(const dom::Element& el,
         box.background = bg ? parse_color(*bg) : Color::transparent();
         const auto bc = style->get("border-color");
         box.border_color = bc ? parse_color(*bc) : Color::transparent();
+
+        // ADR-043: parse box-shadow. Non-inset, non-blurred
+        // rendered in Commit 2; inset / blur / multi-shadow
+        // parsed and stored but skipped at paint.
+        if (auto bs = style->get("box-shadow");
+            bs && !bs->empty() && *bs != "none") {
+            // Multi-shadow: take first only (comma-separated
+            // list; each remaining shadow is silently dropped).
+            std::string first = *bs;
+            if (auto comma = first.find(',');
+                comma != std::string::npos) {
+                first = first.substr(0, comma);
+            }
+
+            // Tokenize on whitespace.
+            std::vector<std::string> tokens;
+            {
+                std::istringstream iss(first);
+                std::string tok;
+                while (iss >> tok) tokens.push_back(tok);
+            }
+
+            // Optional `inset` keyword at start.
+            bool inset = false;
+            if (!tokens.empty() && tokens[0] == "inset") {
+                inset = true;
+                tokens.erase(tokens.begin());
+            }
+
+            // Validate: 2-4 length tokens + 1 color token.
+            // Length token: "0" exactly, or numeric prefix +
+            // px|em|rem|% suffix. Rejects solid / auto / etc.
+            auto is_length_token = [](const std::string& t) -> bool {
+                if (t == "0") return true;
+                auto ends_with = [&](std::string_view suf) {
+                    return t.size() > suf.size() &&
+                        t.compare(t.size() - suf.size(),
+                                  suf.size(), suf) == 0;
+                };
+                size_t unit_len = 0;
+                if (ends_with("rem")) unit_len = 3;
+                else if (ends_with("px")) unit_len = 2;
+                else if (ends_with("em")) unit_len = 2;
+                else if (ends_with("%"))  unit_len = 1;
+                else return false;
+                const size_t num_end = t.size() - unit_len;
+                if (num_end == 0) return false;
+                bool has_digit = false;
+                for (size_t i = 0; i < num_end; ++i) {
+                    const char c = t[i];
+                    if (c >= '0' && c <= '9') { has_digit = true; continue; }
+                    if (c == '.') continue;
+                    if (c == '-' && i == 0) continue;
+                    return false;
+                }
+                return has_digit;
+            };
+
+            if (tokens.size() >= 3 && tokens.size() <= 5) {
+                bool ok = true;
+                std::vector<float> lens;
+                for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+                    if (!is_length_token(tokens[i])) { ok = false; break; }
+                    lens.push_back(parse_length(tokens[i], ctx));
+                }
+                if (ok && lens.size() >= 2 && lens.size() <= 4) {
+                    box.box_shadow_ox     = lens[0];
+                    box.box_shadow_oy     = lens[1];
+                    box.box_shadow_blur   = lens.size() >= 3 ? lens[2] : 0.0f;
+                    box.box_shadow_spread = lens.size() >= 4 ? lens[3] : 0.0f;
+                    // Note: transparent-fallback for unknown color
+                    // tokens yields an invisible shadow (v1
+                    // acceptable; matches "no visual effect").
+                    box.box_shadow_color  = parse_color(tokens.back());
+                    box.box_shadow_inset  = inset;
+                    box.box_shadow_has    = true;
+                }
+            }
+        }
     }
 
     box.x = x_before_margin + box.margin[3];
