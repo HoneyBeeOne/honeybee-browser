@@ -197,3 +197,22 @@ Expanding `border-color: red blue` into `border-top-color: red; border-right-col
 ## Record of Changes
 
 - **2026-10-20:** Initial decision.
+
+
+## Post-ADR-040 note
+
+ADR-040 extended shorthand expansion to the `border` property
+and its per-side forms (`border-top`, `border-right`,
+`border-bottom`, `border-left`). The shorthand family started
+in this ADR (`margin`, `padding`, `border-width`) is now
+complete for the border tree.
+
+What ADR-040 added:
+- `border: <width> <style> <color>` -> 3 longhands
+- `border: 0` / `border: none` -> `border-width: 0`
+- Per-side forms with the same expansion logic
+- CSS spec SS8.5.3 compliance
+  (`border: 5px none red` -> `border-width: 0`)
+
+Combined coverage: `margin`, `padding`, `border-width` (ADR-012)
++ `border`, `border-{top,right,bottom,left}` (ADR-040).

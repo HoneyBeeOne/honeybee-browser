@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **CSS border shorthand expansion** (ADR-040): `border: <width> <style> <color>` and
+  per-side forms (`border-top/right/bottom/left`) now expand to
+  longhands at parse time. Issue-box borders now appear on
+  Wikipedia (1px confirmed via PNG). `border: 5px none red`
+  correctly zeroes width per CSS spec SS8.5.3. Zero layout/paint
+  changes — pure cascade fix.
+
+  **Deferred**: `h1#firstHeading` underline not appearing (rule
+  not reaching cascade; likely media-type gate, tracked as
+  separate issue). Search field border blocked on ADR-029 header
+  layout.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
