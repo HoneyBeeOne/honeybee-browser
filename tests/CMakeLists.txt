@@ -11,6 +11,7 @@ add_executable(honeybee_tests
     test_pseudos.cpp
     test_box_model.cpp
   test_cascade.cpp
+  test_pseudo_elements.cpp
   test_hover_sensitivity.cpp
   test_ua_stylesheet.cpp
   test_grid_layout.cpp
