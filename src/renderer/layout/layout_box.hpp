@@ -108,8 +108,17 @@ struct LayoutBox final : LayoutNode {
 
     // ADR-033: parsed position. Fixed is honored by layout
     // (out-of-flow + viewport anchor); Relative/Absolute/Sticky
-    // are stored but treated as Static in v1.
+    // are stored but treated as Static in v1 (ADR-042 extends
+    // this: relative becomes a containing block marker;
+    // absolute becomes out-of-flow + positioned).
     Position position = Position::Static;
+
+    // ADR-042: containing block marker. Set when position !=
+    // Static (matches CSS: relative/absolute/fixed/sticky all
+    // establish containing blocks for absolute descendants).
+    // Layout uses this to decide whether absolute children are
+    // positioned against this element or fall back to static.
+    bool is_containing_block = false;
 
     // ADR-034: background-image url() extracted from CSS during
     // layout. Empty when no background-image. Paint fetches +

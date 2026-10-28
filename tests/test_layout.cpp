@@ -14,6 +14,7 @@
 #include "renderer/layout/text_utils.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <memory>
 #include <string>
@@ -2401,4 +2402,190 @@ TEST_CASE("flex-direction column stacks children vertically",
     CHECK(near(b->y - a->y, a->height));
     // Container height = sum
     CHECK(near(f->height, a->height + b->height, 2.0f));
+}
+
+// =============================================================
+// ADR-042: position: relative / absolute.
+// =============================================================
+
+TEST_CASE("absolute: relative parent + top/left offsets",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:300px;height:200px;margin:0;padding:0}"
+        ".a{position:absolute;top:10px;left:20px;width:50px;height:30px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->x == Catch::Approx(20.0f).margin(1.0f));
+    CHECK(a->y == Catch::Approx(10.0f).margin(1.0f));
+    CHECK(a->width == Catch::Approx(50.0f).margin(1.0f));
+    CHECK(a->height == Catch::Approx(30.0f).margin(1.0f));
+}
+
+TEST_CASE("absolute: relative parent + bottom/right offsets",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:300px;height:200px;margin:0;padding:0}"
+        ".a{position:absolute;bottom:10px;right:20px;width:50px;height:30px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    // right:20, width:50, parent_w:300 -> x = 300 - 20 - 50 = 230
+    CHECK(a->x == Catch::Approx(230.0f).margin(1.0f));
+    // bottom:10, height:30, parent_h:200 -> y = 200 - 10 - 30 = 160
+    CHECK(a->y == Catch::Approx(160.0f).margin(1.0f));
+}
+
+TEST_CASE("absolute: parent not positioned falls back to static",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{width:300px;height:200px;margin:0;padding:0}"
+        ".a{position:absolute;top:100px;left:100px;width:50px;height:30px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    // Fallback: parent not positioned -> static (top/left ignored)
+    CHECK(a->x < 100.0f);
+    CHECK(a->y < 100.0f);
+}
+
+TEST_CASE("absolute: left=0 right=0 stretches width",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:200px;height:100px;margin:0;padding:0}"
+        ".a{position:absolute;top:5px;left:0;right:0;height:10px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->x == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(a->width == Catch::Approx(200.0f).margin(1.0f));
+}
+
+TEST_CASE("absolute: top=0 bottom=0 stretches height",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:200px;height:100px;margin:0;padding:0}"
+        ".a{position:absolute;top:0;bottom:0;left:10px;width:20px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(a->height == Catch::Approx(100.0f).margin(1.0f));
+}
+
+TEST_CASE("absolute: over-constrained left wins over right",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:300px;height:100px;margin:0;padding:0}"
+        ".a{position:absolute;top:0;left:20px;right:50px;"
+        "width:40px;height:10px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    // left wins: x = 20
+    CHECK(a->x == Catch::Approx(20.0f).margin(1.0f));
+}
+
+TEST_CASE("absolute: does not contribute to parent height",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:200px;margin:0;padding:0}"
+        ".a{position:absolute;top:0;left:0;width:50px;height:300px}");
+    const auto* p = find_class(doc.root, "p");
+    REQUIRE(p != nullptr);
+    // Parent's height excludes the 300px absolute child.
+    CHECK(p->height < 100.0f);
+}
+
+TEST_CASE("absolute: multiple siblings positioned independently",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'>"
+        "<div class='a1'>1</div>"
+        "<div class='a2'>2</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:200px;height:200px;margin:0;padding:0}"
+        ".a1{position:absolute;top:10px;left:10px;width:20px;height:20px}"
+        ".a2{position:absolute;top:50px;left:80px;width:20px;height:20px}");
+    const auto* a1 = find_class(doc.root, "a1");
+    const auto* a2 = find_class(doc.root, "a2");
+    REQUIRE(a1 != nullptr);
+    REQUIRE(a2 != nullptr);
+    CHECK(a1->x == Catch::Approx(10.0f).margin(1.0f));
+    CHECK(a1->y == Catch::Approx(10.0f).margin(1.0f));
+    CHECK(a2->x == Catch::Approx(80.0f).margin(1.0f));
+    CHECK(a2->y == Catch::Approx(50.0f).margin(1.0f));
+}
+
+TEST_CASE("relative: sets is_containing_block marker",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='r'>R</div>",
+        "body,html{margin:0;padding:0}"
+        ".r{position:relative;width:100px;height:50px}");
+    const auto* r = find_class(doc.root, "r");
+    REQUIRE(r != nullptr);
+    CHECK(r->position == layout::Position::Relative);
+    CHECK(r->is_containing_block == true);
+}
+
+TEST_CASE("absolute: sets is_containing_block marker",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='a'>A</div>",
+        "body,html{margin:0;padding:0}"
+        ".a{position:absolute;width:100px;height:50px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->position == layout::Position::Absolute);
+    CHECK(a->is_containing_block == true);
+}
+
+TEST_CASE("static: is_containing_block is false",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='s'>S</div>",
+        "body,html{margin:0;padding:0}"
+        ".s{width:100px;height:50px}");
+    const auto* s = find_class(doc.root, "s");
+    REQUIRE(s != nullptr);
+    CHECK(s->position == layout::Position::Static);
+    CHECK(s->is_containing_block == false);
+}
+
+TEST_CASE("absolute: offsets relative to padded parent's content box",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:300px;height:200px;"
+        "margin:0;padding:20px;box-sizing:content-box}"
+        ".a{position:absolute;top:10px;left:10px;width:20px;height:20px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    // Content box starts at (20, 20). Absolute child at content + offset.
+    CHECK(a->x == Catch::Approx(30.0f).margin(2.0f));
+    CHECK(a->y == Catch::Approx(30.0f).margin(2.0f));
+}
+
+TEST_CASE("absolute: explicit width/height preserved (no stretch)",
+          "[layout][position][adr-042]") {
+    auto doc = run(
+        "<div class='p'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{position:relative;width:300px;height:200px;margin:0;padding:0}"
+        ".a{position:absolute;top:0;left:0;width:75px;height:25px}");
+    const auto* a = find_class(doc.root, "a");
+    REQUIRE(a != nullptr);
+    CHECK(a->width == Catch::Approx(75.0f).margin(1.0f));
+    CHECK(a->height == Catch::Approx(25.0f).margin(1.0f));
 }

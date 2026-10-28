@@ -193,16 +193,22 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
-    // ADR-033: parse position. Relative/Absolute/Sticky are
-    // stored but treated as Static in layout (v1 limitation).
-    // Fixed is honored by layout_block_children (skip from flow
-    // + viewport anchor).
+    // ADR-033: parse position. ADR-042 extends: relative and
+    // absolute are now used (relative = containing block marker,
+    // absolute = out-of-flow + positioned). Sticky remains
+    // stored-but-static. Fixed behavior unchanged (ADR-033
+    // special case in layout_block_children).
     if (style) {
         if (auto p = style->get("position")) {
             if (*p == "relative") box.position = Position::Relative;
             else if (*p == "absolute") box.position = Position::Absolute;
             else if (*p == "fixed") box.position = Position::Fixed;
             else if (*p == "sticky") box.position = Position::Sticky;
+            // ADR-042: any non-static position is a containing
+            // block for absolute descendants.
+            if (box.position != Position::Static) {
+                box.is_containing_block = true;
+            }
         }
     }
 
@@ -420,6 +426,13 @@ LayoutBox layout_element(const dom::Element& el,
     // ADR-028: block/inline children layout. Reused by the grid
     // path's fallback (grid without a parsed template degrades to
     // block) and by the standard block path.
+    // ADR-042: absolute children of a containing block are
+    // collected here and positioned against self's content box
+    // after normal (in-flow) children finish. Flex/grid parent
+    // absolutes are handled separately (deferred -- v1 only
+    // handles block-parent absolutes; covers titlebar case).
+    std::vector<const dom::Element*> pending_absolutes;
+
     auto layout_block_children = [&]() {
         // ADR-031: float tracking. A floated child is laid out at
         // its natural size, positioned at the left or right edge
@@ -438,6 +451,16 @@ LayoutBox layout_element(const dom::Element& el,
                 const auto& child_el = static_cast<const dom::Element&>(*child);
                 const css::ComputedStyle* child_style = lookup(styles, child_el);
                 if (display_of(child_style) == Display::None) continue;
+
+                // ADR-042: absolute child of a containing block
+                // is out-of-flow; collect for post-positioning.
+                if (box.is_containing_block && child_style) {
+                    if (auto p = child_style->get("position");
+                        p && *p == "absolute") {
+                        pending_absolutes.push_back(&child_el);
+                        continue;
+                    }
+                }
 
                 // Read float direction
                 std::string float_dir = "none";
@@ -927,6 +950,128 @@ LayoutBox layout_element(const dom::Element& el,
 
     if (!grid_handled && !flex_handled) {
         layout_block_children();
+
+        // ADR-042: position absolute children against self's
+        // content box (which is now finalized). Only block
+        // parent case is handled in v1; flex/grid parent
+        // absolutes fall through their own loops and remain
+        // static (documented deferral).
+        if (box.is_containing_block && !pending_absolutes.empty()) {
+            const float abs_cx =
+                box.x + box.border[3] + box.padding[3];
+            const float abs_cy =
+                box.y + box.border[0] + box.padding[0];
+
+            // ADR-042: box.width / box.height are not yet
+            // finalized at this point (they're set after the
+            // dispatch block for some elements). Parse explicit
+            // width/height from style when present, else fall
+            // back to box dimensions.
+            LengthContext dim_ctx;
+            dim_ctx.font_size = own_font_size;
+            dim_ctx.parent_font_size = parent_font_size;
+            dim_ctx.root_font_size = root_font_size;
+            dim_ctx.parent_content_width = parent_content_width;
+
+            float abs_cw =
+                box.width - box.border[1] - box.border[3]
+                          - box.padding[1] - box.padding[3];
+            float abs_ch =
+                box.height - box.border[0] - box.border[2]
+                           - box.padding[0] - box.padding[2];
+            if (style) {
+                if (auto w = style->get("width");
+                    w && *w != "auto") {
+                    abs_cw = parse_length(*w, dim_ctx);
+                }
+                if (auto h = style->get("height");
+                    h && *h != "auto") {
+                    abs_ch = parse_length(*h, dim_ctx);
+                }
+            }
+
+            LengthContext abs_ctx;
+            abs_ctx.font_size = own_font_size;
+            abs_ctx.parent_font_size = parent_font_size;
+            abs_ctx.root_font_size = root_font_size;
+            abs_ctx.parent_content_width = abs_cw;
+
+            for (const auto* abs_el : pending_absolutes) {
+                const auto* abs_style = lookup(styles, *abs_el);
+                if (!abs_style) continue;
+
+                // Pre-layout at (0,0) to establish natural size.
+                auto abs_box = std::make_unique<LayoutBox>(
+                    layout_element(*abs_el, styles, measurer,
+                                   0.0f, 0.0f, abs_cw,
+                                   own_font_size, root_font_size,
+                                   own_dir, image_dims));
+
+                const float natural_w = abs_box->width;
+                const float natural_h = abs_box->height;
+
+                // Parse offsets (auto = nullopt).
+                auto parse_off = [&](const char* prop)
+                        -> std::optional<float> {
+                    if (auto v = abs_style->get(prop);
+                        v && *v != "auto") {
+                        return parse_length(*v, abs_ctx);
+                    }
+                    return std::nullopt;
+                };
+                const auto top_o    = parse_off("top");
+                const auto bottom_o = parse_off("bottom");
+                const auto left_o   = parse_off("left");
+                const auto right_o  = parse_off("right");
+
+                // Horizontal: compute target_x (x_before_margin)
+                // and target_w. Over-constrained: left wins
+                // (CSS SS10.3.7 rule 1, correct for LTR).
+                float target_x = 0.0f;
+                float target_w = natural_w;
+                if (left_o && right_o) {
+                    target_x = abs_cx + *left_o;
+                    target_w = abs_cw - *left_o - *right_o;
+                } else if (left_o) {
+                    target_x = abs_cx + *left_o;
+                } else if (right_o) {
+                    target_x = abs_cx + abs_cw - *right_o - natural_w;
+                } else {
+                    target_x = abs_cx;
+                }
+
+                // Vertical.
+                float target_y = 0.0f;
+                float target_h = natural_h;
+                if (top_o && bottom_o) {
+                    target_y = abs_cy + *top_o;
+                    target_h = abs_ch - *top_o - *bottom_o;
+                } else if (top_o) {
+                    target_y = abs_cy + *top_o;
+                } else if (bottom_o) {
+                    target_y = abs_cy + abs_ch - *bottom_o - natural_h;
+                } else {
+                    target_y = abs_cy;
+                }
+
+                // Shift from (0,0)-layout to target position.
+                if (target_x != 0.0f) {
+                    shift_subtree_x(*abs_box, target_x);
+                }
+                if (target_y != 0.0f) {
+                    shift_subtree_y(*abs_box, target_y);
+                }
+
+                // Apply stretch overrides (v1: box size set post-
+                // layout; nested content may not reflow perfectly
+                // -- documented limitation, no impact for the
+                // first-viewport titlebar pseudo).
+                if (target_w != natural_w) abs_box->width  = target_w;
+                if (target_h != natural_h) abs_box->height = target_h;
+
+                box.children.push_back(std::move(abs_box));
+            }
+        }
     }
 
     // ADR-035: reserve layout space for <img> from intrinsic
