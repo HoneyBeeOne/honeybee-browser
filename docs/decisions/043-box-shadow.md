@@ -445,3 +445,21 @@ Zero new warnings introduced.
   state.
 - Transitions, percentages in offsets, inline-element shadows.
 
+
+
+## Post-ADR-044 note
+
+ADR-044 added `border-radius`. Box-shadow (this ADR) currently
+draws a rectangular shadow, not a rounded one. On a box with
+both `border-radius` and `box-shadow`, the shadow follows the
+box's straight rectangle, not the rounded corners.
+
+The one visible box-shadow in Wikipedia CSS is
+`.vector-page-toolbar-container { box-shadow: 0 1px #c8ccd1 }`
+-- that box has no `border-radius`, so no interaction today.
+**Rounded box-shadow** (shadow path follows the rounded
+border-radius curve) is a future ADR: once border-radius is
+used on shadowed elements (future sites, or Wikipedia
+updates), the mismatch becomes visible.
+
+Currently no delta from this interaction.

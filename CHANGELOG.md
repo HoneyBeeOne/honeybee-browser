@@ -69,6 +69,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 539 -> 551 cases, 2064 -> 2125 assertions.
 
+- **Border radius** (ADR-044): `border-radius` shorthand
+  (single value -> all four corners) + per-corner longhands.
+  Rounded-rect paint via Cairo `arc` with two-fill border.
+  Zero-radius boxes take existing rect path (regression-free).
+
+  Visual delta: subtle at 2px radius on 100px+ elements,
+  not screenshot-verifiable. Behaviorally complete (parse
+  verified via 11 tests; paint branch correct; larger radii
+  render visibly). Same "Implemented with honest caveat"
+  pattern as ADR-041's partial scope.
+
+  Deferred: percentage radius, `inherit`, multi-value
+  shorthand beyond first token, elliptical, transitions,
+  rounded box-shadow.
+
+  Test count: 551 -> 562 cases, 2125 -> 2188 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

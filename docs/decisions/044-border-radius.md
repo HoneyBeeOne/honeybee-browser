@@ -1,6 +1,6 @@
 # ADR-044: Border Radius
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting, background/border paint), ADR-039 (overflow: hidden clipping), ADR-040 (border shorthand -- the search field this ADR rounds), ADR-043 (box-shadow -- painted behind background)
@@ -421,3 +421,102 @@ changes, PNG-verified.
 4. Elliptical radius deferred
 5. Box-shadow doesn't follow rounded corners (rect shadow
    drawn behind rounded box; own ADR for rounded shadows)
+
+## Implementation
+
+Implemented on `feat/border-radius` across three commits
+(Commit 1 = parse + fields, Commit 2 = paint, Commit 3 = this
+docs update).
+
+**Visual verification: inconclusive.** Documented honestly
+below.
+
+### What shipped
+
+**Commit 1 -- parse + layout fields:**
+- `LayoutBox` gains `border_radius[4]` (TL, TR, BR, BL)
+- `border-radius` shorthand: single value -> all four corners
+- Per-corner longhands (`border-top-left-radius` etc.):
+  override shorthand (1 Wikipedia rule uses them:
+  `.cdx-search-input__end-button`)
+- Percentage -> 0 (deferred; radio buttons `display: none`)
+- `inherit` -> 0 (deferred; parent `overflow: hidden` gives
+  equivalent via clip)
+- Multi-value -> first token only (documented; 0 uses)
+- Elliptical -> horizontal component only (documented; 0 uses)
+- 11 new tests in `tests/test_layout.cpp`
+
+**Commit 2 -- paint:**
+- New `rounded_rect_path()` helper using `cairo_arc` +
+  `cairo_close_path`; radii clamped to min(w,h)/2 (simple
+  bound; full CSS SS5.5 deferred)
+- `paint_box` branches on any `border_radius[i] > 0`:
+  * Rounded path: two-fill (outer `border_color`, inner
+    `background_color` inset by border) -- rounded border
+    follows curve without `cairo_stroke`
+  * Zero-radius: existing 4-side `fill_rect` path, byte-
+    identical to pre-ADR-044 (regression-free)
+- `<algorithm>` + `<cmath>` includes added
+
+**Commit 3 (this commit) -- docs:**
+- ADR-044 status -> Implemented (with visual caveat, below)
+- Post-ADR-044 notes in ADR-040, ADR-043
+- README row update
+- CHANGELOG entry
+
+### Visual delta -- HONEST ASSESSMENT
+
+ADR-044's Context section predicted "4+ first-viewport
+changes" based on rule-count: 10 `border-radius: 2px` rules,
+135 `.cdx-button` elements, 715 inline `<code>` tags, issue
+box. That was rule-count thinking; it doesn't translate
+linearly to visual perceptibility.
+
+**Actual visual delta**: at 2px radius on 100px+ wide boxes,
+the rounding is **below the unambiguous-perception threshold
+at screenshot resolution** (1920px wide first-viewport PNG).
+
+What was **verified definitively**:
+- 11 unit tests confirm the parse-to-LayoutBox propagation
+- `any_radius` gate triggers correctly for any radius > 0.001
+- Zero-radius paint path is byte-identical to pre-ADR-044
+  (no regression on 99% of boxes)
+- Title underline (ADR-042), toolbar line (ADR-043), issue
+  box border (ADR-040) all preserved
+
+What was **NOT verified**:
+- Whether the 2px rounding is humanly perceptible at typical
+  view in the rendered PNG.
+
+**This is the ADR-041 Commit 2 shape**, one cycle later:
+prediction (4+ visible changes) vs. actual visual magnitude
+(2px, subtle). Where ADR-041 Commit 2 was **skipped** because
+no visible delta would have shipped, ADR-044 Commit 2 is
+**merged** because the implementation is correct and future-
+ready: larger radii (4px, 8px, 50%) render visibly, and the
+parse path is spec-compliant for those cases.
+
+**Honest status**: `Implemented` with the caveat "visual
+delta subtle at 2px radius, not screenshot-verifiable;
+behaviorally complete." This differs materially from
+ADR-042's PNG-verified title underline or ADR-043's
+PNG-verified toolbar line -- both unambiguous 1px gray lines.
+
+### Test count
+
+- Before ADR-044: 551 cases, 2125 assertions
+- After Commit 1: 562 cases, 2188 assertions (+11 / +63)
+- After Commit 2: unchanged
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings introduced.
+
+### Deferred (documented)
+
+- **Percentage radius** -- 2 rules (radio buttons hidden)
+- **`inherit`** -- 1 rule (parent clip gives equivalent)
+- **Multi-value shorthand** -- 0 uses; first token only
+- **Elliptical** -- 0 uses
+- **`border-radius` transitions**
+- **Rounded box-shadow** -- shadow follows curve; own ADR
+

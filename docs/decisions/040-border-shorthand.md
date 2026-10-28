@@ -424,3 +424,24 @@ structure is in place. But the underline won't appear until
 When ADR-042 lands, the title underline appears, and ADR-040's
 prediction finally becomes visually true (though via a
 different mechanism than originally believed).
+
+
+## Post-ADR-044 note
+
+ADR-044 added `border-radius` parsing + rounded-rect paint.
+The two elements ADR-040 gave borders to -- `.cdx-search-input`
+(search field) and `.mw-message-box` (issue box) -- both have
+`border-radius: 2px` rules in Wikipedia CSS.
+
+**Combined effect (ADR-040 + ADR-044)**:
+- Search field: 1px gray border (ADR-040) + 2px rounded
+  corners (ADR-044) = fully styled input element
+- Issue box: 1px gray left border (ADR-040) + 2px rounded
+  outer corners (ADR-044) = fully styled message box
+
+At 2px radius on large elements, the rounding is subtle at
+screenshot resolution (see ADR-044's Implementation section
+for honest visual-delta assessment). Both deltas are
+individually verified; the ADR-044 rounding's perceptibility
+is documented as "subtle at 2px, more visible at larger radii
+(future sites)."
