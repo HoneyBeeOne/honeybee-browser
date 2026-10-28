@@ -435,8 +435,14 @@ TEST_CASE("var(): embedded var() in composite value resolved (ADR-037)",
     // needs to resolve var() before parse_length sees calc()).
     // This test's contract changed: embedded var() now resolves
     // to its fallback.
+    // ADR-040 decoupled this test from `border:`. The border
+    // shorthand now expands to 3 longhands (border-width /
+    // -style / -color), so `size() == 1` no longer holds. Test
+    // intent is still "var() resolves in a composite value",
+    // so use `outline:` (also composite, still passes through
+    // as one declaration).
     auto sheet = Stylesheet::parse(
-        "a { border: 1px solid var(--border-color, #ccc) }");
+        "a { outline: 1px solid var(--border-color, #ccc) }");
     REQUIRE(sheet.rules.size() == 1);
     REQUIRE(sheet.rules[0].declarations.size() == 1);
     CHECK(sheet.rules[0].declarations[0].value == "1px solid #ccc");
@@ -874,4 +880,138 @@ TEST_CASE("grid-area on child element stored in ComputedStyle",
     CHECK(sheet.rules[0].declarations[0].property == "grid-area");
     CHECK(sheet.rules[0].declarations[0].value == "columnStart");
     CHECK(sheet.rules[1].declarations[0].value == "pageContent");
+}
+
+// =========================================================
+// ADR-040: border shorthand expansion
+// =========================================================
+
+TEST_CASE("border: 1px solid #ccc expands to 3 longhands",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: 1px solid #ccc; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    REQUIRE(decls[0].property == "border-width");
+    REQUIRE(decls[0].value == "1px");
+    REQUIRE(decls[1].property == "border-style");
+    REQUIRE(decls[1].value == "solid");
+    REQUIRE(decls[2].property == "border-color");
+    REQUIRE(decls[2].value == "#ccc");
+}
+
+TEST_CASE("border: 0 expands to border-width 0 only",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: 0; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "border-width");
+    REQUIRE(decls[0].value == "0");
+}
+
+TEST_CASE("border: none expands to border-width 0 only",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: none; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "border-width");
+    REQUIRE(decls[0].value == "0");
+}
+
+TEST_CASE("border: 5px none red zeroes width (CSS spec SS8.5.3)",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: 5px none red; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    bool has_width = false, has_style = false, has_color = false;
+    for (const auto& d : decls) {
+        if (d.property == "border-width" && d.value == "0") has_width = true;
+        else if (d.property == "border-style" && d.value == "none") has_style = true;
+        else if (d.property == "border-color" && d.value == "red") has_color = true;
+    }
+    REQUIRE(has_width);
+    REQUIRE(has_style);
+    REQUIRE(has_color);
+}
+
+TEST_CASE("border: 1px dashed red expands style verbatim",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: 1px dashed red; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    bool has_style = false;
+    for (const auto& d : decls) {
+        if (d.property == "border-style" && d.value == "dashed") has_style = true;
+    }
+    REQUIRE(has_style);
+}
+
+TEST_CASE("border: !important preserved through expansion",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: 1px solid red !important; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    for (const auto& d : decls) {
+        REQUIRE(d.important == true);
+    }
+}
+
+TEST_CASE("border-top: 2px solid blue expands 3 per-side longhands",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border-top: 2px solid blue; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    bool has_width = false, has_style = false, has_color = false;
+    for (const auto& d : decls) {
+        if (d.property == "border-top-width" && d.value == "2px") has_width = true;
+        else if (d.property == "border-top-style" && d.value == "solid") has_style = true;
+        else if (d.property == "border-top-color" && d.value == "blue") has_color = true;
+    }
+    REQUIRE(has_width);
+    REQUIRE(has_style);
+    REQUIRE(has_color);
+}
+
+TEST_CASE("border-left: 0 expands single per-side longhand",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border-left: 0; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "border-left-width");
+    REQUIRE(decls[0].value == "0");
+}
+
+TEST_CASE("border: foo bar baz (invalid width) drops the rule",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border: foo bar baz; }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("border-width: 5px still expands (regression, ADR-012)",
+          "[css][stylesheet][adr-040]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { border-width: 5px; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 4);
+    for (const auto& d : decls) {
+        REQUIRE(d.value == "5px");
+    }
 }
