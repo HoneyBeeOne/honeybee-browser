@@ -43,11 +43,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 038 | [Pseudo-Class Expansion](038-pseudo-expansion.md) | 14 pseudos: structural (10) + logical `:not`/`:is`/`:where` (3) + `:lang` (1); ~840 rules unblocked |
 | 039 | [Box Model Completion](039-box-model.md) | `height` + `min/max` clamps + `box-sizing` + `overflow: hidden`; closes ADR-037 height gap |
 | 040 | [Border Shorthand Expansion](040-border-shorthand.md) | `border: <width> <style> <color>` + per-side forms; parse-only, first-viewport borders appear |
+| 041 | [Pseudo-elements (::before / ::after)](041-pseudo-elements.md) | CSS pseudo-element synthesis; title underline, edit brackets, citation backlinks |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 040 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 041 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
