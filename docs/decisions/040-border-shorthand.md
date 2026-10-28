@@ -1,6 +1,6 @@
 # ADR-040: Border Shorthand Expansion
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-012 (shorthand expansion: margin/padding/border-width), ADR-039 (box model completion — border shorthand limitation surfaced)
@@ -315,3 +315,66 @@ or paint code changes — pure cascade fix.
    threading churn).
 6. **`overflow: auto | scroll` → ADR-042** (needs scroll subsystem).
 7. **`aspect-ratio` → deferred indefinitely** (0 uses).
+
+## Implementation
+
+Implemented on `feat/border-shorthand` across two commits
+(Commit 1 = parse expansion, Commit 2 = this docs commit).
+
+### Measured visible delta (viewport 1774, PNG-verified)
+
+| Element | Before | After | Verdict |
+|---|---|---|---|
+| `.ambox` ("multiple issues" box) | No left border | **1px gray left border** | ✅ Confirmed |
+| `h1#firstHeading` | No underline | No underline | ❌ Deferred (see below) |
+| `form.cdx-search-input` | (not in viewport) | (not in viewport) | ❓ Out of viewport |
+
+**Core mechanism proven.** The issue-box border is unambiguous
+proof that ADR-040's parse-time expansion works end-to-end:
+`border: 1px solid #a2a9b1` expands to 3 longhands, layout reads
+`border-width`, paint draws the border.
+
+**Deferred: `h1#firstHeading` bottom underline.**
+
+The ADR predicted a heading underline based on
+`h1#firstHeading { border-bottom: 1px solid #a2a9b1 }`.
+Diagnostic showed `border-bottom-width` is `(unset)` on the
+h1's ComputedStyle. The rule is not reaching the cascade for
+this element — likely because it is wrapped in `@media screen`
+(unsupported media type per ADR-027) or fails a selector match
+in our cascade implementation.
+
+This is **a rule-reaching-cascade issue, not an ADR-040
+expansion bug**. Belongs to whichever ADR owns the specific
+gate (media-type support or selector matching). Tracked for a
+future cycle.
+
+**Deferred: search field border.**
+
+`form.cdx-search-input` gains its border (verified via parser:
+expansion works), but the search field isn't visible in the
+first viewport because header flex layout (ADR-029) hasn't
+collapsed the header into a horizontal bar yet. Will appear
+once the header layout is complete.
+
+### What shipped
+
+- `is_border_width_token(s)` — accepts `0`, `thin`, `medium`,
+  `thick`, `[0-9.]*`
+- `is_border_style_keyword(s)` — CSS border-style set
+- `parse_border_tokens(tokens, out)` — classifies 1/2/3-token
+  forms
+- `try_expand_border(value, important, out)` — emits 3 longhands
+- `try_expand_border_side(property, value, important, out)` —
+  per-side forms
+- Dispatcher branches in `expand_shorthand()` after `flex-flow`,
+  before `is_box_shorthand`
+- 10 new tests (504/1927 total, all green)
+- Zero layout.cpp or paint.cpp changes
+
+### Test count
+
+- Before ADR-040: 494 cases, 1881 assertions
+- After ADR-040: 504 cases, 1927 assertions
+- Zero warnings, zero failures
+
