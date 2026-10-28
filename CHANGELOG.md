@@ -50,6 +50,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 518 -> 539 cases, 1980 -> 2064 assertions.
 
+- **Box shadow** (ADR-043): non-inset, non-blurred
+  box-shadow rendered as offset + spread rectangle, clipped
+  per CSS Backgrounds 3 SS7.1 (shadow drawn outside the
+  border-box only, clipped inside). Even-odd fill rule handles
+  the "L-shaped exterior region."
+
+  Visible delta (PNG-verified): 1px gray line under
+  `.vector-page-toolbar-container` ("Article / Talk / Read"
+  tabs). Found and fixed one paint bug during verification
+  (full shadow rect visible through transparent parent
+  background -- CSS-spec clip resolved it).
+
+  Parsed for future: inset, blurred, and multi-shadow forms
+  (all currently :focus state or hidden elements in Wikipedia
+  CSS -- deferred to when state-driven layout or scroll
+  exists).
+
+  Test count: 539 -> 551 cases, 2064 -> 2125 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

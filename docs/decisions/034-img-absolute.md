@@ -584,3 +584,25 @@ ADR-034 is complete when:
 4. **SVG, JPEG, `background-image`, `calc()`, `right`/`bottom`, `z-index` all deferred.** Each has its own future ADR.
 
 **Structural value**: `<img>` + PNG fetch infrastructure + absolute positioning foundation are all in place. Every subsequent rendering ADR (SVG, layout-integrated images, dropdowns, tooltips) builds on this.
+
+
+## Post-ADR-043 note
+
+ADR-043 added box-shadow painting. Draw order in `paint_box`
+is now:
+
+1. ADR-043 box-shadow (if `box_shadow_has` and not inset/blur)
+2. Background fill (ADR-016)
+3. Border fill (ADR-016)
+4. Background-image (ADR-034, this ADR)
+5. `<img>` element (ADR-034)
+6. `clip_children` (ADR-039)
+7. Children (recursive)
+
+The shadow draws before background-image. If a box has both
+`box-shadow` and `background-image`, the image covers whatever
+part of the shadow overlaps the border-box (shadow is already
+clipped to the exterior region, so this only affects visual
+when the image extends outside -- rare). Matches CSS:
+background layers (color, image) sit above box-shadow in the
+painting order.

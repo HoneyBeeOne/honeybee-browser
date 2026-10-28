@@ -1,6 +1,6 @@
 # ADR-043: Box Shadow
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-28
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting), ADR-032 (visibility/opacity culling), ADR-033 (position), ADR-034 (background-image), ADR-039 (overflow: hidden)
@@ -368,3 +368,80 @@ ADR-043 is complete when:
 already present via border. If already present, 0 visible
 delta but full box-shadow infrastructure ready for future
 sites and combined border-radius cycle.
+
+## Implementation
+
+Implemented on `feat/box-shadow` across three commits
+(Commit 1 = parse + fields, Commit 2 = paint, Commit 3 = this
+docs update). PNG verification passed after one implementation
+fix.
+
+### What shipped
+
+**Commit 1 -- parse + layout fields:**
+- `LayoutBox` gains 7 box-shadow fields: `box_shadow_ox`,
+  `box_shadow_oy`, `box_shadow_blur`, `box_shadow_spread`
+  (float), `box_shadow_color` (Color), `box_shadow_inset`,
+  `box_shadow_has` (bool)
+- `box-shadow` shorthand parsed in `layout_element`:
+  * `none` -> has=false
+  * `[inset] <ox> <oy> [blur] [spread] <color>` -- 2-4
+    lengths + 1 color
+  * Multi-shadow (comma) -> first only (deferred)
+  * Malformed -> has=false
+  * Length validation: numeric prefix + unit, or exact "0"
+- 12 new tests in `tests/test_layout.cpp`
+
+**Commit 2 -- paint:**
+- `paint_box` draws shadow before background fill (correct
+  z-order per CSS: shadow renders behind element's own
+  background/border)
+- **CSS-spec clipping**: even-odd fill rule clip of
+  (shadow_rect, box_rect) -- only exterior region visible.
+  Matches CSS Backgrounds 3 SS7.1: "outer box-shadow is drawn
+  outside the border edge only; it is clipped inside the
+  border-box."
+- Skips inset and blurred shadows per v1 deferral
+
+**Bug found during verification (recorded in Commit 2's
+message):** initial paint drew the FULL shadow rectangle.
+Because the toolbar's background is transparent, the inner
+shadow region showed through as a 20px gray band behind the
+tab labels. PNG verification caught it; CSS-spec clip fixed
+it. ADR-039's lesson (render-and-inspect before merge) worked
+as intended.
+
+**Commit 3 (this commit) -- docs:**
+- ADR-043 status -> Implemented
+- ADR-034 Post-ADR-043 note (shadow draw order vs.
+  background-image)
+- README row update
+- CHANGELOG entry
+
+### Measured visible delta (viewport 1774, PNG-verified)
+
+| Element | Before | After |
+|---|---|---|
+| `.vector-page-toolbar-container` bottom | No line | 1px gray line under the tab row |
+
+Delta is exactly what the Context section predicted. No
+unintended shadows in first viewport.
+
+### Test count
+
+- Before ADR-043: 539 cases, 2064 assertions
+- After Commit 1: 551 cases, 2125 assertions (+12 / +61)
+- After Commit 2: unchanged (paint path verified via PNG)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings introduced.
+
+### Deferred (documented, as planned)
+
+- **Inset render** -- 13 rules, all `:focus` state. Needs
+  layout recalc on state change (ADR-018 state is paint-only).
+- **Blur > 0 render** -- 1 rule, `visibility: hidden`.
+- **Multi-shadow beyond first** -- 3 rules, all `:focus`
+  state.
+- Transitions, percentages in offsets, inline-element shadows.
+
