@@ -2753,3 +2753,160 @@ TEST_CASE("box-shadow: inset + 4 lengths + color",
     CHECK(b->box_shadow_blur == Catch::Approx(3.0f).margin(0.1f));
     CHECK(b->box_shadow_spread == Catch::Approx(4.0f).margin(0.1f));
 }
+
+// =============================================================
+// ADR-044: border-radius parse + layout fields.
+// =============================================================
+
+TEST_CASE("border-radius: 2px fills all four corners",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:2px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(2.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: 0 leaves all zero",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:0}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: 10px all four = 10",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:10px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(10.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(10.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(10.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(10.0f).margin(0.1f));
+}
+
+TEST_CASE("border-top-left-radius alone (no shorthand)",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-top-left-radius:4px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(4.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("shorthand + per-corner override (Wikipedia end-button case)",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:2px;"
+        "border-top-left-radius:0;border-bottom-left-radius:0}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: inherit deferred (all 0)",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:inherit}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: 50% deferred (all 0)",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:100px;border-radius:50%}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: foo (malformed) leaves 0",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:foo}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: 0.5em resolves via ctx (8px)",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0;font-size:16px}"
+        ".b{width:100px;height:50px;border-radius:0.5em}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(8.0f).margin(0.5f));
+    CHECK(b->border_radius[1] == Catch::Approx(8.0f).margin(0.5f));
+    CHECK(b->border_radius[2] == Catch::Approx(8.0f).margin(0.5f));
+    CHECK(b->border_radius[3] == Catch::Approx(8.0f).margin(0.5f));
+}
+
+TEST_CASE("border-radius: 2px 4px (multi-value) -> first token only",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-radius:2px 4px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    // Documented deviation: multi-value takes first token.
+    CHECK(b->border_radius[0] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(2.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(2.0f).margin(0.1f));
+}
+
+TEST_CASE("border-radius: no rule leaves defaults",
+          "[layout][border-radius][adr-044]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border_radius[0] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}

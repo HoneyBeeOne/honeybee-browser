@@ -99,6 +99,11 @@ struct LayoutBox final : LayoutNode {
     Color background = Color::transparent();
     Color border_color = Color::transparent();
 
+    // ADR-044: border-radius per corner (TL, TR, BR, BL).
+    // 0 = no rounding on that corner. Any value > 0 triggers
+    // the rounded paint path in Commit 2.
+    float border_radius[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
     // ADR-043: parsed box-shadow (non-inset, non-blurred
     // rendered in v1; inset / blur / multi parsed and stored
     // but skipped at paint). `box_shadow_has` gates painting.
