@@ -113,6 +113,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 562 -> 572 cases, 2188 -> 2224 assertions.
 
+- **Runtime-gated logging infrastructure** (ADR-046): `src/base/log.{hpp,cpp}`
+  with `HB_LOG(cat, lvl, fmt, ...)` macro. Zero cost when
+  disabled (single atomic bool read + branch). Enabled via
+  `HONEYBEE_LOG` env var; category + level filtering;
+  optional file redirect via `HONEYBEE_LOG_FILE`.
+
+  Categories: pipeline, css, cascade, layout, paint, fetch,
+  event. Levels: error, warn, info, debug, trace.
+
+  Usage:
+    export HONEYBEE_LOG=all
+    export HONEYBEE_LOG_LEVEL=debug
+    export HONEYBEE_LOG_FILE=/tmp/hb.log
+    ./build/bin/honeybee
+
+  Output: `[honeybee][layout][debug] src/.../layout.cpp:482 msg`
+
+  14 unit tests. 12 HB_LOG sites across 6 files (main,
+  render_pipeline, async_fetcher, cascade, layout, paint).
+
+  Deferred: net/client.cpp fetch log points (fetch() body
+  not captured pre-commit); deep-subsystem log points
+  (organic additions).
+
+  Test count: 572 -> 586 cases, 2224 -> 2263 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

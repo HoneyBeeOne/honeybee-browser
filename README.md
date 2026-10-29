@@ -73,3 +73,44 @@ See [docs/roadmap.md](docs/roadmap.md) for our phased development plan.
 ## 📜 License
 
 This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+
+
+## Logging
+
+HoneyBee has runtime-gated logging. Zero cost when disabled.
+Enable with environment variables:
+
+```bash
+# Log everything at debug level
+HONEYBEE_LOG=all ./build/bin/honeybee
+
+# Filter by category (comma-separated, or "all")
+HONEYBEE_LOG=layout,paint,fetch ./build/bin/honeybee
+
+# Set minimum severity (error | warn | info | debug | trace)
+HONEYBEE_LOG=all HONEYBEE_LOG_LEVEL=info ./build/bin/honeybee
+
+# Redirect to file instead of stderr
+HONEYBEE_LOG=all HONEYBEE_LOG_FILE=/tmp/honeybee.log ./build/bin/honeybee
+```
+
+**Categories**: `pipeline`, `css`, `cascade`, `layout`,
+`paint`, `fetch`, `event`.
+
+**Output format**:
+```
+[honeybee][layout][debug] src/renderer/layout/layout.cpp:482 child_count=3
+```
+
+Greppable by category: `grep '\[layout\]' /tmp/honeybee.log`
+
+**Usage in code**:
+```cpp
+#include "base/log.hpp"
+
+HB_LOG(Layout, Debug, "child_count=%d", n);
+HB_LOG(Fetch, Info, "fetching %s", url.c_str());
+```
+
+See `docs/decisions/046-logging.md` for design and deferred
+items.
