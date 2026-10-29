@@ -47,11 +47,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 042 | [Position (relative / absolute)](042-absolute-positioning.md) | `relative` (containing block) + `absolute` (out-of-flow) + pseudo synthesis; title underline appears (PNG-verified) |
 | 043 | [Box Shadow](043-box-shadow.md) | Non-inset, non-blurred shadow (CSS-spec clipped); toolbar line appears (PNG-verified) |
 | 044 | [Border Radius](044-border-radius.md) | `border-radius` + per-corner longhands; rounded corners (visual subtle at 2px, behaviorally complete) |
+| 045 | [Inline Backgrounds](045-inline-backgrounds.md) | `background-size` / `background-position` / `background-repeat` on inline elements; external link icons (scroll-verified) |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 044 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 045 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
