@@ -50,11 +50,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 045 | [Inline Backgrounds](045-inline-backgrounds.md) | `background-image` + size/position/repeat on inline elements; external link icons appear (scroll-PNG verified) |
 | 046 | [Logging Infrastructure](046-logging.md) | Runtime-gated `HB_LOG` with category + level; env vars `HONEYBEE_LOG` / `_LEVEL` / `_FILE` |
 | 047 | [CSS Mask Image](047-mask-image.md) | `mask-image` parse + paint (cairo_mask); zero first-viewport delta (all targets in hidden ancestors) |
+| 048 | [Flex Wrap (Multi-line)](048-flex-wrap.md) | `flex-wrap: wrap` (row); closes ADR-029 deferral; synthetic-DOM verified (zero first-viewport delta) |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 047 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 048 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
