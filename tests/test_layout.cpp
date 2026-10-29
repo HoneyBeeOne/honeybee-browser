@@ -731,7 +731,13 @@ TEST_CASE("LineFragment: aggregate init still works",
         .x = 10.0f, .y = 20.0f, .width = 30.0f, .height = 16.0f,
         .text = "text",
         .font_family = "", .font_size = 16.0f,
-        .color = layout::Color::black()};
+        .color = layout::Color::black(),
+        .bg_image_url = {},
+        .bg_size_w = 0.0f,
+        .bg_size_h = 0.0f,
+        .bg_pos_x = layout::BgPosX::Left,
+        .bg_pos_y = layout::BgPosY::Top,
+        .bg_no_repeat = false};
     CHECK(frag.x == 10.0f);
     CHECK(frag.y == 20.0f);
     CHECK(frag.width == 30.0f);
@@ -2909,4 +2915,174 @@ TEST_CASE("border-radius: no rule leaves defaults",
     CHECK(b->border_radius[1] == Catch::Approx(0.0f).margin(0.1f));
     CHECK(b->border_radius[2] == Catch::Approx(0.0f).margin(0.1f));
     CHECK(b->border_radius[3] == Catch::Approx(0.0f).margin(0.1f));
+}
+
+// =============================================================
+// ADR-045: inline background-image + padding-right post-process.
+// =============================================================
+
+namespace {
+
+const layout::LineFragment* find_frag_by_class(
+        const layout::LayoutNode& node, const std::string& cls) {
+    if (node.kind == layout::LayoutKind::InlineContext) {
+        const auto& ctx =
+            static_cast<const layout::LayoutInlineContext&>(node);
+        for (const auto& f : ctx.lines) {
+            if (f.element &&
+                f.element->get_attribute("class") == cls) {
+                return &f;
+            }
+        }
+    } else if (node.kind == layout::LayoutKind::Text) {
+        const auto& lt = static_cast<const layout::LayoutText&>(node);
+        for (const auto& f : lt.lines) {
+            if (f.element &&
+                f.element->get_attribute("class") == cls) {
+                return &f;
+            }
+        }
+    } else if (node.kind == layout::LayoutKind::Box) {
+        const auto& b = static_cast<const layout::LayoutBox&>(node);
+        for (const auto& c : b.children) {
+            if (auto r = find_frag_by_class(*c, cls)) return r;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_CASE("inline bg: background-image URL extracted to fragment",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg)}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_image_url == "x.svg");
+}
+
+TEST_CASE("inline bg: background-size fixed length",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);background-size:16px}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_size_w == Catch::Approx(16.0f).margin(0.1f));
+}
+
+TEST_CASE("inline bg: background-position: center right",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-position:center right}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_pos_x == layout::BgPosX::Right);
+    CHECK(f->bg_pos_y == layout::BgPosY::Center);
+}
+
+TEST_CASE("inline bg: background-position: right center (swapped order)",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-position:right center}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_pos_x == layout::BgPosX::Right);
+    CHECK(f->bg_pos_y == layout::BgPosY::Center);
+}
+
+TEST_CASE("inline bg: background-position: left top (defaults)",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-position:left top}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_pos_x == layout::BgPosX::Left);
+    CHECK(f->bg_pos_y == layout::BgPosY::Top);
+}
+
+TEST_CASE("inline bg: background-position: center (single keyword)",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-position:center}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_pos_x == layout::BgPosX::Center);
+    CHECK(f->bg_pos_y == layout::BgPosY::Center);
+}
+
+TEST_CASE("inline bg: background-repeat: no-repeat",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-repeat:no-repeat}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_no_repeat == true);
+}
+
+TEST_CASE("inline bg: background-repeat: repeat left false (deviation)",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='external' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}"
+        ".external{background-image:url(x.svg);"
+        "background-repeat:repeat}");
+    const auto* f = find_frag_by_class(doc.root, "external");
+    REQUIRE(f != nullptr);
+    // Documented deviation: v1 doesn't tile; repeat -> no-repeat=false.
+    CHECK(f->bg_no_repeat == false);
+}
+
+TEST_CASE("inline bg: no background-image rule -> defaults preserved",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='ext' href='#'>link</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px}");
+    const auto* f = find_frag_by_class(doc.root, "ext");
+    REQUIRE(f != nullptr);
+    CHECK(f->bg_image_url.empty());
+    CHECK(f->bg_size_w == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(f->bg_no_repeat == false);
+}
+
+TEST_CASE("inline bg: padding-right extends fragment width",
+          "[layout][inline-bg][adr-045]") {
+    auto doc = run(
+        "<div><a class='pad' href='#'>X</a></div>",
+        "body,html{margin:0;padding:0}"
+        "div{width:400px;font-size:16px}"
+        ".pad{padding-right:16px}");
+    const auto* f = find_frag_by_class(doc.root, "pad");
+    REQUIRE(f != nullptr);
+    // The fragment text is "X" (single char, ~8px at 16px font).
+    // With padding-right: 16px added, width should be ~24+.
+    CHECK(f->width > 15.0f);
 }
