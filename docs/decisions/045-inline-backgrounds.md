@@ -1,6 +1,6 @@
 # ADR-045: Inline Background Images (background-size / position / repeat)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting), ADR-018 (link state), ADR-034 (background-image on block boxes), ADR-044 (border-radius)
@@ -477,3 +477,118 @@ Wikipedia CSS) is deferred to its own ADR.
    renderable rules (all no-repeat)
 5. **Percentage size / position** -- 0 uses in renderable
    rules
+
+## Implementation
+
+Implemented on `feat/inline-bg` across three commits
+(Commit 1 = parse + fragment fields, Commit 2 = paint,
+Commit 3 = this docs update).
+
+**Scroll-PNG verification: PASSED.** Delta confirmed at the
+External Links section, ~6-8 scroll heights down.
+
+### What shipped
+
+**Commit 1 -- parse + fragment fields:**
+- `LineFragment` gains 6 background fields + 2 keyword enums
+  (`BgPosX`, `BgPosY`)
+- New shared helper `apply_inline_bg_pp()` populates fields
+  from `ComputedStyleMap`
+- Parses `background-image: url(...)`, `background-size`
+  (fixed length; `cover`/`contain`/percentage deferred),
+  `background-position` (keyword pairs, flexible order),
+  `background-repeat` (no-repeat only)
+- **Inline padding-right** honored: extends fragment width,
+  shifts subsequent same-line fragments rightward -- creates
+  the gap the external-link icon draws in
+- **Discovery**: `<a>` recurses as its own `LayoutBox`, so
+  its text goes through the `LayoutText` path (single-element
+  text runs), not `InlineContext`. The helper is called from
+  BOTH paths, matching existing codebase convention
+- 10 new tests in `tests/test_layout.cpp`
+
+**Commit 2 -- paint:**
+- New `paint_inline_image()` helper mirrors `paint_image`
+  but takes `LineFragment` instead of `LayoutBox`
+- Position keywords (`bg_pos_x/y`) resolve in paint against
+  loaded icon dimensions (layout couldn't load images)
+- Size: `bg_size_w > 0` wins; `bg_size_h = 0` aspect-derived
+- `LayoutText` and `InlineContext` cases in `paint_children`
+  draw backgrounds before glyphs (correct z-order)
+
+**Commit 3 (this commit) -- docs:**
+- ADR-045 status -> Implemented
+- Post-ADR-045 note in ADR-034 (inline extension +
+  `mask-image` deferral)
+- README row update
+- CHANGELOG entry
+
+### Visual delta -- verified
+
+**Scroll-PNG verification (External Links section, ~6-8
+scroll heights down)**:
+
+Boxed-arrow icons (16x14px) appear next to external URLs:
+- "Tim Berners-Lee Gives the Web a New Definition [icon]"
+- "List of all HTML elements from all major versions [icon]"
+- "HTML Entities [icon]"
+- "Sean B. Palmer... [icon]"
+- "https://www.w3.org/MarkUp/HTMLPlus/htmlplus_1.html [icon]"
+
+**Zero first-viewport delta**: expected. The lead paragraph
+has no external links; all targets are in article body
+content (History, Markup, External Links sections).
+
+**No false positives**: links like "CERN", "W3C", "WHATWG"
+in the History section appear without icons -- they are
+internal `/wiki/` Wikipedia articles, not `.external` class
+links. Correct behavior.
+
+### Honest scoping note
+
+Measurement reported "242 `.external` elements in article
+HTML". That count included:
+- Wrapper elements (parent containers with compound classes)
+- Mobile-only content (hidden in desktop rendering)
+- Duplicate class matches (element listed both in class
+  attribute and CSS selector)
+
+**Actual visible external-link icon delta: ~15-25 icons**,
+concentrated in the External Links section plus a few inline
+in body prose. The raw 242 count was misleading on visible-
+vs-total.
+
+The delta is real and unambiguous when reached (icon either
+appears next to external link text or doesn't). The raw 242
+was a **count** measurement, not a **visible** measurement --
+same distinction ADR-044's "4+ predicted vs subtle at 2px"
+already established.
+
+### Test count
+
+- Before ADR-045: 562 cases, 2188 assertions
+- After Commit 1: 572 cases, 2224 assertions (+10 / +36)
+- After Commit 2: unchanged (paint verified via scroll PNG)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings. One existing aggregate-init test
+(`test_layout.cpp:734`) updated to include the 6 new
+`LineFragment` fields (silences
+`-Wmissing-field-initializers`). Pre-existing
+`-Wmisleading-indentation` in `render_pipeline.cpp:485`
+untouched.
+
+### Deferred (documented)
+
+- **`mask-image`** (13 of 14 `background-size` rules in
+  Wikipedia CSS) -- separate CSS subsystem, own ADR if
+  needed
+- **`background-size: cover | contain`** -- 0 uses in
+  renderable rules
+- **Percentage `background-size` / `background-position`** --
+  0 uses in renderable rules
+- **`background-repeat: repeat | repeat-x | repeat-y`** --
+  0 uses; all targets use no-repeat
+- **Multi-layer backgrounds** (`url1, url2`) -- 0 uses
+- **`background-clip` / `background-origin`** -- 0 uses
+

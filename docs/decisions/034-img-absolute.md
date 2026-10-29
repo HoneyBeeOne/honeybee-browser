@@ -606,3 +606,31 @@ clipped to the exterior region, so this only affects visual
 when the image extends outside -- rare). Matches CSS:
 background layers (color, image) sit above box-shadow in the
 painting order.
+
+
+## Post-ADR-045 note
+
+ADR-045 extended `background-image` painting from block
+elements (this ADR) to inline elements (`<a>`, `<span>`).
+Where this ADR's `paint_image` draws a background-image
+stretched to fill a `LayoutBox`, ADR-045's
+`paint_inline_image` draws one on a `LineFragment` with
+keyword-based `background-position` resolution.
+
+**Combined effect (ADR-034 + ADR-045)**:
+- Block elements with `background-image` (search icon,
+  feature banners): rendered by `paint_image` (this ADR,
+  unchanged)
+- Inline elements with `background-image` (`.external` links,
+  inline icon spans): rendered by `paint_inline_image`
+  (ADR-045), positioned via keyword resolution against
+  loaded icon dimensions
+
+**Two subsystems remain unrendered** (not this ADR's or
+ADR-045's scope):
+- **`mask-image`** (13 of 14 background-size rules in
+  Wikipedia CSS): a different CSS property (greyscale image
+  used as alpha mask, filled with color). Cairo would need
+  `cairo_mask` or clip + fill. Own ADR if needed.
+- **`background-size: cover | contain`**: deferred by ADR-045
+  (0 uses in renderable rules)
