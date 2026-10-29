@@ -49,7 +49,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 044 | [Border Radius](044-border-radius.md) | `border-radius` + per-corner longhands; rounded corners (visual subtle at 2px, behaviorally complete) |
 | 045 | [Inline Backgrounds](045-inline-backgrounds.md) | `background-image` + size/position/repeat on inline elements; external link icons appear (scroll-PNG verified) |
 | 046 | [Logging Infrastructure](046-logging.md) | Runtime-gated `HB_LOG` with category + level; env vars `HONEYBEE_LOG` / `_LEVEL` / `_FILE` |
-| 047 | [CSS Mask Image](047-mask-image.md) | `mask-image` (fill + alpha mask); issue-box icon and (header-dependent) vector icons |
+| 047 | [CSS Mask Image](047-mask-image.md) | `mask-image` parse + paint (cairo_mask); zero first-viewport delta (all targets in hidden ancestors) |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 

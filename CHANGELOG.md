@@ -139,6 +139,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 572 -> 586 cases, 2224 -> 2263 assertions.
 
+- **CSS mask-image** (ADR-047): `mask-image` parsing +
+  `paint_mask_image` using `cairo_mask`. Applies loaded
+  surface's alpha channel over `background-color` fill
+  (CSS Masking 1 SS5 alpha semantics).
+
+  Supports `-webkit-mask-image` prefixes. `mask-size` (fixed),
+  `mask-position` (keyword pairs), `mask-repeat` (no-repeat).
+  Deferred: `mask-mode: luminance`, `mask-composite`,
+  `mask-border`, `mask-clip`, percentage size/position,
+  repeat variants.
+
+  Visual delta: ZERO first-viewport. All 28 cascade
+  elements with `mask-image` are `.vector-icon` inside
+  `display:none` / `visibility:hidden` ancestors. ADR-032
+  culls them before paint reaches `paint_mask_image`.
+  Infrastructure correct and complete; awaits consumer
+  (ADR-029 header flex layout or dropdown-open feature).
+
+  Two bugs caught by unit tests before commit: (1)
+  use-after-free from returning `const std::string*` into a
+  temporary optional (SIGSEGV on first parse); (2)
+  string-replace collision between ADR-045 and ADR-047
+  loops.
+
+  Test count: 586 -> 598 cases, 2263 -> 2307 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
