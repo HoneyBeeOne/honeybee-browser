@@ -592,3 +592,32 @@ untouched.
 - **Multi-layer backgrounds** (`url1, url2`) -- 0 uses
 - **`background-clip` / `background-origin`** -- 0 uses
 
+
+
+## Post-ADR-047 note
+
+**ADR-045's mask-image deferral is closed by ADR-047.**
+
+ADR-045 shipped `background-image` painting on inline
+elements. It explicitly deferred `mask-image` with the note:
+"different subsystem (clip + fill with color)".
+
+ADR-047 adds that subsystem:
+- 7 new LayoutBox mask fields
+- Parse `mask-image` / `-webkit-mask-image` (URL + data URL
+  forms), `mask-size`, `mask-position`, `mask-repeat`
+- `paint_mask_image` uses `cairo_mask` to apply the loaded
+  surface's alpha channel over `background-color`
+
+**Current first-viewport delta from mask-image: zero.**
+All 28 Wikipedia elements with `mask-image` in the cascade
+are `.vector-icon` inside `display: none` or `visibility:
+hidden` ancestors (ADR-032 culls them before paint). Paint
+infrastructure is correct and ready for ADR-029 header flex
+layout.
+
+**Deferred from ADR-045, still deferred:**
+- `mask-mode: luminance` (ADR-047 alpha-only)
+- `mask-composite`, `mask-border`, `mask-clip`
+- Percentage `mask-size` / `mask-position`
+- `mask-repeat: repeat | repeat-x | repeat-y`

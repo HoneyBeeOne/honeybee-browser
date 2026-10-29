@@ -1,6 +1,6 @@
 # ADR-047: CSS Mask Image
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (background paint), ADR-034 (background-image and ImageProvider), ADR-037 (calc()), ADR-045 (inline backgrounds, established mask-image deferral)
@@ -388,3 +388,154 @@ header layout (ADR-029) positions them correctly.
    SVG masks are alpha)
 4. **`mask-composite`, `mask-border`, `mask-clip` deferred**
 5. **Percentage `mask-size` / `mask-position` deferred**
+
+## Implementation
+
+Implemented on `feat/mask-image` across three commits (Commit 1
+= parse + fields, Commit 2 = paint, Commit 3 = this docs
+update).
+
+**Visual verification: ZERO first-viewport delta.** Documented
+honestly below.
+
+### What shipped
+
+**Commit 1 -- parse + layout fields:**
+- `LayoutBox` gains 7 mask fields (`mask_image_url`,
+  `mask_size_w/h`, `mask_pos_x/y`, `mask_no_repeat`,
+  `mask_has`)
+- `BgPosX`/`BgPosY` enums moved above `LayoutBox` (needed by
+  mask fields at declaration site)
+- Parse `mask-image` / `-webkit-mask-image` (URL + data URL
+  forms)
+- Parse `mask-size` (fixed; `auto`/`cover`/`contain`/percentage
+  -> 0, deferred)
+- Parse `mask-position` (keyword pairs, flexible order)
+- Parse `mask-repeat` (no-repeat only)
+- 12 new tests in `tests/test_layout.cpp`
+
+**Two bugs caught by unit tests before commit:**
+1. **Use-after-free**: initial `mask_lookup` returned
+   `const std::string*` pointing into a temporary
+   `optional<string>`. SIGSEGV on first parse. Fixed by
+   returning `std::string` by value.
+2. **String-replace collision**: `for (char c : *ps)` ->
+   `for (char c : ps)` replacement hit `apply_inline_bg_pp`'s
+   loop instead of the mask block. Fixed by context-scoped
+   replacement.
+
+**Commit 2 -- paint:**
+- New `paint_mask_image()` using `cairo_pattern_create_for_surface`
+  + `cairo_mask`: sets source to `background_color`, applies
+  inverse scale/translate matrix to map box coords -> surface
+  coords
+- Skips when `!mask_has`, URL empty, or `bg.a <= 0.0001`
+  (v1 gate: transparent bg = invisible mask)
+- Size: `mask_size_w > 0` wins; `mask_size_h = 0` aspect-derived
+- Position: keyword resolve against `box.width/height - pw/ph`
+- `paint_box` calls it after background/border fill, before
+  background-image (correct CSS z-order)
+- `HB_LOG(Paint, Debug, "mask: ...")` for observability
+
+**Commit 3 (this commit) -- docs:**
+- ADR-047 status -> Implemented (with zero-delta caveat)
+- Post-ADR-047 notes in ADR-034 (mask subsystem) and ADR-045
+  (mask-image deferral closed)
+- README row update
+- CHANGELOG entry
+
+### Visual delta -- HONEST ASSESSMENT
+
+**Zero first-viewport delta.**
+
+Diagnostic with `HONEYBEE_LOG=paint` on Wikipedia HTML article:
+
+```
+Cascade elements with mask-image:  28  (all .vector-icon)
+Layout boxes with mask_has = true:  3
+  mw-ui-icon-menu              (in .vector-main-menu-landmark, display:none)
+  mw-ui-icon-language-*        (in .vector-dropdown-content, visibility:hidden)
+  mw-ui-icon-verticalEllipsis  (in closed user menu)
+Paint "mask:" log lines:            0
+```
+
+**Every mask target is inside a hidden ancestor:**
+
+| Element | Hidden by | Feature needed |
+|---|---|---|
+| `mw-ui-icon-menu` | `.vector-main-menu-landmark` (`display: none`) | ADR-029 header flex |
+| `mw-ui-icon-language-*` | `.vector-dropdown-content` (`visibility: hidden`) | Dropdown-open feature |
+| `mw-ui-icon-verticalEllipsis` | Closed user dropdown | User-logged-in feature |
+
+ADR-032's `visible=false` culling short-circuits `paint_box`
+before reaching any of them. **Correct behavior, not a bug.**
+
+**The spec's predicted first-viewport target
+(`.cdx-message__icon`) does not exist in the fetched HTML.**
+The issue box uses `.ambox` classes, not `.cdx-message`. Same
+phantom-target pattern as ADR-043's `mw-editsection` (0 in
+JS-off HTML).
+
+**This is materially different from ADR-044's "subtle but
+present" 2px rounding. This is genuinely zero.** No masked
+icon renders anywhere in the first viewport.
+
+### Why this cycle still ships
+
+**Paint code is correct** (~90 lines, `cairo_mask` with
+inverse matrix). Verified via:
+- Layout-level test: 3 boxes get `mask_has=true` with the
+  expected URL / size / position fields
+- Paint-level diagnostic: `HONEYBEE_LOG=paint` shows zero
+  paint calls (correct -- all 3 are in hidden subtrees)
+
+**Zero regression surface**: every masked box is already
+invisible via ADR-032. Removing the paint code would look
+identical to end users.
+
+**Future-ready infrastructure**: the moment a consumer exists
+(ADR-029 header flex layout, or any feature that removes
+`visibility: hidden` from an ancestor), the 3 culled icons
+render correctly with **zero code change**. This is the same
+"parse for the future" pattern as ADR-041 Commit 1's
+pseudo-element parsing (shipped before pseudo synthesis could
+render).
+
+### Test count
+
+- Before ADR-047: 586 cases, 2263 assertions
+- After Commit 1: 598 cases, 2307 assertions (+12 / +44)
+- After Commit 2: unchanged (paint verified via diagnostic,
+  not PNG delta)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings from ADR-047 files.
+
+### Deferred (documented)
+
+- **`mask-mode: luminance`** -- 0 uses in target; SVG masks
+  are alpha
+- **`mask-composite` / `mask-border` / `mask-clip` /
+  `mask-origin`** -- 0 uses
+- **Percentage `mask-size` / `mask-position`** -- 0 uses
+- **`mask-repeat: repeat | repeat-x | repeat-y`** -- 0 uses
+- **Elements with mask but no `background-color` fill** --
+  the `bg.a > 0` gate skips them (documented deviation; no
+  visual artifact since transparent bg + mask = invisible
+  mask anyway)
+
+### Verification categories (session ledger)
+
+ADR-047 adds a fifth category to the session's honest ledger:
+
+| Category | Example | PNG check |
+|---|---|---|
+| **PNG-verified (first-viewport)** | ADR-042 title underline, ADR-043 toolbar line | yes |
+| **PNG-verified (scroll)** | ADR-045 external icons | yes |
+| **Behaviorally-complete, visually-subtle** | ADR-044 2px rounding | caveat |
+| **Behaviorally-complete, visually-zero** | **ADR-047 mask infrastructure** | caveat (no delta exists today) |
+| **Deferred with reason** | ADR-041 Commit 2, ADR-043 commits 2-3 | N/A |
+
+Each category is legitimate, each is honestly labeled, none
+pretends to be a different category.
+

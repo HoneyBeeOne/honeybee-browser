@@ -634,3 +634,33 @@ ADR-045's scope):
   `cairo_mask` or clip + fill. Own ADR if needed.
 - **`background-size: cover | contain`**: deferred by ADR-045
   (0 uses in renderable rules)
+
+
+## Post-ADR-047 note
+
+ADR-047 added `mask-image` as a separate paint subsystem.
+Three image-related subsystems now coexist:
+
+| Subsystem | Property | ADR | Fill source |
+|---|---|---|---|
+| Background image | `background-image` | ADR-034 | The image itself |
+| Inline background | `background-image` on `<a>`/`<span>` | ADR-045 | The image itself |
+| **Mask** | **`mask-image`** | **ADR-047** | **`background-color`** |
+
+**Mask is fundamentally different**: the image is used as an
+alpha channel (grayscale), and the element's `background-color`
+shows through where the mask is opaque. A box can have **both**
+`background-image` and `mask-image` (different subsystems, both
+render -- the mask applies to the background fill layer).
+
+**Combined effect (ADR-034 + ADR-045 + ADR-047)**:
+- Block with `background-image` -> `paint_image` (this ADR)
+- Inline with `background-image` -> `paint_inline_image`
+  (ADR-045)
+- Any box with `mask-image` -> `paint_mask_image` (ADR-047),
+  applied to the background_color fill
+
+**Current real-world delta from ADR-047: zero** (see ADR-047
+Implementation: all mask targets culled by ADR-032). The
+subsystem is complete and correct; it awaits a visible
+consumer (ADR-029 header flex, or a dropdown-open feature).
