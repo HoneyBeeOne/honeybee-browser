@@ -1351,16 +1351,66 @@ LayoutBox layout_element(const dom::Element& el,
         };
 
         if (!fcs.empty()) {
+            // ADR-048: dispatch on flex-wrap. nowrap (default)
+            // preserves ADR-029 single-line behavior byte-for-byte;
+            // wrap activates the multi-line algorithm.
+            const std::string flex_wrap =
+                get_prop("flex-wrap", "nowrap");
+            const bool do_wrap =
+                (flex_wrap == "wrap") && is_row;
+
             const float line_main_start = is_row ? content_x : content_y;
             const float line_cross_start = is_row ? content_y : content_x;
-            const FlexLineResult r = resolve_flex_line(
-                fcs, line_main_start, line_cross_start, content_w,
-                justify, align, is_row, gap);
-            for (auto& fc : fcs) {
-                box.children.push_back(std::move(fc.final_box));
+
+            if (!do_wrap) {
+                // Single-line (identical to ADR-029 pre-ADR-048).
+                const FlexLineResult r = resolve_flex_line(
+                    fcs, line_main_start, line_cross_start, content_w,
+                    justify, align, is_row, gap);
+                for (auto& fc : fcs) {
+                    box.children.push_back(std::move(fc.final_box));
+                }
+                cursor_y = content_y + (is_row ? r.container_cross
+                                                : r.used_main);
+            } else {
+                // ADR-048: multi-line wrap. Break fcs into lines
+                // by accumulated basis + gap vs content_w, resolve
+                // each line independently, stack lines with gap
+                // (v1: gap is used for both axes; align-content
+                // deferred).
+                std::vector<std::vector<FC>> lines;
+                std::vector<FC> current_line;
+                float line_main_sum = 0.0f;
+                for (auto& fc : fcs) {
+                    const float candidate = (current_line.empty()
+                        ? 0.0f : line_main_sum + gap) + fc.basis;
+                    if (!current_line.empty() &&
+                        candidate > content_w) {
+                        lines.push_back(std::move(current_line));
+                        current_line.clear();
+                        line_main_sum = 0.0f;
+                    }
+                    line_main_sum = (current_line.empty()
+                        ? fc.basis : line_main_sum + gap + fc.basis);
+                    current_line.push_back(std::move(fc));
+                }
+                if (!current_line.empty()) {
+                    lines.push_back(std::move(current_line));
+                }
+
+                float cross_cursor = content_y;
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const FlexLineResult r = resolve_flex_line(
+                        lines[i], line_main_start, cross_cursor,
+                        content_w, justify, align, is_row, gap);
+                    for (auto& fc : lines[i]) {
+                        box.children.push_back(std::move(fc.final_box));
+                    }
+                    cross_cursor += r.container_cross;
+                    if (i + 1 < lines.size()) cross_cursor += gap;
+                }
+                cursor_y = cross_cursor;
             }
-            cursor_y = content_y + (is_row ? r.container_cross
-                                            : r.used_main);
         }
 
         flex_handled = true;

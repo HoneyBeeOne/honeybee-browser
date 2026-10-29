@@ -3241,3 +3241,285 @@ TEST_CASE("mask: no mask rule leaves defaults",
     CHECK(m->mask_size_w == Catch::Approx(0.0f).margin(0.1f));
     CHECK(m->mask_no_repeat == false);
 }
+
+// =============================================================
+// ADR-048: flex-wrap multi-line tests.
+// =============================================================
+
+// Helper: collect all direct child boxes of the flex container.
+namespace {
+std::vector<const layout::LayoutBox*> flex_children(
+        const layout::LayoutBox& container) {
+    std::vector<const layout::LayoutBox*> out;
+    for (const auto& c : container.children) {
+        if (c->kind == layout::LayoutKind::Box) {
+            out.push_back(static_cast<const layout::LayoutBox*>(c.get()));
+        }
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("flex-wrap: 3 items wrap to 2 lines (150px each, 300 container)",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div>"
+        "<div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a,.b,.c{flex:0 0 150px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // Line 1: a, b at y=0. Line 2: c at y=20.
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[1]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[2]->y == Catch::Approx(20.0f).margin(1.0f));
+    // Container height = 2 lines * 20 = 40.
+    CHECK(f->height == Catch::Approx(40.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: 5 items (150px) wrap to 3 lines",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div><div class='d'>D</div>"
+        "<div class='e'>E</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a,.b,.c,.d,.e{flex:0 0 150px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 5);
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[1]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[2]->y == Catch::Approx(20.0f).margin(1.0f));
+    CHECK(children[3]->y == Catch::Approx(20.0f).margin(1.0f));
+    CHECK(children[4]->y == Catch::Approx(40.0f).margin(1.0f));
+    CHECK(f->height == Catch::Approx(60.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: single item fits -> 1 line (regression)",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'><div class='a'>A</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a{flex:0 0 100px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 1);
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(f->height == Catch::Approx(20.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: all items fit -> 1 line (regression)",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:400px;gap:0}"
+        ".a,.b,.c{flex:0 0 100px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    for (const auto* c : children) {
+        CHECK(c->y == Catch::Approx(0.0f).margin(1.0f));
+    }
+    CHECK(f->height == Catch::Approx(20.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: nowrap with overflow stays 1 line (regression)",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:nowrap;width:200px;gap:0}"
+        ".a,.b,.c{flex:0 0 100px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // All on one line even though total 300 > 200 (nowrap).
+    for (const auto* c : children) {
+        CHECK(c->y == Catch::Approx(0.0f).margin(1.0f));
+    }
+}
+
+TEST_CASE("flex-wrap: line heights = max item height per line",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a{flex:0 0 150px;height:30px}"
+        ".b{flex:0 0 150px;height:20px}"
+        ".c{flex:0 0 150px;height:25px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // Line 1 = a+b, cross = 30. Line 2 = c, cross = 25.
+    // Container height = 30 + 25 = 55.
+    CHECK(f->height == Catch::Approx(55.0f).margin(2.0f));
+    // c should start at y=30 (bottom of line 1).
+    CHECK(children[2]->y == Catch::Approx(30.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: row-gap between lines (via gap fallback)",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:10px}"
+        ".a,.b,.c{flex:0 0 150px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // gap=10 means a=150, then a+gap+b=310 > 300 -> wrap. So each
+    // line has 1 item.
+    // Line 1 = a (y=0, h=20). Row-gap=10. Line 2 = b (y=30).
+    // Line 2 = c on line 3 (y=60).
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(2.0f));
+    CHECK(children[1]->y == Catch::Approx(30.0f).margin(2.0f));
+    CHECK(children[2]->y == Catch::Approx(60.0f).margin(2.0f));
+    CHECK(f->height == Catch::Approx(80.0f).margin(3.0f));
+}
+
+TEST_CASE("flex-wrap: justify-content center per line",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;justify-content:center;"
+        "width:300px;gap:0}"
+        ".a,.b{flex:0 0 100px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 2);
+    // One line, centered: (300 - 200) / 2 = 50 offset.
+    CHECK(children[0]->x == Catch::Approx(50.0f).margin(2.0f));
+    CHECK(children[1]->x == Catch::Approx(150.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: align-items center per line",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;align-items:center;"
+        "width:300px;gap:0}"
+        ".a{flex:0 0 150px;height:40px}"
+        ".b{flex:0 0 150px;height:20px}"
+        ".c{flex:0 0 150px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // Line 1 = a(40) + b(20), cross = 40. b centered: y = 10.
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(2.0f));
+    CHECK(children[1]->y == Catch::Approx(10.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: explicit basis triggers wrap",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a{flex:0 0 200px;height:20px}"
+        ".b{flex:0 0 200px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 2);
+    // 200 + 200 = 400 > 300 -> wrap. Each item alone on its line.
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(2.0f));
+    CHECK(children[1]->y == Catch::Approx(20.0f).margin(2.0f));
+    CHECK(f->height == Catch::Approx(40.0f).margin(2.0f));
+}
+
+TEST_CASE("flex-wrap: empty container with wrap -> zero dims",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'></div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(flex_children(*f).empty());
+    CHECK(f->height == Catch::Approx(0.0f).margin(1.0f));
+}
+
+TEST_CASE("flex-wrap: 3 items 100px in 300 container -> 1 line",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a,.b,.c{flex:0 0 100px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // Exact fit: 100*3 = 300 = content_w. No wrap.
+    for (const auto* c : children) {
+        CHECK(c->y == Catch::Approx(0.0f).margin(1.0f));
+    }
+}
+
+TEST_CASE("flex-wrap: flex-grow distributes per line",
+          "[layout][flex][flex-wrap][adr-048]") {
+    auto doc = run(
+        "<div class='f'>"
+        "<div class='a'>A</div><div class='b'>B</div>"
+        "<div class='c'>C</div>"
+        "</div>",
+        "body,html{margin:0;padding:0}"
+        ".f{display:flex;flex-wrap:wrap;width:300px;gap:0}"
+        ".a,.b,.c{flex:1 0 150px;height:20px}");
+    const auto* f = find_class(doc.root, "f");
+    REQUIRE(f != nullptr);
+    auto children = flex_children(*f);
+    REQUIRE(children.size() == 3);
+    // Line 1: a+b fill 300 -> each 150 (basis 150, no grow
+    // effect). Line 2: c alone fills 300.
+    CHECK(children[0]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[1]->y == Catch::Approx(0.0f).margin(1.0f));
+    CHECK(children[2]->y == Catch::Approx(20.0f).margin(2.0f));
+    // c grows to fill 300.
+    CHECK(children[2]->width == Catch::Approx(300.0f).margin(2.0f));
+}
