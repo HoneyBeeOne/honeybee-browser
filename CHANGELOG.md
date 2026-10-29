@@ -187,6 +187,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 598 -> 611 cases, 2307 -> 2386 assertions.
 
+- **@supports conditional rules** (ADR-050): `@supports`
+  blocks are now parsed and evaluated against a hardcoded
+  capability table. 73 blocks in Wikipedia CSS reach the
+  cascade for the first time. Includes `not`, `or`, `and`,
+  `selector(...)`, and unsupported-value checks (`round`,
+  `dotted`, `dashed`).
+
+  Critical correctness: `@supports not (mask-image)` blocks
+  contain `background-image` fallbacks that would double-render
+  icons with ADR-047's mask rules. Evaluator correctly excludes
+  them.
+
+  Layout-tree verified: `.vector-pinned-container` now
+  `display: block` (was `none`). First-viewport PNG delta
+  deferred pending ancestor culling.
+
+  Test count: 611 -> 626 cases, 2386 -> 2407 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
