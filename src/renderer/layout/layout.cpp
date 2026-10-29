@@ -1224,22 +1224,42 @@ LayoutBox layout_element(const dom::Element& el,
             fcs.push_back(std::move(fc));
         }
 
-        if (!fcs.empty()) {
-            // Sum basis + gaps.
-            float total_basis = gap * static_cast<float>(fcs.size() - 1);
-            for (const auto& fc : fcs) total_basis += fc.basis;
+        // ADR-048: extracted per-line flex resolution. Runs
+        // Phases B-E (grow/shrink, justify positioning, per-item
+        // layout, cross alignment) with an explicit line context
+        // so single-line and multi-line both share one
+        // implementation. Returns container cross extent +
+        // used main extent for the caller to advance cursor_y
+        // (single-line) or stack lines (multi-line, Commit 2).
+        struct FlexLineResult {
+            float container_cross;
+            float used_main;
+        };
+        auto resolve_flex_line = [&](std::vector<FC>& line_fcs,
+                                      float line_main_start,
+                                      float line_cross_start,
+                                      float line_main_size,
+                                      const std::string& justify_str,
+                                      const std::string& align_str,
+                                      bool line_is_row,
+                                      float line_gap) -> FlexLineResult {
+            if (line_fcs.empty()) return {0.0f, 0.0f};
 
-            // Grow / shrink (row only; column's container main is
-            // intrinsic so no distribution applies).
-            if (is_row) {
-                const float free = content_w - total_basis;
+            // Phase B: flex resolution (grow/shrink row only;
+            // column's container main is intrinsic).
+            float total_basis = line_gap *
+                static_cast<float>(line_fcs.size() - 1);
+            for (const auto& fc : line_fcs) total_basis += fc.basis;
+
+            if (line_is_row) {
+                const float free = line_main_size - total_basis;
                 if (free < 0.0f) {
                     float total_shrink = 0.0f;
-                    for (const auto& fc : fcs) {
+                    for (const auto& fc : line_fcs) {
                         total_shrink += fc.shrink * fc.basis;
                     }
                     if (total_shrink > 0.0f) {
-                        for (auto& fc : fcs) {
+                        for (auto& fc : line_fcs) {
                             const float amt =
                                 (fc.shrink * fc.basis / total_shrink) *
                                 (-free);
@@ -1249,9 +1269,11 @@ LayoutBox layout_element(const dom::Element& el,
                     }
                 } else if (free > 0.0f) {
                     float total_grow = 0.0f;
-                    for (const auto& fc : fcs) total_grow += fc.grow;
+                    for (const auto& fc : line_fcs) {
+                        total_grow += fc.grow;
+                    }
                     if (total_grow > 0.0f) {
-                        for (auto& fc : fcs) {
+                        for (auto& fc : line_fcs) {
                             fc.final_main =
                                 fc.basis +
                                 (fc.grow / total_grow) * free;
@@ -1260,74 +1282,134 @@ LayoutBox layout_element(const dom::Element& el,
                 }
             }
 
-            // Remaining after resolution, for justify positioning.
-            float used_main = gap * static_cast<float>(fcs.size() - 1);
-            for (const auto& fc : fcs) used_main += fc.final_main;
-            const float remaining = is_row
-                ? std::max(0.0f, content_w - used_main) : 0.0f;
+            // Phase C: justify positioning.
+            float used_main = line_gap *
+                static_cast<float>(line_fcs.size() - 1);
+            for (const auto& fc : line_fcs) used_main += fc.final_main;
+            const float remaining = line_is_row
+                ? std::max(0.0f, line_main_size - used_main) : 0.0f;
 
-            // Main-axis start + effective gap per justify-content.
-            float main_cursor = is_row ? content_x : content_y;
-            float effective_gap = gap;
+            float main_cursor = line_main_start;
+            float effective_gap = line_gap;
             if (remaining > 0.0f) {
-                if (justify == "flex-end" || justify == "end") {
+                if (justify_str == "flex-end" || justify_str == "end") {
                     main_cursor += remaining;
-                } else if (justify == "center") {
+                } else if (justify_str == "center") {
                     main_cursor += remaining / 2.0f;
-                } else if (justify == "space-between" &&
-                           fcs.size() > 1) {
+                } else if (justify_str == "space-between" &&
+                           line_fcs.size() > 1) {
                     effective_gap += remaining /
-                        static_cast<float>(fcs.size() - 1);
-                } else if (justify == "space-around") {
+                        static_cast<float>(line_fcs.size() - 1);
+                } else if (justify_str == "space-around") {
                     const float around =
-                        remaining / static_cast<float>(fcs.size());
+                        remaining / static_cast<float>(line_fcs.size());
                     main_cursor += around / 2.0f;
                     effective_gap += around;
                 }
             }
 
-            // Second pass: final layout per child.
+            // Phase D: layout per item + track cross extent.
             float container_cross = 0.0f;
-            for (auto& fc : fcs) {
-                const float cw = is_row ? fc.final_main : content_w;
-                const float x = is_row ? main_cursor : content_x;
-                const float y = is_row ? 0.0f : main_cursor;
+            for (auto& fc : line_fcs) {
+                const float cw = line_is_row ? fc.final_main
+                                             : line_main_size;
+                const float x = line_is_row ? main_cursor
+                                            : line_cross_start;
+                const float y = line_is_row ? 0.0f : main_cursor;
 
                 fc.final_box = std::make_unique<LayoutBox>(
                     layout_element(*fc.el, styles, measurer, x, y, cw,
                                    own_font_size, root_font_size,
                                    own_dir, image_dims));
-                const float cross_size =
-                    is_row ? fc.final_box->height : fc.final_box->width;
+                const float cross_size = line_is_row
+                    ? fc.final_box->height : fc.final_box->width;
                 if (cross_size > container_cross) {
                     container_cross = cross_size;
                 }
                 main_cursor += fc.final_main + effective_gap;
             }
 
-            // Cross-axis alignment + append (row only; column's
+            // Phase E: cross-axis alignment (row only; column's
             // align-items deferred per ADR-029).
-            if (is_row) {
-                for (auto& fc : fcs) {
+            if (line_is_row) {
+                for (auto& fc : line_fcs) {
                     float cross_off = 0.0f;
-                    if (align == "flex-end") {
+                    if (align_str == "flex-end") {
                         cross_off = container_cross -
                                     fc.final_box->height;
-                    } else if (align == "center") {
+                    } else if (align_str == "center") {
                         cross_off = (container_cross -
                                      fc.final_box->height) / 2.0f;
                     }
                     // stretch: no-op (natural height, top-aligned) —
                     // documented v1 limitation.
-                    shift_subtree_y(*fc.final_box, content_y + cross_off);
-                    box.children.push_back(std::move(fc.final_box));
+                    shift_subtree_y(*fc.final_box,
+                                    line_cross_start + cross_off);
                 }
-                cursor_y = content_y + container_cross;
-            } else {
+            }
+            return {container_cross, used_main};
+        };
+
+        if (!fcs.empty()) {
+            // ADR-048: dispatch on flex-wrap. nowrap (default)
+            // preserves ADR-029 single-line behavior byte-for-byte;
+            // wrap activates the multi-line algorithm.
+            const std::string flex_wrap =
+                get_prop("flex-wrap", "nowrap");
+            const bool do_wrap =
+                (flex_wrap == "wrap") && is_row;
+
+            const float line_main_start = is_row ? content_x : content_y;
+            const float line_cross_start = is_row ? content_y : content_x;
+
+            if (!do_wrap) {
+                // Single-line (identical to ADR-029 pre-ADR-048).
+                const FlexLineResult r = resolve_flex_line(
+                    fcs, line_main_start, line_cross_start, content_w,
+                    justify, align, is_row, gap);
                 for (auto& fc : fcs) {
                     box.children.push_back(std::move(fc.final_box));
                 }
-                cursor_y = content_y + used_main;
+                cursor_y = content_y + (is_row ? r.container_cross
+                                                : r.used_main);
+            } else {
+                // ADR-048: multi-line wrap. Break fcs into lines
+                // by accumulated basis + gap vs content_w, resolve
+                // each line independently, stack lines with gap
+                // (v1: gap is used for both axes; align-content
+                // deferred).
+                std::vector<std::vector<FC>> lines;
+                std::vector<FC> current_line;
+                float line_main_sum = 0.0f;
+                for (auto& fc : fcs) {
+                    const float candidate = (current_line.empty()
+                        ? 0.0f : line_main_sum + gap) + fc.basis;
+                    if (!current_line.empty() &&
+                        candidate > content_w) {
+                        lines.push_back(std::move(current_line));
+                        current_line.clear();
+                        line_main_sum = 0.0f;
+                    }
+                    line_main_sum = (current_line.empty()
+                        ? fc.basis : line_main_sum + gap + fc.basis);
+                    current_line.push_back(std::move(fc));
+                }
+                if (!current_line.empty()) {
+                    lines.push_back(std::move(current_line));
+                }
+
+                float cross_cursor = content_y;
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const FlexLineResult r = resolve_flex_line(
+                        lines[i], line_main_start, cross_cursor,
+                        content_w, justify, align, is_row, gap);
+                    for (auto& fc : lines[i]) {
+                        box.children.push_back(std::move(fc.final_box));
+                    }
+                    cross_cursor += r.container_cross;
+                    if (i + 1 < lines.size()) cross_cursor += gap;
+                }
+                cursor_y = cross_cursor;
             }
         }
 
