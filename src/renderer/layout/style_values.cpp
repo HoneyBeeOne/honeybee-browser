@@ -64,7 +64,7 @@ float parse_px(std::string_view s) {
 // at-parse-time. Unitless operands stay unitless. Final Number
 // results are treated as px (documented limitation).
 //
-// Deferred (per ADR-037): vh/vw/vmin/vmax (need viewport_height
+// vh/vw/vmin/vmax resolved per ADR-051 against ctx.viewport_h/w.
 // in LengthContext); vertical percentages inside calc.
 // =============================================================
 
@@ -143,6 +143,18 @@ MathVal parse_operand(std::string_view s, size_t& pos,
         out.value = (n / 100.0f) * ctx.parent_content_width;
     } else if (unit_part == "pt") {
         out.value = n * (96.0f / 72.0f);
+    } else if (unit_part == "vh") {
+        // ADR-051: viewport units inside math expressions. Same
+        // resolution as parse_length's VH/VW/VMIN/VMAX cases.
+        out.value = (n / 100.0f) * ctx.viewport_h;
+    } else if (unit_part == "vw") {
+        out.value = (n / 100.0f) * ctx.viewport_w;
+    } else if (unit_part == "vmin") {
+        out.value = (n / 100.0f) * std::min(ctx.viewport_w,
+                                             ctx.viewport_h);
+    } else if (unit_part == "vmax") {
+        out.value = (n / 100.0f) * std::max(ctx.viewport_w,
+                                             ctx.viewport_h);
     } else {
         return out;
     }
@@ -399,15 +411,26 @@ float parse_length(std::string_view s, const LengthContext& ctx) {
 
     if (has_internal_ws(s)) return 0.0f;
 
-    enum Unit { PX, EM, REM, PCT } unit;
+    enum Unit { PX, EM, REM, PCT, VH, VW, VMIN, VMAX } unit;
     size_t suffix_len = 0;
 
-    if (ends_with(s, "px")) {
+    // ADR-051: viewport units. vmin/vmax (4 chars) checked
+    // before vh/vw (2 chars) since "vmin"/"vmax" don't end in
+    // "vh"/"vw" -- but ordering longest-first is defensive.
+    if (ends_with(s, "vmin")) {
+        unit = VMIN; suffix_len = 4;
+    } else if (ends_with(s, "vmax")) {
+        unit = VMAX; suffix_len = 4;
+    } else if (ends_with(s, "px")) {
         unit = PX; suffix_len = 2;
     } else if (ends_with(s, "rem")) {
         unit = REM; suffix_len = 3;
     } else if (ends_with(s, "em")) {
         unit = EM; suffix_len = 2;
+    } else if (ends_with(s, "vh")) {
+        unit = VH; suffix_len = 2;
+    } else if (ends_with(s, "vw")) {
+        unit = VW; suffix_len = 2;
     } else if (ends_with(s, "%")) {
         unit = PCT; suffix_len = 1;
     } else {
@@ -436,6 +459,16 @@ float parse_length(std::string_view s, const LengthContext& ctx) {
             return n * ctx.root_font_size;
         case PCT:
             return (n / 100.0f) * ctx.parent_content_width;
+        case VH:
+            return (n / 100.0f) * ctx.viewport_h;
+        case VW:
+            return (n / 100.0f) * ctx.viewport_w;
+        case VMIN:
+            return (n / 100.0f) * std::min(ctx.viewport_w,
+                                            ctx.viewport_h);
+        case VMAX:
+            return (n / 100.0f) * std::max(ctx.viewport_w,
+                                            ctx.viewport_h);
     }
     return 0.0f;
 }
