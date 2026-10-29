@@ -86,6 +86,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 551 -> 562 cases, 2125 -> 2188 assertions.
 
+- **Inline background images** (ADR-045): `background-image` on
+  inline elements (`<a>`, `<span>`) now renders. Supports
+  `background-size` (fixed length), `background-position`
+  (keyword pairs, flexible order), `background-repeat`
+  (no-repeat only), and inline `padding-right` (fragment
+  width extended, subsequent same-line fragments shifted).
+
+  **Visible delta (scroll-PNG verified)**: external link
+  icons (16x14px boxed arrows) appear next to external URLs
+  in Wikipedia article body -- verified at External Links
+  section, ~6-8 scroll heights down. Zero first-viewport
+  delta (lead has no external links, expected).
+
+  Honest scoping: measurement reported 242 `.external`
+  elements in HTML, but that count included wrappers,
+  mobile-only content, and compound classes. Actual visible
+  icon delta: ~15-25, concentrated in External Links section
+  plus a few inline in body prose.
+
+  Deferred: `mask-image` (13 of 14 background-size rules --
+  separate subsystem), `background-size: cover | contain`,
+  percentage size/position, `background-repeat: repeat`,
+  multi-layer backgrounds, `background-clip` /
+  `background-origin`.
+
+  Test count: 562 -> 572 cases, 2188 -> 2224 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
