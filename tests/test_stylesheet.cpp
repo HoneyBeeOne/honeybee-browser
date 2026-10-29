@@ -1015,3 +1015,130 @@ TEST_CASE("border-width: 5px still expands (regression, ADR-012)",
         REQUIRE(d.value == "5px");
     }
 }
+
+// =============================================================
+// ADR-050: @supports conditional rules
+// =============================================================
+
+TEST_CASE("@supports (display: grid) includes rules",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (display: grid) { .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property == "color");
+}
+
+TEST_CASE("@supports (display: block) includes rules",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (display: block) { .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@supports (width: round(...)) drops block (unsupported value)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (width: round(1px, 1px)) { .x { color: red } }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports not (width: round(...)) includes (not of unsupported)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports not (width: round(1px, 1px)) { .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@supports (mask-image: none) includes (supported)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (mask-image: none) { .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@supports not (mask-image: none) drops (fallback excluded)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports not (mask-image: none) { .x { color: red } }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports (A) or (B) mask case includes",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (-webkit-mask-image: none) or (mask-image: none) {"
+        " .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@supports not ((A) or (B)) mask case drops (critical)",
+          "[css][stylesheet][supports][adr-050]") {
+    // Load-bearing case: prevents double-rendered icons when
+    // ADR-047's mask-image rules coexist with background-image
+    // fallbacks. `not ((A) or (B))` when both supported must
+    // yield `not true` = false.
+    auto sheet = Stylesheet::parse(
+        "@supports not ((-webkit-mask-image: none) or (mask-image: none)) {"
+        " .x { color: red } }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports (text-decoration: underline dotted) drops (dotted unsupported)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (text-decoration: underline dotted) {"
+        " .x { color: red } }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports not selector(:focus-visible) includes with parseable inner",
+          "[css][stylesheet][supports][adr-050]") {
+    // :focus-visible is unsupported by ADR-018, so `not` is true
+    // and the block fires. Use :hover (supported) inside to
+    // isolate the gate from downstream selector parse.
+    auto sheet = Stylesheet::parse(
+        "@supports not selector(:focus-visible) { .x:hover { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@supports selector(:hover) includes (:hover supported)",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports selector(:hover) { .x { color: red } }");
+    REQUIRE(sheet.rules.size() == 1);
+}
+
+TEST_CASE("@media { @supports } propagates MediaQuery",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@media (min-width: 100px) {"
+        " @supports (display: grid) { .x { color: red } } }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].media.has_value());
+    REQUIRE(sheet.rules[0].media->min_width_px.has_value());
+    CHECK(*sheet.rules[0].media->min_width_px == 100.0f);
+}
+
+TEST_CASE("@supports with empty body yields no rules",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (display: grid) { }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports with malformed prelude drops block",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports foo { .x { color: red } }");
+    REQUIRE(sheet.rules.empty());
+}
+
+TEST_CASE("@supports (display: grid) with non-trivial rule body preserved",
+          "[css][stylesheet][supports][adr-050]") {
+    auto sheet = Stylesheet::parse(
+        "@supports (display: grid) {"
+        " .pinned { display: block; height: 100px; } }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 2);
+}

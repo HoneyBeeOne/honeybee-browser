@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cctype>
+#include <unordered_set>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -648,6 +649,186 @@ bool starts_with_ci(std::string_view s, std::size_t i, std::string_view prefix) 
     return true;
 }
 
+// =============================================================
+// ADR-050: @supports feature-query evaluator + capability table
+// =============================================================
+
+const std::unordered_set<std::string>& supported_properties() {
+    static const std::unordered_set<std::string> s = {
+        "display", "visibility", "opacity",
+        "margin", "padding",
+        "margin-left", "margin-right", "margin-top", "margin-bottom",
+        "padding-left", "padding-right", "padding-top", "padding-bottom",
+        "border", "border-width", "border-style", "border-color",
+        "border-top", "border-right", "border-bottom", "border-left",
+        "border-radius", "border-top-left-radius", "border-top-right-radius",
+        "border-bottom-right-radius", "border-bottom-left-radius",
+        "box-shadow",
+        "width", "height", "min-width", "max-width",
+        "min-height", "max-height",
+        "color", "background", "background-image", "background-color",
+        "background-size", "background-position", "background-repeat",
+        "mask-image", "-webkit-mask-image",
+        "mask-size", "-webkit-mask-size",
+        "mask-position", "-webkit-mask-position",
+        "mask-repeat", "-webkit-mask-repeat",
+        "font", "font-size", "font-family", "font-weight", "font-style",
+        "line-height", "text-align", "text-decoration",
+        "overflow", "overflow-x", "overflow-y",
+        "position", "top", "right", "bottom", "left", "z-index",
+        "flex", "flex-grow", "flex-shrink", "flex-basis",
+        "flex-direction", "flex-wrap", "justify-content",
+        "align-items", "align-content",
+        "grid", "grid-template", "grid-template-columns",
+        "grid-template-rows", "grid-template-areas", "grid-area",
+        "gap", "column-gap", "row-gap",
+    };
+    return s;
+}
+
+const std::unordered_set<std::string>& supported_pseudos() {
+    static const std::unordered_set<std::string> s = {
+        ":link", ":visited", ":hover", ":root",
+        ":first-child", ":last-child", ":only-child", ":empty",
+        ":first-of-type", ":last-of-type", ":only-of-type",
+        ":nth-child", ":nth-last-child", ":nth-of-type",
+        ":nth-last-of-type",
+        ":not", ":is", ":where", ":lang",
+    };
+    return s;
+}
+
+// Values whose syntax the engine does not support (drawn as if
+// supported would produce wrong output). Matches the deferral
+// lists in ADR-040 (dashed/dotted borders) and ADR-037 (round/
+// sqrt/sin/cos/tan math functions).
+bool unsupported_value(std::string_view val) {
+    static const char* kBad[] = {
+        "round(", "sqrt(", "sin(", "cos(", "tan(",
+        "dotted", "dashed",
+    };
+    for (const char* bad : kBad) {
+        if (val.find(bad) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+// Evaluate a single "prop: value" feature test.
+bool feature_query_single(std::string_view s) {
+    int depth = 0;
+    std::size_t colon = std::string_view::npos;
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        if (s[k] == '(') ++depth;
+        else if (s[k] == ')') { if (depth > 0) --depth; }
+        else if (s[k] == ':' && depth == 0) { colon = k; break; }
+    }
+    if (colon == std::string_view::npos) return false;
+    std::string prop = trim(s.substr(0, colon));
+    std::string val = trim(s.substr(colon + 1));
+    if (prop.empty()) return false;
+    if (!supported_properties().count(prop)) return false;
+    if (unsupported_value(val)) return false;
+    return true;
+}
+
+// Find a top-level " or " / " and " keyword (paren depth 0,
+// surrounded by whitespace).
+std::size_t find_top_level_kw(std::string_view s, std::string_view kw) {
+    int depth = 0;
+    for (std::size_t k = 0; k + kw.size() <= s.size(); ++k) {
+        char c = s[k];
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth == 0 && s.substr(k, kw.size()) == kw) {
+            bool left_ok = (k == 0) ||
+                std::isspace(static_cast<unsigned char>(s[k - 1]));
+            bool right_ok = (k + kw.size() == s.size()) ||
+                std::isspace(static_cast<unsigned char>(s[k + kw.size()]));
+            if (left_ok && right_ok) return k;
+        }
+    }
+    return std::string_view::npos;
+}
+
+// Evaluate an @supports prelude: handles not / or / and /
+// selector(...) / (prop: value). Unsupported or malformed
+// conditions return false (block dropped, safe default).
+bool feature_query_supported(std::string_view prelude_view) {
+    std::string prelude = trim(prelude_view);
+    if (prelude.empty()) return false;
+
+    // "not X"
+    if (starts_with_ci(prelude, 0, "not ")) {
+        std::string rest =
+            trim(std::string_view(prelude).substr(4));
+        return !feature_query_supported(rest);
+    }
+
+    // Top-level " or "
+    if (std::size_t pos = find_top_level_kw(prelude, "or");
+        pos != std::string_view::npos) {
+        std::string left =
+            trim(std::string_view(prelude).substr(0, pos));
+        std::string right =
+            trim(std::string_view(prelude).substr(pos + 2));
+        return feature_query_supported(left)
+            || feature_query_supported(right);
+    }
+
+    // Top-level " and "
+    if (std::size_t pos = find_top_level_kw(prelude, "and");
+        pos != std::string_view::npos) {
+        std::string left =
+            trim(std::string_view(prelude).substr(0, pos));
+        std::string right =
+            trim(std::string_view(prelude).substr(pos + 3));
+        return feature_query_supported(left)
+            && feature_query_supported(right);
+    }
+
+    // selector(...)
+    if (starts_with_ci(prelude, 0, "selector(")) {
+        if (!prelude.empty() && prelude.back() == ')' &&
+            prelude.size() >= 10) {
+            std::string inner = trim(
+                std::string_view(prelude).substr(9, prelude.size() - 10));
+            if (!inner.empty() && inner[0] == ':') {
+                return supported_pseudos().count(inner) > 0;
+            }
+        }
+        return false;
+    }
+
+    // Single (prop: value) wrapped in parens: strip outer parens,
+    // then evaluate as feature.
+    if (!prelude.empty() && prelude.front() == '(' &&
+        prelude.back() == ')') {
+        int depth = 0;
+        std::size_t match_end = std::string_view::npos;
+        for (std::size_t k = 0; k < prelude.size(); ++k) {
+            if (prelude[k] == '(') ++depth;
+            else if (prelude[k] == ')') {
+                --depth;
+                if (depth == 0) { match_end = k; break; }
+            }
+        }
+        if (match_end == prelude.size() - 1) {
+            std::string inner = trim(
+                std::string_view(prelude).substr(1, prelude.size() - 2));
+            // Recurse (not single): inner may contain " or " /
+            // " and " at depth 0 after outer parens are stripped.
+            // Without this, `not ((A) or (B))` returns
+            // not(false)=true instead of not(true)=false, which
+            // would double-render icons (ADR-047 mask +
+            // fallback background-image).
+            return feature_query_supported(inner);
+        }
+    }
+
+    // Fallback: unparenthesized single feature.
+    return feature_query_single(prelude);
+}
+
 // ADR-027: parse a length that may be `Npx` or `calc(Npx +/- Mpx)`.
 // Returns nullopt on anything else (mixed units, more than one
 // operation, non-px units, malformed expressions). This narrower
@@ -781,6 +962,13 @@ bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
 void split_declarations(std::string_view block,
                         std::vector<Declaration>& out);
 
+// ADR-050: forward declaration. parse_media_block calls
+// parse_supports_block recursively for nested @supports; the
+// definition comes right after parse_media_block.
+void parse_supports_block(std::string_view stripped, std::size_t& i,
+                          Stylesheet& result,
+                          std::optional<MediaQuery> outer_media);
+
 // ADR-027: parse an @media block starting at `i` (which points at
 // '@'). Extracts its body as Rules with a MediaQuery attached. If
 // the prelude is unsupported, the whole block is dropped (no rules
@@ -819,11 +1007,18 @@ void parse_media_block(std::string_view stripped, std::size_t& i,
         while (j < body.size() && is_ws(body[j])) ++j;
         if (j >= body.size()) break;
 
-        // Nested at-rule: skip (we don't support nested @media).
+        // Nested at-rule. ADR-050: @supports inside @media is
+        // recursively parsed with the surrounding MediaQuery
+        // propagated. Other nested at-rules (nested @media,
+        // @import, etc.) still skip.
         if (body[j] == '@') {
-            std::size_t skip = j;
-            skip_at_rule(body, skip);
-            j = skip;
+            if (starts_with_ci(body, j, "@supports")) {
+                parse_supports_block(body, j, result, mq);
+            } else {
+                std::size_t skip = j;
+                skip_at_rule(body, skip);
+                j = skip;
+            }
             continue;
         }
 
@@ -857,6 +1052,87 @@ void parse_media_block(std::string_view stripped, std::size_t& i,
         rule.selectors = std::move(*selectors);
         split_declarations(decl_block, rule.declarations);
         rule.media = mq;
+        result.rules.push_back(std::move(rule));
+    }
+}
+
+// ADR-050: parse an @supports block starting at `i` (which points
+// at '@'). Evaluates the prelude's feature query; if true, parses
+// the block's rules with the supplied outer MediaQuery (nullopt
+// for top-level, populated when called recursively from
+// parse_media_block). If false, the whole block is dropped.
+void parse_supports_block(std::string_view stripped, std::size_t& i,
+                          Stylesheet& result,
+                          std::optional<MediaQuery> outer_media) {
+    // Skip "@supports" (9 chars).
+    i += 9;
+
+    // Read prelude text up to '{'.
+    const std::size_t prelude_start = i;
+    while (i < stripped.size() && stripped[i] != '{') ++i;
+    if (i >= stripped.size()) return;
+    const std::string prelude = trim(
+        stripped.substr(prelude_start, i - prelude_start));
+    ++i;  // skip '{'
+
+    // Find matching '}'.
+    const std::size_t body_start = i;
+    int depth = 1;
+    while (i < stripped.size() && depth > 0) {
+        if (stripped[i] == '{') ++depth;
+        else if (stripped[i] == '}') --depth;
+        ++i;
+    }
+    if (depth > 0) return;
+    const std::string_view body =
+        stripped.substr(body_start, i - 1 - body_start);
+
+    // Feature gate: drop the block entirely on false.
+    if (!feature_query_supported(prelude)) return;
+
+    // Parse rules inside the body.
+    std::size_t j = 0;
+    while (j < body.size()) {
+        while (j < body.size() && is_ws(body[j])) ++j;
+        if (j >= body.size()) break;
+
+        // Nested at-rule: nested @supports is deferred (0 uses);
+        // nested @media is unsupported. Skip.
+        if (body[j] == '@') {
+            std::size_t skip = j;
+            skip_at_rule(body, skip);
+            j = skip;
+            continue;
+        }
+
+        const std::size_t selector_start = j;
+        while (j < body.size() && body[j] != '{' && body[j] != '}') ++j;
+        if (j >= body.size()) break;
+        if (body[j] == '}') { ++j; continue; }
+
+        const std::string selector_text = trim(
+            body.substr(selector_start, j - selector_start));
+        ++j;
+
+        const std::size_t decl_start = j;
+        int decl_depth = 1;
+        while (j < body.size() && decl_depth > 0) {
+            if (body[j] == '{') ++decl_depth;
+            else if (body[j] == '}') --decl_depth;
+            ++j;
+        }
+        if (decl_depth > 0) break;
+        const std::string_view decl_block =
+            body.substr(decl_start, j - 1 - decl_start);
+
+        if (selector_text.empty()) continue;
+        auto selectors = SelectorList::parse(selector_text);
+        if (!selectors) continue;
+
+        Rule rule;
+        rule.selectors = std::move(*selectors);
+        split_declarations(decl_block, rule.declarations);
+        rule.media = outer_media;
         result.rules.push_back(std::move(rule));
     }
 }
@@ -898,10 +1174,14 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         if (i >= stripped.size()) break;
 
         if (stripped[i] == '@') {
-            // ADR-027: @media blocks are extracted with a MediaQuery;
-            // other at-rules (@import, @charset, etc.) still skip.
+            // ADR-027: @media blocks are extracted with a MediaQuery.
+            // ADR-050: @supports blocks are gated on feature-query
+            // evaluation. Other at-rules (@import, @charset, etc.)
+            // still skip.
             if (starts_with_ci(stripped, i, "@media")) {
                 parse_media_block(stripped, i, result);
+            } else if (starts_with_ci(stripped, i, "@supports")) {
+                parse_supports_block(stripped, i, result, std::nullopt);
             } else {
                 skip_at_rule(stripped, i);
             }
