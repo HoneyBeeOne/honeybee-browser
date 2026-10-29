@@ -8,6 +8,8 @@
 #include <memory>
 #include <vector>
 
+#include "base/log.hpp"
+
 namespace honeybee::renderer::paint {
 
 namespace {
@@ -324,6 +326,8 @@ void paint(cairo_t* cr, const layout::LayoutNode& root,
 void paint(cairo_t* cr, const layout::LayoutNode& root,
            LineDrawer drawer, const ImageProvider* images) {
     if (cr == nullptr || !drawer) return;
+    HB_LOG(Paint, Debug, "paint: root kind=%d",
+           static_cast<int>(root.kind));
     switch (root.kind) {
         case layout::LayoutKind::Box:
             paint_box(
