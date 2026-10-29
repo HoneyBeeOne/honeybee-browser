@@ -99,11 +99,13 @@ TEST_CASE("calc: rem + px", "[css][calc][adr-037]") {
     CHECK(near(parse_length("calc(1rem + 4px)", ctx), 20.0f));
 }
 
-TEST_CASE("calc: unknown unit (vh) yields zero",
+TEST_CASE("calc: vh resolves via viewport_h (ADR-051)",
           "[css][calc][adr-037]") {
     auto ctx = base_ctx();
-    // vh deferred per ADR-037 -- whole expression invalid
-    CHECK(near(parse_length("calc(100vh - 48px)", ctx), 0.0f));
+    // ADR-051: vh is now supported. With viewport_h=0 (the
+    // LengthContext default), 100vh = 0, so calc() yields
+    // -48. Pre-ADR-051 the whole expression was invalid -> 0.
+    CHECK(near(parse_length("calc(100vh - 48px)", ctx), -48.0f));
 }
 
 // =============================================================

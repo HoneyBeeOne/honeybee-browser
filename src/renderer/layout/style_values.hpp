@@ -22,6 +22,12 @@ struct LengthContext {
     float root_font_size = 16.0f;       // root font-size (for rem)
     float parent_content_width = 0.0f;  // parent content width (for %)
     bool on_font_size_property = false; // true when resolving the font-size property itself
+    // ADR-051: viewport dimensions for vh/vw/vmin/vmax units.
+    // Defaults 0 preserve existing test behavior -- no test
+    // currently uses viewport units, so vh/vw resolve to 0 which
+    // matches the pre-ADR-051 unparsed behavior.
+    float viewport_w = 0.0f;
+    float viewport_h = 0.0f;
 };
 
 // Legacy: parse Npx only. Returns 0 for any other unit.

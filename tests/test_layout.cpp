@@ -41,25 +41,29 @@ std::pair<float, float> fake_measure(
 }
 
 TestLayout run(const std::string& html, const std::string& css_text,
-               float viewport_width = 800.0f) {
+               float viewport_width = 800.0f,
+               float viewport_height = 0.0f) {  // ADR-051
     TestLayout t;
     t.doc = honeybee::renderer::html::parse(html);
     REQUIRE(t.doc != nullptr);
     t.sheet = css::Stylesheet::parse(css_text);
     t.styles = css::cascade(t.sheet, *t.doc);
-    t.root = layout::layout(*t.doc, t.styles, fake_measure, viewport_width);
+    t.root = layout::layout(*t.doc, t.styles, fake_measure,
+                            viewport_width, nullptr, viewport_height);
     return t;
 }
 
 TestLayout run_with_ua(const std::string& html, const std::string& css_text,
-                       float viewport_width = 800.0f) {
+                       float viewport_width = 800.0f,
+                       float viewport_height = 0.0f) {  // ADR-051
     TestLayout t;
     t.doc = honeybee::renderer::html::parse(html);
     REQUIRE(t.doc != nullptr);
     t.sheet = css::Stylesheet::parse(css_text);
     auto ua = css::ua_stylesheet();
     t.styles = css::cascade(ua, t.sheet, *t.doc);
-    t.root = layout::layout(*t.doc, t.styles, fake_measure, viewport_width);
+    t.root = layout::layout(*t.doc, t.styles, fake_measure,
+                            viewport_width, nullptr, viewport_height);
     return t;
 }
 
@@ -3522,4 +3526,234 @@ TEST_CASE("flex-wrap: flex-grow distributes per line",
     CHECK(children[2]->y == Catch::Approx(20.0f).margin(2.0f));
     // c grows to fill 300.
     CHECK(children[2]->width == Catch::Approx(300.0f).margin(2.0f));
+}
+
+// =============================================================
+// ADR-051: viewport units (vh/vw/vmin/vmax) threading
+// =============================================================
+
+TEST_CASE("vh: 100vh resolves to viewport_h",
+          "[layout][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:100vh}",
+        /*viewport_w=*/800.0f, /*viewport_h=*/600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->height == Catch::Approx(600.0f).margin(1.0f));
+}
+
+TEST_CASE("vh: 50vh resolves to half viewport_h",
+          "[layout][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50vh}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->height == Catch::Approx(300.0f).margin(1.0f));
+}
+
+TEST_CASE("vw: 100vw resolves to viewport_w",
+          "[layout][vw][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100vw;height:10px}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(800.0f).margin(1.0f));
+}
+
+TEST_CASE("vw: 50vw resolves to half viewport_w",
+          "[layout][vw][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:50vw;height:10px}",
+        1000.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(500.0f).margin(1.0f));
+}
+
+TEST_CASE("vmin: picks smaller of viewport_w/h",
+          "[layout][vmin][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100vmin;height:10px}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(600.0f).margin(1.0f));
+}
+
+TEST_CASE("vmax: picks larger of viewport_w/h",
+          "[layout][vmax][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100vmax;height:10px}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(800.0f).margin(1.0f));
+}
+
+TEST_CASE("calc: calc(100vh - 48px) with viewport_h=600",
+          "[layout][calc][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:calc(100vh - 48px)}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->height == Catch::Approx(552.0f).margin(1.0f));
+}
+
+TEST_CASE("calc: calc(50vw + 100px) with viewport_w=800",
+          "[layout][calc][vw][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:calc(50vw + 100px);height:10px}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(500.0f).margin(1.0f));
+}
+
+TEST_CASE("default: vh at viewport_h=0 falls back to natural content height",
+          "[layout][vh][adr-051]") {
+    // With viewport_h=0 (the LengthContext default), 100vh
+    // parses to 0. layout_element's explicit-height check
+    // (`if (ew > 0.0f)`) treats explicit 0 as "not set", so
+    // the box falls back to natural content height (16px from
+    // the "B" text). vh's 0-resolution itself is separately
+    // verified in test_calc.cpp (`calc(100vh - 48px)` == -48
+    // with viewport_h=0, which requires 100vh == 0).
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:100vh}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->height == Catch::Approx(16.0f).margin(1.0f));
+}
+
+TEST_CASE("regression: px still resolves",
+          "[layout][px][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:150px;height:75px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(150.0f).margin(1.0f));
+    CHECK(b->height == Catch::Approx(75.0f).margin(1.0f));
+}
+
+TEST_CASE("regression: % uses parent width, not viewport",
+          "[layout][percent][adr-051]") {
+    // Parent 400px, viewport 800px. 50% of parent = 200, not 400.
+    auto doc = run(
+        "<div class='p'><div class='b'>B</div></div>",
+        "body,html{margin:0;padding:0}"
+        ".p{width:400px}"
+        ".b{width:50%;height:10px}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(200.0f).margin(1.0f));
+}
+
+TEST_CASE("regression: em scales with parent font-size",
+          "[layout][em][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0;font-size:20px}"
+        ".b{width:2em;height:10px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(40.0f).margin(1.0f));
+}
+
+TEST_CASE("regression: rem scales with root font-size",
+          "[layout][rem][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0;font-size:16px}"
+        ".b{width:2rem;height:10px}");
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->width == Catch::Approx(32.0f).margin(1.0f));
+}
+
+TEST_CASE("padding: 5vh with viewport_h=600",
+          "[layout][padding][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;padding:5vh}",
+        800.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    // 5vh of 600 = 30px per side
+    CHECK(b->padding[0] == Catch::Approx(30.0f).margin(1.0f));
+    CHECK(b->padding[1] == Catch::Approx(30.0f).margin(1.0f));
+    CHECK(b->padding[2] == Catch::Approx(30.0f).margin(1.0f));
+    CHECK(b->padding[3] == Catch::Approx(30.0f).margin(1.0f));
+}
+
+TEST_CASE("padding: 10vw with viewport_w=500",
+          "[layout][padding][vw][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;padding:10vw}",
+        500.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->padding[3] == Catch::Approx(50.0f).margin(1.0f));
+}
+
+TEST_CASE("border-width: 2vh with viewport_h=800",
+          "[layout][border][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;border-width:2vh}",
+        1000.0f, 800.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->border[0] == Catch::Approx(16.0f).margin(1.0f));
+}
+
+TEST_CASE("margin: 3vw with viewport_w=400",
+          "[layout][margin][vw][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:50px;margin:3vw}",
+        400.0f, 600.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->margin[3] == Catch::Approx(12.0f).margin(1.0f));
+}
+
+TEST_CASE("min: min(100vh, 400px) at viewport_h=800",
+          "[layout][min][vh][adr-051]") {
+    auto doc = run(
+        "<div class='b'>B</div>",
+        "body,html{margin:0;padding:0}"
+        ".b{width:100px;height:min(100vh, 400px)}",
+        800.0f, 800.0f);
+    const auto* b = find_class(doc.root, "b");
+    REQUIRE(b != nullptr);
+    CHECK(b->height == Catch::Approx(400.0f).margin(1.0f));
 }

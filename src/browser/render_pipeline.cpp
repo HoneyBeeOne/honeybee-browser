@@ -323,9 +323,14 @@ void RenderPipeline::relayout(float viewport_width) {
         };
     };
     // ADR-042: layout_with_pseudo to synthesize ::before / ::after.
+    // ADR-051: viewport_height passed as 0. GTK allocated height
+    // isn't in scope here; vh/vw resolve to 0 in production. Same
+    // "unknown viewport -> 0" semantics as the pre-ADR-051
+    // unparsed state. Correctness for calc(100vh - ...) requires
+    // future GTK height threading (separate concern).
     layout_root_ = renderer::layout::layout_with_pseudo(
         *doc_, styles_cache_, pseudo_styles_cache_,
-        &measure_with_pango, viewport_width, image_dims);
+        &measure_with_pango, viewport_width, image_dims, 0.0f);
     HB_LOG(Pipeline, Debug, "layout: root h=%.0f",
            layout_root_.height);
 
