@@ -510,6 +510,116 @@ LayoutBox layout_element(const dom::Element& el,
             box.border_radius[2] = *v;
         if (const auto v = parse_radius_token("border-bottom-left-radius"); v)
             box.border_radius[3] = *v;
+
+        // ADR-047: parse mask-image + mask-size / -position /
+        // -repeat. Both -webkit- prefixed and unprefixed forms
+        // accepted; unprefixed wins if both present.
+        // ADR-047: return by value (owning copy). Returning a
+        // pointer into a temporary optional was a use-after-free
+        // (SIGSEGV on first parse). Cost: one small-string copy
+        // per mask parse -- negligible.
+        auto mask_lookup = [&](const char* unprefixed,
+                               const char* webkit) -> std::string {
+            if (auto v = style->get(unprefixed); v) return *v;
+            if (auto v = style->get(webkit); v) return *v;
+            return {};
+        };
+        if (const std::string mv =
+                mask_lookup("mask-image", "-webkit-mask-image");
+            !mv.empty() && mv != "none") {
+            if (mv.find("url(") != std::string::npos) {
+                const auto start = mv.find("url(") + 4;
+                const auto end = mv.find(')', start);
+                if (end != std::string::npos) {
+                    std::string url = mv.substr(start, end - start);
+                    while (!url.empty() &&
+                           (url.front() == ' ' || url.front() == '\t'))
+                        url.erase(url.begin());
+                    while (!url.empty() &&
+                           (url.back() == ' ' || url.back() == '\t'))
+                        url.pop_back();
+                    if (!url.empty() &&
+                        (url.front() == '\'' || url.front() == '"'))
+                        url.erase(url.begin());
+                    if (!url.empty() &&
+                        (url.back() == '\'' || url.back() == '"'))
+                        url.pop_back();
+                    if (!url.empty()) {
+                        box.mask_image_url = url;
+                        box.mask_has = true;
+                    }
+                }
+            }
+        }
+        if (box.mask_has) {
+            if (const std::string sz = mask_lookup(
+                    "mask-size", "-webkit-mask-size");
+                !sz.empty() && sz != "auto") {
+                std::string tok;
+                for (char c : sz) {
+                    if (c == ' ' || c == '\t') break;
+                    tok.push_back(c);
+                }
+                if (!tok.empty() && tok != "cover" && tok != "contain"
+                    && tok.back() != '%') {
+                    box.mask_size_w = parse_length(tok, ctx);
+                }
+            }
+            if (const std::string ps = mask_lookup(
+                    "mask-position", "-webkit-mask-position");
+                !ps.empty()) {
+                std::vector<std::string> toks;
+                {
+                    std::string t;
+                    for (char c : ps) {
+                        if (c == ' ' || c == '\t') {
+                            if (!t.empty()) {
+                                toks.push_back(t); t.clear();
+                            }
+                        } else t.push_back(c);
+                    }
+                    if (!t.empty()) toks.push_back(t);
+                }
+                auto px = [](const std::string& t) -> BgPosX {
+                    if (t == "right") return BgPosX::Right;
+                    if (t == "center") return BgPosX::Center;
+                    return BgPosX::Left;
+                };
+                auto py = [](const std::string& t) -> BgPosY {
+                    if (t == "bottom") return BgPosY::Bottom;
+                    if (t == "center") return BgPosY::Center;
+                    return BgPosY::Top;
+                };
+                if (toks.size() == 1) {
+                    const auto& t = toks[0];
+                    if (t == "center") {
+                        box.mask_pos_x = BgPosX::Center;
+                        box.mask_pos_y = BgPosY::Center;
+                    } else if (t == "left" || t == "right") {
+                        box.mask_pos_x = px(t);
+                    } else if (t == "top" || t == "bottom") {
+                        box.mask_pos_y = py(t);
+                    }
+                } else if (toks.size() >= 2) {
+                    const auto& t0 = toks[0];
+                    const auto& t1 = toks[1];
+                    if (t1 == "left" || t1 == "right") {
+                        box.mask_pos_x = px(t1);
+                        box.mask_pos_y = py(t0);
+                    } else {
+                        box.mask_pos_x = px(t0);
+                        box.mask_pos_y = py(t1);
+                    }
+                }
+            }
+            if (const std::string rr = mask_lookup(
+                    "mask-repeat", "-webkit-mask-repeat");
+                !rr.empty()) {
+                if (rr.find("no-repeat") != std::string::npos) {
+                    box.mask_no_repeat = true;
+                }
+            }
+        }
     }
 
     box.x = x_before_margin + box.margin[3];

@@ -56,6 +56,72 @@ void paint_image(cairo_t* cr, const layout::LayoutBox& box,
     cairo_restore(cr);
 }
 
+// ADR-047: draw mask-image over the already-drawn background.
+// Cairo path: set source to background_color, then cairo_mask
+// with the loaded surface pattern (scaled + positioned). The
+// pattern's alpha channel determines where the fill shows.
+// v1 renders only when background.a > 0 (transparent bg =
+// invisible mask). Documented deviation: for boxes with
+// border-radius, the border ring is also masked (v1 draws
+// mask after the whole if(any_radius)/else block). 0 target
+// rules combine mask + border-radius.
+void paint_mask_image(cairo_t* cr, const layout::LayoutBox& box,
+                      const ImageProvider* images) {
+    if (!box.mask_has || box.mask_image_url.empty()) return;
+    if (box.background.a <= 0.0001f) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(box.mask_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: mask_size_w > 0 wins; if mask_size_h is 0, aspect-
+    // derive. Both 0 = intrinsic.
+    float pw = box.mask_size_w > 0.0f ? box.mask_size_w : iw;
+    float ph = box.mask_size_h > 0.0f ? box.mask_size_h
+             : (box.mask_size_w > 0.0f
+                ? box.mask_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position keywords.
+    float ix = box.x;
+    if (box.mask_pos_x == layout::BgPosX::Right) {
+        ix = box.x + box.width - pw;
+    } else if (box.mask_pos_x == layout::BgPosX::Center) {
+        ix = box.x + (box.width - pw) * 0.5f;
+    }
+    float iy = box.y;
+    if (box.mask_pos_y == layout::BgPosY::Bottom) {
+        iy = box.y + box.height - ph;
+    } else if (box.mask_pos_y == layout::BgPosY::Center) {
+        iy = box.y + (box.height - ph) * 0.5f;
+    }
+
+    HB_LOG(Paint, Debug, "mask: %s at (%.0f,%.0f) size %.0fx%.0f",
+           box.mask_image_url.c_str(), ix, iy, pw, ph);
+
+    // Pattern matrix maps device coords -> surface coords.
+    // device (ix, iy)         -> surf (0, 0)
+    // device (ix+pw, iy+ph)   -> surf (iw, ih)
+    // M = scale(iw/pw, ih/ph) * translate(-ix, -iy)
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, box.background.r, box.background.g,
+                          box.background.b, box.background.a);
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+    cairo_matrix_t mat;
+    cairo_matrix_init_scale(&mat, iw / pw, ih / ph);
+    cairo_matrix_translate(&mat, -ix, -iy);
+    cairo_pattern_set_matrix(pat, &mat);
+    cairo_mask(cr, pat);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+}
+
 void paint_children(
     cairo_t* cr,
     const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
@@ -195,6 +261,10 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                   box.width, bb);
         fill_rect(cr, box.border_color, box.x, box.y, bl, box.height);
     }
+
+    // ADR-047: mask draws after background/border fill, before
+    // background-image (which paints above the mask layer).
+    paint_mask_image(cr, box, images);
 
     // ADR-034: draw background-image if present.
     if (images && !box.background_image_url.empty()) {

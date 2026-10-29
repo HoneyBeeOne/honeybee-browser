@@ -91,6 +91,13 @@ enum class Position : std::uint8_t {
     Static, Relative, Absolute, Fixed, Sticky
 };
 
+// ADR-045/047: keyword-based background/mask-position.
+// Resolved in paint against loaded icon dimensions (layout
+// can't load images). Declared before LayoutBox because both
+// LayoutBox (mask fields) and LineFragment (bg fields) use them.
+enum class BgPosX : std::uint8_t { Left, Center, Right };
+enum class BgPosY : std::uint8_t { Top, Center, Bottom };
+
 struct LayoutBox final : LayoutNode {
     float margin[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -148,6 +155,19 @@ struct LayoutBox final : LayoutNode {
     // paint wraps their draw in a Cairo clip rectangle.
     bool clip_children = false;
 
+    // ADR-047: CSS mask (alpha channel from image, fill =
+    // background-color). Painted via cairo_mask_surface after
+    // background fill, before border. Both mask-image AND
+    // background-image can be present (different subsystems --
+    // both render).
+    std::string mask_image_url;    // empty = no mask
+    float mask_size_w = 0.0f;      // 0 = auto (intrinsic)
+    float mask_size_h = 0.0f;      // 0 = auto (aspect from width)
+    BgPosX mask_pos_x = BgPosX::Left;
+    BgPosY mask_pos_y = BgPosY::Top;
+    bool mask_no_repeat = false;
+    bool mask_has = false;         // gates paint
+
     const dom::Element* element = nullptr;
     std::vector<std::unique_ptr<LayoutNode>> children;
 
@@ -157,11 +177,6 @@ struct LayoutBox final : LayoutNode {
 // One rendered line of a text node (ADR-015). Style fields
 // added in ADR-016 so fragments derived from an <em> or a
 // <span style="color:red"> carry their own font and color.
-// ADR-045: keyword-based background-position. Resolved in paint
-// against loaded icon dimensions (layout can't load images).
-enum class BgPosX : std::uint8_t { Left, Center, Right };
-enum class BgPosY : std::uint8_t { Top, Center, Bottom };
-
 struct LineFragment {
     float x = 0.0f;
     float y = 0.0f;

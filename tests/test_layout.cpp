@@ -3086,3 +3086,158 @@ TEST_CASE("inline bg: padding-right extends fragment width",
     // With padding-right: 16px added, width should be ~24+.
     CHECK(f->width > 15.0f);
 }
+
+// =============================================================
+// ADR-047: mask-image parse + layout fields.
+// =============================================================
+
+TEST_CASE("mask: mask-image url(x.svg) populates fields",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg)}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_has == true);
+    CHECK(m->mask_image_url == "x.svg");
+}
+
+TEST_CASE("mask: -webkit-mask-image only (prefixed form)",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;"
+        "-webkit-mask-image:url(x.svg)}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_has == true);
+    CHECK(m->mask_image_url == "x.svg");
+}
+
+TEST_CASE("mask: both prefixed and unprefixed -> unprefixed wins",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;"
+        "mask-image:url(preferred.svg);"
+        "-webkit-mask-image:url(webkit.svg)}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_image_url == "preferred.svg");
+}
+
+TEST_CASE("mask: mask-image: none -> mask_has false",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:none}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_has == false);
+}
+
+TEST_CASE("mask: mask-size fixed length",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-size:16px}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_size_w == Catch::Approx(16.0f).margin(0.1f));
+}
+
+TEST_CASE("mask: mask-size auto -> 0 (intrinsic)",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-size:auto}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_size_w == Catch::Approx(0.0f).margin(0.1f));
+}
+
+TEST_CASE("mask: mask-position center right",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-position:center right}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_pos_x == layout::BgPosX::Right);
+    CHECK(m->mask_pos_y == layout::BgPosY::Center);
+}
+
+TEST_CASE("mask: mask-position left top (defaults)",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-position:left top}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_pos_x == layout::BgPosX::Left);
+    CHECK(m->mask_pos_y == layout::BgPosY::Top);
+}
+
+TEST_CASE("mask: mask-repeat no-repeat",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-repeat:no-repeat}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_no_repeat == true);
+}
+
+TEST_CASE("mask: mask-repeat repeat (documented deviation)",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;mask-image:url(x.svg);"
+        "mask-repeat:repeat}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    // Documented deviation: v1 doesn't tile; repeat -> false.
+    CHECK(m->mask_no_repeat == false);
+}
+
+TEST_CASE("mask: data URL (raw SVG) captured verbatim",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px;"
+        "mask-image:url(data:image/svg+xml;utf8,<svg/>)}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_has == true);
+    CHECK(m->mask_image_url.find("data:image/svg+xml") == 0);
+}
+
+TEST_CASE("mask: no mask rule leaves defaults",
+          "[layout][mask][adr-047]") {
+    auto doc = run(
+        "<div class='m'>M</div>",
+        "body,html{margin:0;padding:0}"
+        ".m{width:100px;height:100px}");
+    const auto* m = find_class(doc.root, "m");
+    REQUIRE(m != nullptr);
+    CHECK(m->mask_has == false);
+    CHECK(m->mask_image_url.empty());
+    CHECK(m->mask_size_w == Catch::Approx(0.0f).margin(0.1f));
+    CHECK(m->mask_no_repeat == false);
+}
