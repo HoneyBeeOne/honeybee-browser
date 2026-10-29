@@ -1,6 +1,6 @@
 # ADR-048: Flex Wrap (Multi-line Flex)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-029 (flex layout — deferral closed here), ADR-046 (logging), ADR-047 (precedent for zero-delta infrastructure cycle)
@@ -394,3 +394,121 @@ resolution and align-items. Lines stack with `row-gap`.
 5. **Verification is synthetic-DOM** — no PNG gate possible
    until a consumer exists. Same "correct infra, no consumer"
    pattern as ADR-041 Commit 1 and ADR-047.
+
+## Implementation
+
+Implemented on `feat/flex-wrap` across three commits (Commit 1
+= refactor, Commit 2 = wrap branch + tests, Commit 3 = this
+docs update).
+
+**Visual verification: ZERO first-viewport delta.**
+Synthetic-DOM verified only.
+
+### What shipped
+
+**Commit 1 -- refactor (behavior-neutral):**
+- `resolve_flex_line()` helper extracted from
+  `layout_flex_children`'s inline code
+- Runs Phases B-E (flex grow/shrink distribution, justify
+  positioning, per-item layout + cross measure, cross
+  alignment) with explicit line context parameters
+- Returns `FlexLineResult { container_cross, used_main }` for
+  caller to advance cursor or stack lines
+- Single call site for `nowrap` preserves byte-identical
+  output to pre-ADR-048 code
+- All 20 ADR-029 flex tests pass unchanged
+
+**Commit 2 -- multi-line wrap:**
+- Flex dispatch reads `flex-wrap` (default `nowrap`)
+- `do_wrap = (flex-wrap == "wrap") && is_row`
+- `!do_wrap` branch: identical to ADR-029 pre-refactor code
+- `do_wrap` branch: greedy line-breaking, per-line
+  `resolve_flex_line` calls, line stacking with `gap` fallback
+- 13 new tests in `tests/test_layout.cpp` covering wrap
+  scenarios, regressions, and per-line justify/align
+
+**Commit 3 (this commit) -- docs:**
+- ADR-048 status -> Implemented (with zero-delta caveat)
+- Post-ADR-048 note in ADR-029 (flex-wrap deferral closed)
+- README row update
+- CHANGELOG entry
+
+### Visual delta -- HONEST ASSESSMENT
+
+**Zero first-viewport delta.**
+
+Two independent conditions are unmet:
+
+1. **`.mw-header` is not in the current fetched HTML** --
+   verified via exact-class DOM walk: `mw-header NOT FOUND`.
+   The header rule exists in CSS but has no matching element
+   in the current snapshot (799KB HTML, 2026-10-27).
+2. **At viewport >= 1680px, `.mw-header` uses `display: grid`**
+   -- the `@media (min-width: 1680px)` override wins. Flex
+   only applies below 1680px; test viewport is 1774px.
+
+The 3 wrap rules in Wikipedia CSS all target `.mw-header`
+variants. Until both conditions are met (header in HTML AND
+viewport < 1680px), flex-wrap produces no visible change.
+
+**This is materially the same category as ADR-047**: correct
+infrastructure, no current consumer. The implementation is
+verified via synthetic-DOM tests (13 cases) rather than PNG
+deltas, because there's no element to point a PNG at.
+
+### Why this cycle still ships
+
+**Refactor proven byte-identical**:
+- 598 pre-existing tests pass unchanged after Commit 1
+- 2307 assertions unchanged (not one fewer, not one more)
+- The `!do_wrap` branch in Commit 2 mirrors the pre-ADR-048
+  code path exactly
+
+**Multi-line algorithm verified synthetically**:
+- 13 synthetic-DOM tests prove wrap behavior (line-breaking,
+  per-line resolution, stacking, justify/align per line)
+- 5 regression tests prove single-line behavior unchanged
+- Per-line flex-grow / align-items / justify-content all
+  covered
+
+**Future-ready infrastructure**:
+- The moment a Wikipedia snapshot includes `.mw-header` AND
+  the user is at viewport < 1680px, wrap behavior works with
+  **zero code change**
+- `flex-wrap` was one of ADR-029's two named deferrals
+  (`wrap-reverse` still deferred); closing `wrap` completes
+  the flex implementation except reverse variants
+
+### Test count
+
+- Before ADR-048: 598 cases, 2307 assertions
+- After Commit 1: unchanged (behavior-neutral refactor)
+- After Commit 2: 611 cases, 2386 assertions (+13 / +79)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings from ADR-048 files.
+
+### Deferred (documented)
+
+- **`align-content`** -- parsing + cross-axis distribution
+  (lines pack tight; no stretch). Zero consumers today.
+- **`flex-wrap: wrap-reverse`** -- 0 uses in target
+- **`flex-direction: column` + wrap** -- 0 uses in target
+- **Cross-axis shrink** -- item that can't fit alone still
+  overflows (CSS SS9.3)
+- **`gap: <a> <b>` two-value cross-axis interpretation** --
+  v1 uses first token for both axes; 0 two-value `gap` uses
+  in target
+
+### Verification categories (session ledger)
+
+ADR-048 reinforces the session's five-category ledger:
+
+| Category | Example | PNG check |
+|---|---|---|
+| **PNG-verified (first-viewport)** | ADR-042, ADR-043 | yes |
+| **PNG-verified (scroll)** | ADR-045 | yes |
+| **Behaviorally-complete, visually-subtle** | ADR-044 | caveat |
+| **Behaviorally-complete, visually-zero** | ADR-047, **ADR-048** | caveat (no consumer) |
+| **Deferred with reason** | ADR-041 Commit 2, ADR-043 commits 2-3 | N/A |
+

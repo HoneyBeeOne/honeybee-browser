@@ -165,6 +165,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 586 -> 598 cases, 2263 -> 2307 assertions.
 
+- **Flex wrap (multi-line)** (ADR-048): `flex-wrap: wrap` for
+  row-direction flex containers. Items break into lines by
+  greedy fit test on accumulated basis + gap vs content_w;
+  each line resolved independently via extracted
+  `resolve_flex_line` helper; lines stack with row-gap
+  (gap fallback).
+
+  Closes ADR-029's biggest deferral. 13 synthetic-DOM tests
+  verify multi-line behavior.
+
+  Visual delta: ZERO first-viewport. `.mw-header` (the only
+  target of `flex-wrap: wrap` in Wikipedia CSS) is not in
+  the current fetched HTML, and at viewport >= 1680px uses
+  `display: grid` instead. Infrastructure correct and
+  complete; awaits a Wikipedia snapshot with the header
+  element AND a viewport < 1680px.
+
+  Deferred: `align-content`, `wrap-reverse`, column + wrap,
+  cross-axis shrink.
+
+  Test count: 598 -> 611 cases, 2307 -> 2386 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

@@ -621,3 +621,47 @@ ADR-029 is complete when:
 **Explicit claim**: header collapses from 585px to ~50-100px.
 Article content moves above the fold for the first time. Largest
 single visual delta of the CSS-layout arc.
+
+
+## Post-ADR-048 note
+
+**ADR-029's biggest deferral (`flex-wrap: wrap`) is closed by
+ADR-048.**
+
+ADR-029 implemented single-line flex and explicitly deferred
+`flex-wrap: wrap` with the note: "multi-line flex requires a
+2-pass algorithm. That's roughly 2x the complexity of
+single-line flex."
+
+ADR-048 adds that algorithm:
+- **Commit 1**: `resolve_flex_line()` extracted from
+  `layout_flex_children` -- byte-identical behavior for
+  single-line, verified by 20 passing tests
+- **Commit 2**: greedy line-breaking when `flex-wrap: wrap`,
+  per-line resolution, line stacking with `gap` fallback
+- **13 synthetic-DOM tests** prove multi-line behavior
+
+**Current first-viewport delta from flex-wrap: zero.**
+
+Two independent conditions are unmet in the current fetched
+HTML (2026-10-27):
+1. `.mw-header` element is absent from HTML (exact-class DOM
+   walk: `mw-header NOT FOUND`)
+2. At viewport >= 1680px, `.mw-header` uses `display: grid`;
+   flex only applies below 1680px, test viewport is 1774px
+
+The 3 wrap rules in Wikipedia CSS all target `.mw-header`
+variants. When a future snapshot includes the header (or any
+test navigates at < 1680px viewport), the wrap behavior
+activates immediately.
+
+**Deferred from ADR-029, still deferred:**
+- `align-content` (ADR-048 v1 packs lines tight)
+- `flex-wrap: wrap-reverse`
+- `flex-direction: column` + wrap
+- `align-self` (per-item align override)
+- Cross-axis shrink
+
+ADR-029's flex implementation is now complete for row-direction
+flex with `wrap`, `nowrap`; column-direction flex with wrap
+remains deferred.
