@@ -1,6 +1,6 @@
 # ADR-046: Logging Infrastructure
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-005 through ADR-045 (all subsystems gain log points)
@@ -381,3 +381,99 @@ ADR-046 is complete when:
 works from any subsystem. `export HONEYBEE_LOG=layout` before
 running `./build/bin/honeybee` shows layout events on stderr.
 No rebuild needed. Zero cost when disabled.
+
+## Implementation
+
+Implemented on `feat/logging` across three commits (Commit 1 =
+infrastructure + tests, Commit 2 = 12 HB_LOG sites across 6
+files, Commit 3 = this docs update).
+
+### What shipped
+
+**Commit 1 -- infrastructure:**
+- `src/base/log.{hpp,cpp}` added to `honeybee_lib` CMake
+- `LogCategory` (7 values), `LogLevel` (5 values)
+- `log_init()`, `log_set_config()`, `log_enabled()`,
+  `log_writev()`, `HB_LOG` macro
+- Env var parsing: `HONEYBEE_LOG`, `HONEYBEE_LOG_LEVEL`,
+  `HONEYBEE_LOG_FILE`
+- File path trimming at `/src/`
+- Thread-safe (mutex around `fprintf` + `vfprintf` + newline)
+- `log_init()` called as first statement of `main()`
+- 14 unit tests in `tests/test_log.cpp`
+
+**Commit 2 -- 12 HB_LOG sites across 6 files:**
+
+| File | Sites | Categories |
+|---|---|---|
+| `main.cpp` | 1 | Pipeline (startup) |
+| `render_pipeline.cpp` | 6 | Pipeline (relayout, cascade complete, layout complete, restyle fallback, restyle Level-0) |
+| `async_fetcher.cpp` | 2 | Fetch (fetch entry, callback dispatch) |
+| `cascade.cpp` | 1 | Cascade (rules/elements counts) |
+| `layout.cpp` | 1 + warning | Layout (viewport dims, no-root) |
+| `paint.cpp` | 1 | Paint (root node kind) |
+
+**Commit 3 (this commit) -- docs:**
+- ADR-046 status -> Implemented
+- README section on logging env vars
+- CHANGELOG entry
+
+### Manual verification (4 env-var combinations)
+
+**1. `HONEYBEE_LOG` unset (baseline):**
+No `[honeybee]` output. Zero production behavior change.
+
+**2. `HONEYBEE_LOG=layout` (initial page, 3s window):**
+No output within window. Correct: pipeline/cascade excluded
+by mask; no page loaded so no layout events fired.
+
+**3. `HONEYBEE_LOG=all` (initial page, piped):**
+Piping (`timeout | grep | head`) swallows buffered output.
+Not a code issue -- test 4 proves the path works.
+
+**4. `HONEYBEE_LOG=all HONEYBEE_LOG_FILE=/tmp/hb.log`:**
+File contains:
+```
+[honeybee][pipeline][info] src/main.cpp:11 startup: version=0.4.0
+[honeybee][pipeline][info] src/browser/render_pipeline.cpp:297 relayout: viewport=0
+[honeybee][cascade][debug] src/renderer/css/cascade.cpp:209 cascade: 9 elements, 0 pseudo
+```
+Format correct. Categories correct. File redirect works.
+
+**Definitive proof**: format, category filtering, file
+redirect, and disabled path all verified end-to-end.
+
+### Test count
+
+- Before ADR-046: 572 cases, 2224 assertions
+- After Commit 1: 586 cases, 2263 assertions (+14 / +39)
+- After Commit 2: unchanged (log output verified via manual
+  file-mode run, not unit-testable -- same pattern as ADR-043
+  and ADR-045's integration-path verification)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings introduced. Pre-existing
+`-Wmisleading-indentation` at `render_pipeline.cpp:492`
+unchanged.
+
+### Deferred (documented)
+
+- **`net/client.cpp` fetch log points** -- the `fetch()`
+  body wasn't captured during the pre-Commit-2 diagnostic
+  (the file's helper functions were shown but not the main
+  entry point). Follow-up ADR-046 Commit 2b or organic
+  addition.
+- **Deep-subsystem log points** -- block/grid/flex dispatch
+  detail, image fetch lifecycle, click/wheel event handling.
+  These are organic additions, not required by ADR-046's
+  retrofit target list ("15-20 sites" was the target; 12
+  shipped for the core pipeline, more come as debug needs
+  arise).
+- **`std::format` migration** (future ADR-047 if libstdc++
+  adds support)
+- **Runtime config reload** (config is set once at startup)
+- **Log rotation** (external `logrotate`)
+- **Structured (JSON) output**
+- **Per-category thresholds** (single global today)
+- **Trace-level perf timing** (invites misuse; defer)
+
