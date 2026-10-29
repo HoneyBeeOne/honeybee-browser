@@ -1,6 +1,6 @@
 # ADR-051: Viewport Units (vh / vw / vmin / vmax)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-013 (length units — px/em/rem/%), ADR-037 (calc() — operand resolution), ADR-050 (@supports — surfaced the `calc(100vh - 48px)` case)
@@ -415,3 +415,129 @@ unchanged.
 5. **GTK height threading** may fall back to 0 in production if
    the API call doesn't fit cleanly; verification uses a
    hardcoded harness height.
+
+## Implementation
+
+Implemented on `feat/viewport-units` across three commits
+(Commit 1 = parse, Commit 2 = threading + tests, Commit 3 = this
+docs update).
+
+### What shipped
+
+**Commit 1 -- parse_length + parse_operand:**
+- `LengthContext` gains `viewport_w`, `viewport_h` (defaults 0)
+- `parse_length`: `VH`, `VW`, `VMIN`, `VMAX` enum values + suffix
+  branches + switch cases (with `std::min`/`std::max` for
+  vmin/vmax)
+- **`parse_operand` (math expression parser) gains 4 matching
+  branches** -- this was the critical discovery. `parse_operand`
+  has its own inline unit classification separate from
+  `parse_length`, so `calc(100vh - 48px)` returned 0 until
+  both paths learned viewport units.
+- One existing test updated in place: `"calc: unknown unit (vh)
+  yields zero"` -> `"calc: vh resolves via viewport_h
+  (ADR-051)"`, assertion `0.0f -> -48.0f` (correct when
+  `viewport_h=0`: `100vh=0`, minus 48px = -48).
+
+**Commit 2 -- threading + 18 tests:**
+- `layout()` / `layout_with_pseudo()` gain `viewport_height`
+  param (default 0.0f, protecting ~15 existing test callers)
+- `layout_element()` gains `viewport_w`, `viewport_h` params
+- 7 internal `layout_element` call sites updated
+- 4 in-scope `LengthContext` sites populated with viewport dims
+  (main ctx, inline pad_ctx, absolute dim_ctx, absolute abs_ctx)
+- 3 out-of-scope `LengthContext` sites not populated
+  (`font_size_of`, `apply_inline_bg_pp`, `apply_one_pseudo`) --
+  viewport dims not in scope; those sites don't consume vh/vw
+  in current code paths; documented deferral
+- `render_pipeline.cpp` passes `0.0f` for `viewport_height`
+  (GTK allocated height isn't cleanly in scope; documented
+  deferral -- vh/vw resolve to 0 in production)
+- `run()` / `run_with_ua()` in `test_layout.cpp` extended
+- 18 unit tests
+
+**Commit 3 (this commit) -- docs:**
+- ADR-051 status -> Implemented
+- Post-ADR-051 note in ADR-013 (units family) and ADR-050
+  (calc(100vh - ...) unblocked)
+- README row update
+- CHANGELOG entry
+
+### Verified delta
+
+**Empirical smoke test (14 cases, all pass):**
+
+```
+100vh                          -> 800.0
+50vh                           -> 400.0
+100vw                          -> 1774.0
+50vw                           -> 887.0
+100vmin                        -> 800.0
+100vmax                        -> 1774.0
+calc(100vh - 48px)             -> 752.0   (was 0)
+calc(50vw + 50px)              -> 937.0   (was 0)
+min(50vw, 800px)               -> 800.0   (was 0)
+max(50vw, 800px)               -> 887.0   (was 0)
+100px / 2em / 1rem / 50%       -> unchanged
+calc(50% + 10px)               -> 210.0   unchanged
+calc(100vh - 48px) vh=0        -> -48.0   (mathematically correct)
+```
+
+**Unit-test coverage (18 cases):** direct vh/vw/vmin/vmax,
+`calc()` combinations, padding/border/margin with viewport
+units, existing `%`/`px`/`em`/`rem` regressions, `min()` of
+vh + px.
+
+### Honest delta framing
+
+**Zero first-viewport PNG delta in production.**
+
+`render_pipeline.cpp` passes `viewport_height=0`. Every `vh`/`vw`
+rule in Wikipedia CSS resolves to 0, exactly as it did
+pre-ADR-051 (unrecognized unit -> 0 before; recognized unit with
+0 viewport -> 0 after).
+
+**The value is empirical, not visual:**
+- `parse_length("calc(100vh - 48px)", viewport_h=800)` returns
+  752 (was 0)
+- When GTK height threading lands (future ADR),
+  `.vector-sticky-pinned-container`'s `max-height` gets a real
+  value automatically -- no ADR-051 code change needed
+- All tests construct `LengthContext` with explicit viewport
+  dims and verify correct resolution
+
+### Verification category
+
+**Layout-tree verified (consumer blocked by ancestor).** Same
+category as ADR-050. The parse-layer is correct end-to-end;
+visual rendering depends on both `viewport_height` threading
+from GTK (separate concern) and ancestor culling
+(`.vector-column-start h=0`, `.vector-main-menu-landmark
+display:none`).
+
+### Test count
+
+- Before ADR-051: 626 cases, 2407 assertions
+- After Commit 1: 626 / 2407 (one test updated in place)
+- After Commit 2: 644 cases, 2465 assertions (+18 / +58)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings introduced. Pre-existing `split_commas`
+unused-function warning unchanged (fires on clean main; not
+touched by this ADR).
+
+### Deferred (documented)
+
+- **`scroll-margin-top` property** -- not parsed; `20vh` value
+  won't fire until the property itself is added
+- **`svh` / `lvh` / `dvh`** -- modern viewport-height variants;
+  not in Wikipedia CSS
+- **Percentage `max-height`** -- `parent_content_height`
+  threading is a separate deferral
+- **`max-height` / `max-width` honoring in layout** -- cascade
+  stores them, layout doesn't read them yet; separate min/max
+  clamp ADR
+- **GTK allocated height threading to `render_pipeline`** --
+  currently passes 0; future ADR can plumb
+  `m_scroll_window.get_allocated_height()` or equivalent
+

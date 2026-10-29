@@ -205,6 +205,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 611 -> 626 cases, 2386 -> 2407 assertions.
 
+- **Viewport units** (ADR-051): `vh`/`vw`/`vmin`/`vmax` now
+  parse in both `parse_length` (declarative values) and
+  `parse_operand` (math expressions inside `calc()` / `min()` /
+  `max()` / `clamp()`). `LengthContext` gains `viewport_w` and
+  `viewport_h`; viewport dims threaded through `layout()` /
+  `layout_with_pseudo()` / `layout_element()`.
+
+  Unblocks `calc(100vh - 48px)` (the sticky sidebar's
+  `max-height` rule that ADR-050 surfaced as still-unresolved).
+  In production, `viewport_height` is passed as 0 (GTK height
+  not yet threaded) -- vh/vw resolve to 0, same visible behavior
+  as pre-ADR-051.
+
+  18 new tests: direct vh/vw/vmin/vmax, `calc()` combinations,
+  padding/border/margin with viewport units, existing
+  `%`/`px`/`em`/`rem` regressions, `min()` of vh + px.
+
+  Deferred: `svh`/`lvh`/`dvh`, percentage `max-height`,
+  `max-height`/`max-width` honoring in layout, GTK height
+  threading.
+
+  Test count: 626 -> 644 cases, 2407 -> 2465 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

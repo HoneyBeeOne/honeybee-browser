@@ -469,3 +469,41 @@ Zero new warnings.
   in target page
 - **Capability table auto-derivation** -- hand-maintained
 
+
+
+## Post-ADR-051 note
+
+ADR-050 unblocked `.vector-pinned-container { display: block }`
+via `@supports (display: grid)`. The next blocker in the
+sticky-sidebar chain was `.vector-sticky-pinned-container`'s
+`max-height: calc(100vh - (24px * 2))`, which resolved to
+`(unset)` because `vh` wasn't parsed.
+
+**ADR-051 closes that gap**: `parse_length` and `parse_operand`
+now handle `vh`/`vw`/`vmin`/`vmax`. `calc(100vh - 48px)` at
+`viewport_h=800` returns 752; at `viewport_h=0` (production
+default, until GTK height threading) returns -48. Either way,
+the expression resolves to a number rather than failing to
+parse.
+
+**Sticky-sidebar chain after ADR-050 + ADR-051**:
+
+| Layer | Status |
+|---|---|
+| `@supports (display: grid)` gate | ADR-050 unblocked |
+| `.vector-pinned-container { display: block }` | Reaches cascade |
+| `max-height: calc(100vh - 48px)` | ADR-051 resolves to a number (0 in production until GTK height threading) |
+| Layout reads `max-height` | Deferred (min/max clamp ADR) |
+| Ancestor `.vector-column-start h=0` | Deferred (separate culling rules) |
+
+The remaining sticky prerequisites after ADR-051 are:
+1. **GTK allocated height threading** to `render_pipeline` --
+   without this, `vh` is 0 in production, so `calc(100vh - ...)`
+   computes but yields `-48`
+2. **`max-height` honoring in layout** -- cascade stores the
+   value, layout needs to clip
+3. **Ancestor culling unblock** -- `.vector-column-start h=0`
+   comes from other rules
+
+`position: sticky` itself (the scroll-aware positioning behavior)
+is a separate cycle from all three of those.

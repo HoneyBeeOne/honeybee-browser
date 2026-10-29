@@ -249,3 +249,37 @@ Root font-size is computed once at the top of `layout()` by resolving `<html>`'s
 ## Record of Changes
 
 - **2026-10-20:** Initial decision.
+
+
+## Post-ADR-051 note
+
+ADR-051 completed the length-unit family by adding viewport
+units. Coverage as of 2026-10-29:
+
+| Unit | ADR | Notes |
+|---|---|---|
+| `px` | ADR-013 | Base unit, always valid |
+| `em` | ADR-013 | Multiplies by own font-size (or parent for font-size property) |
+| `rem` | ADR-013 | Multiplies by root font-size |
+| `%` | ADR-013 | Multiplies by `parent_content_width` (only width-relative) |
+| `vh` | **ADR-051** | Multiplies by `viewport_h` |
+| `vw` | **ADR-051** | Multiplies by `viewport_w` |
+| `vmin` | **ADR-051** | Multiplies by `min(viewport_w, viewport_h)` |
+| `vmax` | **ADR-051** | Multiplies by `max(viewport_w, viewport_h)` |
+
+**Key distinction**: `%` is width-relative to parent; `vh`/`vw`
+are viewport-relative. Both are needed and are independent.
+`LengthContext` carries `parent_content_width` (for `%`) and
+`viewport_w`/`viewport_h` (for viewport units) as separate
+fields.
+
+**Deferred**: `svh`/`lvh`/`dvh` (small/large/dynamic viewport
+height variants); percentage `height`/`max-height` (needs
+`parent_content_height` threading).
+
+**Parse paths to keep in sync**: `parse_length` (declarative
+values) and `parse_operand` (math expressions inside
+`calc()`/`min()`/`max()`/`clamp()`). ADR-051 found that
+`parse_operand` has its own inline unit classification --
+adding a unit to `parse_length` alone is insufficient.
+Future unit additions must touch both paths.
