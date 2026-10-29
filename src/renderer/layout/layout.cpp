@@ -2,6 +2,7 @@
 #include "renderer/layout/grid_layout.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -154,6 +155,128 @@ void flatten_inline_to_words(
         for (const auto& child : el.children()) {
             flatten_inline_to_words(*child, styles, family, size, color,
                                     prev_had_space, out, &el);
+        }
+    }
+}
+
+// ADR-045: shared post-process for inline background-image +
+// padding-right. Called from both LayoutText path (single-element
+// text runs, where <a> goes today) and InlineContext path
+// (inline formatting context with multiple mixed-style words).
+void apply_inline_bg_pp(
+    std::vector<LineFragment>& frags,
+    const css::ComputedStyleMap& styles,
+    float font_size, float parent_font_size,
+    float root_font_size, float content_w) {
+    LengthContext pad_ctx;
+    pad_ctx.font_size = font_size;
+    pad_ctx.parent_font_size = parent_font_size;
+    pad_ctx.root_font_size = root_font_size;
+    pad_ctx.parent_content_width = content_w;
+    pad_ctx.on_font_size_property = false;
+
+    float cur_line_y = -1.0e30f;
+    float accumulated_shift = 0.0f;
+    for (auto& frag : frags) {
+        if (frag.y != cur_line_y) {
+            cur_line_y = frag.y;
+            accumulated_shift = 0.0f;
+        }
+        if (accumulated_shift > 0.0f) {
+            frag.x += accumulated_shift;
+        }
+        if (!frag.element) continue;
+        const css::ComputedStyle* fs = lookup(styles, *frag.element);
+        if (!fs) continue;
+
+        if (auto bg = fs->get("background-image");
+            bg && !bg->empty() && *bg != "none") {
+            const auto upos = bg->find("url(");
+            if (upos != std::string::npos) {
+                auto s = upos + 4;
+                while (s < bg->size() &&
+                       ((*bg)[s] == ' ' || (*bg)[s] == '\'' ||
+                        (*bg)[s] == '"')) ++s;
+                auto e = bg->find_first_of(" \t)'\"", s);
+                if (e == std::string::npos) e = bg->size();
+                frag.bg_image_url = bg->substr(s, e - s);
+            }
+        }
+
+        if (auto sz = fs->get("background-size");
+            sz && !sz->empty() && *sz != "auto") {
+            std::string tok;
+            for (char c : *sz) {
+                if (c == ' ' || c == '\t') break;
+                tok.push_back(c);
+            }
+            if (!tok.empty() && tok != "cover" && tok != "contain"
+                && tok.back() != '%') {
+                frag.bg_size_w = parse_length(tok, pad_ctx);
+            }
+        }
+
+        if (auto ps = fs->get("background-position");
+            ps && !ps->empty()) {
+            std::vector<std::string> toks;
+            {
+                std::string t;
+                for (char c : *ps) {
+                    if (c == ' ' || c == '\t') {
+                        if (!t.empty()) {
+                            toks.push_back(t); t.clear();
+                        }
+                    } else t.push_back(c);
+                }
+                if (!t.empty()) toks.push_back(t);
+            }
+            auto px = [](const std::string& t) -> BgPosX {
+                if (t == "right") return BgPosX::Right;
+                if (t == "center") return BgPosX::Center;
+                return BgPosX::Left;
+            };
+            auto py = [](const std::string& t) -> BgPosY {
+                if (t == "bottom") return BgPosY::Bottom;
+                if (t == "center") return BgPosY::Center;
+                return BgPosY::Top;
+            };
+            if (toks.size() == 1) {
+                const auto& t = toks[0];
+                if (t == "center") {
+                    frag.bg_pos_x = BgPosX::Center;
+                    frag.bg_pos_y = BgPosY::Center;
+                } else if (t == "left" || t == "right") {
+                    frag.bg_pos_x = px(t);
+                } else if (t == "top" || t == "bottom") {
+                    frag.bg_pos_y = py(t);
+                }
+            } else if (toks.size() >= 2) {
+                const auto& t0 = toks[0];
+                const auto& t1 = toks[1];
+                if (t1 == "left" || t1 == "right") {
+                    frag.bg_pos_x = px(t1);
+                    frag.bg_pos_y = py(t0);
+                } else {
+                    frag.bg_pos_x = px(t0);
+                    frag.bg_pos_y = py(t1);
+                }
+            }
+        }
+
+        if (auto rr = fs->get("background-repeat");
+            rr && !rr->empty()) {
+            if (rr->find("no-repeat") != std::string::npos) {
+                frag.bg_no_repeat = true;
+            }
+        }
+
+        if (auto pad = fs->get("padding-right");
+            pad && !pad->empty() && *pad != "0" && *pad != "auto") {
+            const float pv = parse_length(*pad, pad_ctx);
+            if (pv > 0.0f) {
+                frag.width += pv;
+                accumulated_shift += pv;
+            }
         }
     }
 }
@@ -494,6 +617,9 @@ LayoutBox layout_element(const dom::Element& el,
             lt->font_size = own_font_size;
             lt->color = tc;
             lt->rtl = rtl;
+            apply_inline_bg_pp(fragments, styles, own_font_size,
+                               parent_font_size, root_font_size,
+                               content_w);
             lt->lines = std::move(fragments);
             cursor_y += total_h;
             box.children.push_back(std::move(lt));
@@ -544,6 +670,147 @@ LayoutBox layout_element(const dom::Element& el,
             if (line.width > max_line_w) max_line_w = line.width;
             line_y += line.height;
             total_h += line.height;
+        }
+
+        // ADR-045: post-process ctx->lines.
+        // 1. Populate background-image / size / position / repeat
+        //    from element's ComputedStyleMap.
+        // 2. Extend fragment width by inline padding-right and
+        //    shift subsequent same-line fragments rightward
+        //    (creates the gap the external-link icon draws in).
+        // RTL: padding extension handled only for LTR; Wikipedia
+        // is LTR-only, so this is a documented deferral.
+        //
+        // Note: `ctx` in this scope is the unique_ptr to
+        // LayoutInlineContext -- NOT the outer LengthContext.
+        // Build a fresh LengthContext for parse_length calls.
+        {
+            LengthContext pad_ctx;
+            pad_ctx.font_size = own_font_size;
+            pad_ctx.parent_font_size = parent_font_size;
+            pad_ctx.root_font_size = root_font_size;
+            pad_ctx.parent_content_width = content_w;
+            pad_ctx.on_font_size_property = false;
+
+            float cur_line_y = -1.0e30f;
+            float accumulated_shift = 0.0f;
+            for (auto& frag : ctx->lines) {
+                // New line: reset per-line shift.
+                if (frag.y != cur_line_y) {
+                    cur_line_y = frag.y;
+                    accumulated_shift = 0.0f;
+                }
+                // Apply shift from previous fragments' padding.
+                if (accumulated_shift > 0.0f) {
+                    frag.x += accumulated_shift;
+                }
+                if (!frag.element) continue;
+                const css::ComputedStyle* fs = lookup(styles, *frag.element);
+                if (!fs) continue;
+
+                // background-image: extract url(...)
+                if (auto bg = fs->get("background-image");
+                    bg && !bg->empty() && *bg != "none") {
+                    const auto upos = bg->find("url(");
+                    if (upos != std::string::npos) {
+                        auto s = upos + 4;
+                        while (s < bg->size() &&
+                               ((*bg)[s] == ' ' || (*bg)[s] == '\'' ||
+                                (*bg)[s] == '"')) ++s;
+                        auto e = bg->find_first_of(" \t)'\"", s);
+                        if (e == std::string::npos) e = bg->size();
+                        frag.bg_image_url = bg->substr(s, e - s);
+                    }
+                }
+
+                // background-size: first token; auto/cover/contain/
+                // percentage all deferred (0 -> auto in paint).
+                if (auto sz = fs->get("background-size");
+                    sz && !sz->empty() && *sz != "auto") {
+                    std::string tok;
+                    for (char c : *sz) {
+                        if (c == ' ' || c == '\t') break;
+                        tok.push_back(c);
+                    }
+                    if (!tok.empty() && tok != "cover" && tok != "contain"
+                        && tok.back() != '%') {
+                        // Length token: numeric prefix + unit, or "0".
+                        frag.bg_size_w = parse_length(tok, pad_ctx);
+                    }
+                }
+
+                // background-position: keyword pair (flexible order).
+                if (auto ps = fs->get("background-position");
+                    ps && !ps->empty()) {
+                    std::vector<std::string> toks;
+                    {
+                        std::string t;
+                        for (char c : *ps) {
+                            if (c == ' ' || c == '\t') {
+                                if (!t.empty()) {
+                                    toks.push_back(t); t.clear();
+                                }
+                            } else t.push_back(c);
+                        }
+                        if (!t.empty()) toks.push_back(t);
+                    }
+                    auto px = [](const std::string& t) -> BgPosX {
+                        if (t == "right") return BgPosX::Right;
+                        if (t == "center") return BgPosX::Center;
+                        return BgPosX::Left;
+                    };
+                    auto py = [](const std::string& t) -> BgPosY {
+                        if (t == "bottom") return BgPosY::Bottom;
+                        if (t == "center") return BgPosY::Center;
+                        return BgPosY::Top;
+                    };
+                    if (toks.size() == 1) {
+                        const auto& t = toks[0];
+                        if (t == "center") {
+                            frag.bg_pos_x = BgPosX::Center;
+                            frag.bg_pos_y = BgPosY::Center;
+                        } else if (t == "left" || t == "right") {
+                            frag.bg_pos_x = px(t);
+                        } else if (t == "top" || t == "bottom") {
+                            frag.bg_pos_y = py(t);
+                        }
+                    } else if (toks.size() >= 2) {
+                        const auto& t0 = toks[0];
+                        const auto& t1 = toks[1];
+                        // CSS allows either order for X/Y keywords.
+                        // If t1 is X-only (left/right), swap.
+                        if (t1 == "left" || t1 == "right") {
+                            frag.bg_pos_x = px(t1);
+                            frag.bg_pos_y = py(t0);
+                        } else {
+                            frag.bg_pos_x = px(t0);
+                            frag.bg_pos_y = py(t1);
+                        }
+                    }
+                }
+
+                // background-repeat: no-repeat only (0 uses of
+                // repeat/repeat-x/repeat-y in target page).
+                if (auto rr = fs->get("background-repeat");
+                    rr && !rr->empty()) {
+                    if (rr->find("no-repeat") != std::string::npos) {
+                        frag.bg_no_repeat = true;
+                    }
+                }
+
+                // padding-right: extend fragment width, accumulate
+                // shift for subsequent same-line fragments. This is
+                // the CSS "gap" that the external-link icon draws
+                // in (via background-position: center right).
+                if (auto pad = fs->get("padding-right");
+                    pad && !pad->empty() && *pad != "0" && *pad != "auto") {
+                    const float pv = parse_length(*pad, pad_ctx);
+                    if (pv > 0.0f) {
+                        frag.width += pv;
+                        accumulated_shift += pv;
+                    }
+                }
+            }
         }
 
         ctx->width = max_line_w;

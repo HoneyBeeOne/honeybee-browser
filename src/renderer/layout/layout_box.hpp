@@ -157,6 +157,11 @@ struct LayoutBox final : LayoutNode {
 // One rendered line of a text node (ADR-015). Style fields
 // added in ADR-016 so fragments derived from an <em> or a
 // <span style="color:red"> carry their own font and color.
+// ADR-045: keyword-based background-position. Resolved in paint
+// against loaded icon dimensions (layout can't load images).
+enum class BgPosX : std::uint8_t { Left, Center, Right };
+enum class BgPosY : std::uint8_t { Top, Center, Bottom };
+
 struct LineFragment {
     float x = 0.0f;
     float y = 0.0f;
@@ -166,6 +171,17 @@ struct LineFragment {
     std::string font_family;
     float font_size = 16.0f;
     Color color = Color::black();
+
+    // ADR-045: inline-element background-image. Populated during
+    // layout for fragments whose source element has a
+    // background-image rule. Empty/default = no background
+    // (paint skips).
+    std::string bg_image_url;
+    float bg_size_w = 0.0f;    // 0 = auto (intrinsic)
+    float bg_size_h = 0.0f;    // 0 = auto (aspect-derived if bg_size_w > 0)
+    BgPosX bg_pos_x = BgPosX::Left;
+    BgPosY bg_pos_y = BgPosY::Top;
+    bool bg_no_repeat = false;
 
     // ADR-018 Commit 4b: source element for hit-testing. Text
     // directly inside a block gets the block element; text

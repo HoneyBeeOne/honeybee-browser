@@ -224,6 +224,54 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     if (box.clip_children) cairo_restore(cr);
 }
 
+// ADR-045: draw an inline-element background-image on a
+// LineFragment. Resolves bg_pos_x/y keywords against loaded
+// icon dimensions (layout couldn't -- no image access there).
+void paint_inline_image(cairo_t* cr,
+                        const layout::LineFragment& frag,
+                        const ImageProvider* images) {
+    if (frag.bg_image_url.empty()) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(frag.bg_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: explicit bg_size_w wins; if bg_size_h is 0, aspect-
+    // derive from bg_size_w. Both 0 = intrinsic size.
+    float pw = frag.bg_size_w > 0.0f ? frag.bg_size_w : iw;
+    float ph = frag.bg_size_h > 0.0f ? frag.bg_size_h
+             : (frag.bg_size_w > 0.0f
+                ? frag.bg_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position: keyword resolve.
+    float ix = frag.x;
+    if (frag.bg_pos_x == layout::BgPosX::Right) {
+        ix = frag.x + frag.width - pw;
+    } else if (frag.bg_pos_x == layout::BgPosX::Center) {
+        ix = frag.x + (frag.width - pw) * 0.5f;
+    }
+    float iy = frag.y;
+    if (frag.bg_pos_y == layout::BgPosY::Bottom) {
+        iy = frag.y + frag.height - ph;
+    } else if (frag.bg_pos_y == layout::BgPosY::Center) {
+        iy = frag.y + (frag.height - ph) * 0.5f;
+    }
+
+    cairo_save(cr);
+    cairo_translate(cr, ix, iy);
+    cairo_scale(cr, pw / iw, ph / ih);
+    cairo_set_source_surface(cr, surf, 0, 0);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
 void paint_children(
     cairo_t* cr,
     const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
@@ -240,12 +288,22 @@ void paint_children(
             case layout::LayoutKind::Text: {
                 const auto& lt =
                     static_cast<const layout::LayoutText&>(*child);
+                // ADR-045: draw inline backgrounds first, then
+                // glyphs (correct z-order).
+                for (const auto& frag : lt.lines) {
+                    paint_inline_image(cr, frag, images);
+                }
                 for (const auto& frag : lt.lines) drawer(cr, frag);
                 break;
             }
             case layout::LayoutKind::InlineContext: {
                 const auto& ctx =
                     static_cast<const layout::LayoutInlineContext&>(*child);
+                // ADR-045: draw inline backgrounds first, then
+                // glyphs (correct z-order).
+                for (const auto& frag : ctx.lines) {
+                    paint_inline_image(cr, frag, images);
+                }
                 for (const auto& frag : ctx.lines) drawer(cr, frag);
                 break;
             }
