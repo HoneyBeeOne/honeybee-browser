@@ -53,7 +53,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 048 | [Flex Wrap (Multi-line)](048-flex-wrap.md) | `flex-wrap: wrap` (row) multi-line algorithm; synthetic-DOM verified; zero first-viewport delta |
 | 049 | [Text Align & Spacing (Deferred)](049-text-align.md) | Measured: `text-align` 26 rules (justify is print-only), `letter-spacing`/`word-spacing` 0 uses. No code; decision recorded |
 | 050 | [@supports Conditional Rules](050-supports.md) | `@supports` parse + feature-query evaluator; 73 blocks unblocked; layout-verified `.vector-pinned-container` display:block |
-| 051 | [Viewport Units (vh/vw/vmin/vmax)](051-viewport-units.md) | `vh`/`vw`/`vmin`/`vmax` in `parse_length`; viewport dims threaded through `layout_element`; unblocks `calc(100vh - 48px)` |
+| 051 | [Viewport Units (vh/vw/vmin/vmax)](051-viewport-units.md) | `vh`/`vw`/`vmin`/`vmax` in `parse_length` + `parse_operand`; viewport dims threaded; layout-tree verified, 0 production delta pending GTK height |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
