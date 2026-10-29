@@ -291,6 +291,8 @@ LayoutBox layout_element(const dom::Element& el,
                          float parent_content_width,
                          float parent_font_size,
                          float root_font_size,
+                         float viewport_w,   // ADR-051
+                         float viewport_h,   // ADR-051
                          Direction parent_dir,
                          ImageDimLookup image_dims) {
     LayoutBox box;
@@ -369,6 +371,8 @@ LayoutBox layout_element(const dom::Element& el,
     ctx.root_font_size = root_font_size;
     ctx.parent_content_width = parent_content_width;
     ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
 
     fill_sides(box.margin, style, ctx,
                "margin-top", "margin-right", "margin-bottom", "margin-left");
@@ -803,6 +807,8 @@ LayoutBox layout_element(const dom::Element& el,
             pad_ctx.root_font_size = root_font_size;
             pad_ctx.parent_content_width = content_w;
             pad_ctx.on_font_size_property = false;
+            pad_ctx.viewport_w = viewport_w;
+            pad_ctx.viewport_h = viewport_h;
 
             float cur_line_y = -1.0e30f;
             float accumulated_shift = 0.0f;
@@ -992,6 +998,7 @@ LayoutBox layout_element(const dom::Element& el,
                             layout_element(child_el, styles, measurer,
                                            0.0f, 0.0f, content_w,
                                            own_font_size, root_font_size,
+                                           viewport_w, viewport_h,
                                            own_dir, image_dims));
                         float top_off = 0.0f, left_off = 0.0f;
                         if (auto t = child_style->get("top");
@@ -1036,6 +1043,7 @@ LayoutBox layout_element(const dom::Element& el,
                         layout_element(child_el, styles, measurer,
                                        content_x, cursor_y, content_w,
                                        own_font_size, root_font_size,
+                                       viewport_w, viewport_h,
                                        own_dir, image_dims));
                     if (float_dir == "right") {
                         // Shift right edge to content right edge.
@@ -1118,6 +1126,7 @@ LayoutBox layout_element(const dom::Element& el,
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, narrow_x, cursor_y,
                                    narrow_w, own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
                                    own_dir, image_dims));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
@@ -1202,7 +1211,8 @@ LayoutBox layout_element(const dom::Element& el,
             // First pass: natural size for basis resolution.
             LayoutBox natural = layout_element(
                 child_el, styles, measurer, 0.0f, 0.0f, content_w,
-                own_font_size, root_font_size, own_dir, image_dims);
+                own_font_size, root_font_size, viewport_w, viewport_h,
+                own_dir, image_dims);
             const float natural_main =
                 is_row ? natural.width : natural.height;
 
@@ -1320,6 +1330,7 @@ LayoutBox layout_element(const dom::Element& el,
                 fc.final_box = std::make_unique<LayoutBox>(
                     layout_element(*fc.el, styles, measurer, x, y, cw,
                                    own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
                                    own_dir, image_dims));
                 const float cross_size = line_is_row
                     ? fc.final_box->height : fc.final_box->width;
@@ -1485,6 +1496,7 @@ LayoutBox layout_element(const dom::Element& el,
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, cell_x, 0.0f,
                                    cell_w, own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
                                    own_dir, image_dims));
                 PlacedChild pc;
                 pc.box = std::move(child_box);
@@ -1562,6 +1574,8 @@ LayoutBox layout_element(const dom::Element& el,
             dim_ctx.parent_font_size = parent_font_size;
             dim_ctx.root_font_size = root_font_size;
             dim_ctx.parent_content_width = parent_content_width;
+            dim_ctx.viewport_w = viewport_w;
+            dim_ctx.viewport_h = viewport_h;
 
             float abs_cw =
                 box.width - box.border[1] - box.border[3]
@@ -1585,6 +1599,8 @@ LayoutBox layout_element(const dom::Element& el,
             abs_ctx.parent_font_size = parent_font_size;
             abs_ctx.root_font_size = root_font_size;
             abs_ctx.parent_content_width = abs_cw;
+            abs_ctx.viewport_w = viewport_w;
+            abs_ctx.viewport_h = viewport_h;
 
             for (const auto* abs_el : pending_absolutes) {
                 const auto* abs_style = lookup(styles, *abs_el);
@@ -1595,6 +1611,7 @@ LayoutBox layout_element(const dom::Element& el,
                     layout_element(*abs_el, styles, measurer,
                                    0.0f, 0.0f, abs_cw,
                                    own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
                                    own_dir, image_dims));
 
                 const float natural_w = abs_box->width;
@@ -2020,8 +2037,10 @@ LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,
                  float viewport_width,
-                 ImageDimLookup image_dims) {
-    HB_LOG(Layout, Info, "layout: viewport=%.0f", viewport_width);
+                 ImageDimLookup image_dims,
+                 float viewport_height) {
+    HB_LOG(Layout, Info, "layout: viewport=%.0fx%.0f",
+           viewport_width, viewport_height);
     const dom::Element* root = find_root_element(doc);
     if (!root) {
         HB_LOG(Layout, Warn, "layout: no root element");
@@ -2032,8 +2051,10 @@ LayoutBox layout(const dom::Document& doc,
     const float root_fs =
         font_size_of(root_style, kDefaultFontSize, kDefaultFontSize);
 
-    return layout_element(*root, styles, measurer, 0.0f, 0.0f, viewport_width,
-                          kDefaultFontSize, root_fs, Direction::Ltr, image_dims);
+    return layout_element(*root, styles, measurer, 0.0f, 0.0f,
+                          viewport_width, kDefaultFontSize, root_fs,
+                          viewport_width, viewport_height,
+                          Direction::Ltr, image_dims);
 }
 
 
@@ -2104,9 +2125,10 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
                              const css::PseudoStyleMap& pseudo_styles,
                              TextMeasurer measurer,
                              float viewport_width,
-                             ImageDimLookup image_dims) {
+                             ImageDimLookup image_dims,
+                             float viewport_height) {
     LayoutBox root = layout(doc, styles, measurer, viewport_width,
-                            image_dims);
+                            image_dims, viewport_height);
     // Root font size defaults to 16 (pseudo font-size inheritance
     // from root isn't needed for content: '' -- no text).
     apply_pseudo_elements(root, pseudo_styles,

@@ -39,7 +39,8 @@ LayoutBox layout(const dom::Document& doc,
                  const css::ComputedStyleMap& styles,
                  TextMeasurer measurer,
                  float viewport_width,
-                 ImageDimLookup image_dims = nullptr);
+                 ImageDimLookup image_dims = nullptr,
+                 float viewport_height = 0.0f);  // ADR-051
 
 // ADR-042: layout with pseudo-element synthesis. Runs the normal
 // layout() tree, then walks it to synthesize ::before / ::after
@@ -53,7 +54,8 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
                              const css::PseudoStyleMap& pseudo_styles,
                              TextMeasurer measurer,
                              float viewport_width,
-                             ImageDimLookup image_dims = nullptr);
+                             ImageDimLookup image_dims = nullptr,
+                             float viewport_height = 0.0f);  // ADR-051
 
 // Read the display property from a computed style (ADR-016).
 // Returns Block when the property is missing, empty, or
