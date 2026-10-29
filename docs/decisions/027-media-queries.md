@@ -526,3 +526,25 @@ was that every URL-resolution test used a base without a
 subdirectory -- the dir==origin case produces identical results,
 masking the bug.
 
+
+
+## Post-ADR-050 note
+
+ADR-050 extended at-rule parsing to `@supports` blocks.
+Where this ADR's `parse_media_block` previously called
+`skip_at_rule` for **any** nested at-rule (including nested
+`@supports`), the nested branch now dispatches:
+
+- `@media` -- still skipped (nested `@media` is unsupported,
+  unchanged)
+- `@supports` -- recursively parsed via `parse_supports_block`,
+  with the outer `MediaQuery` propagated
+
+22 of Wikipedia's 73 `@supports` blocks are nested inside
+`@media`. Without this extension, those 22 would remain
+dropped even after implementing top-level `@supports`
+parsing.
+
+Rules emitted from a `@media { @supports (...) { ... } }`
+block carry the `MediaQuery` from the enclosing `@media`, so
+cascade-time viewport filtering still works correctly.

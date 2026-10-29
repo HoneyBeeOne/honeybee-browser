@@ -1,6 +1,6 @@
 # ADR-050: @supports Conditional Rules
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-027 (@media — the parse pattern followed here), ADR-028 (grid), ADR-029 (flex), ADR-038 (pseudo-classes), ADR-047 (mask-image — feature-table entry needed for fallback exclusion)
@@ -357,3 +357,115 @@ render at first-viewport depending on other culling rules.
    deferred**
 4. **Runtime feature detection deferred** — table is
    pragmatic v1
+
+## Implementation
+
+Implemented on `feat/supports` across three commits (Commit 1
+= parse + evaluator, Commit 2 = tests, Commit 3 = this docs
+update).
+
+**Layout-tree verified.** First-viewport PNG verification
+deferred pending ancestor culling check (see below).
+
+### What shipped
+
+**Commit 1 -- parse + capability table + evaluator:**
+- `supported_properties()` -- set of properties the engine
+  parses
+- `supported_pseudos()` -- ADR-018 + ADR-038 set
+- `unsupported_value()` -- rejects `round`/`sqrt`/`sin`/`cos`/
+  `tan` (ADR-037 deferral) and `dotted`/`dashed` (ADR-040
+  deferral)
+- `feature_query_supported()` -- recursive evaluator
+  - Recursion inside outer-paren-stripped branch (fixes
+    `not ((A) or (B))` when both supported)
+- `parse_supports_block()` -- top-level + `@media`-nested
+- Top-level `@supports` sibling to `@media` in `parse()`
+- `@media`-nested `@supports` recursive parse (replaces
+  `skip_at_rule` for `@supports` only)
+
+**Commit 2 -- 15 tests:**
+- All 10 unique conditions in Wikipedia CSS covered
+- **The load-bearing test**: `not ((A) or (B))` for mask
+  correctly returns false -> block dropped -> no
+  double-rendered icons (ADR-047 mask + fallback
+  background-image conflict)
+
+**Commit 3 (this commit) -- docs:**
+- ADR-050 status -> Implemented
+- Post-ADR-050 note in ADR-027 (nested at-rule handling)
+- README row update
+- CHANGELOG entry
+
+### Verified delta
+
+**Layout-tree verification (Wikipedia HTML article,
+`/tmp/wiki.html`)**:
+
+```
+.vector-pinned-container computed style:
+  display = block         <- was none (from top-level rule only)
+```
+
+That rule exists **only** inside `@supports (display: grid)`.
+Pre-ADR-050 the block was dropped entirely, so
+`.vector-pinned-container` fell back to the top-level
+`display: none`. Post-ADR-050 the `@supports` gate fires, the
+rule enters cascade, and source order makes it win over the
+earlier `display: none`.
+
+**This is stronger than an aggregate rules-count check**: a
+rule that could only exist inside `@supports` is now reaching
+the cascade.
+
+### Honest delta limitation
+
+**First-viewport PNG delta**: not yet verified. The
+`.vector-pinned-container` element now has `display: block`,
+but its ancestors have their own culling rules:
+
+- First `.vector-pinned-container` sits under
+  `.vector-main-menu-landmark`, which has `display: none`
+  (from `.vector-feature-main-menu-pinned-disabled
+  .vector-main-menu-container .vector-main-menu-landmark`)
+- Second `.vector-pinned-container` sits under
+  `.vector-sticky-pinned-container` under
+  `.vector-column-start`, which the ADR-028 diagnostic
+  showed has `h=0` from other rules
+
+**The `@supports (display: grid)` gate is now unblocked**, but
+whether the TOC becomes visually visible in the first
+viewport depends on whether those ancestor culling rules are
+also unblocked. Documented as a follow-up: when the
+header-flex (ADR-029) or ancestor-display work lands, the TOC
+may render; ADR-050's contribution (the `@supports` gate) is
+complete either way.
+
+### Rules-parsed count observation
+
+Post-ADR-050, `sheet.rules.size()` = 968 for `/tmp/wiki.css`.
+Prior "~1147" was an unreliable guess (never cleanly measured
+this session). The `display: block` per-element proof is
+stronger than the aggregate count: without ADR-050 that rule
+could never reach the cascade regardless of total rule count.
+
+### Test count
+
+- Before ADR-050: 611 cases, 2386 assertions
+- After Commit 1: unchanged (behavior-neutral parse)
+- After Commit 2: 626 cases, 2407 assertions (+15 / +21)
+- After Commit 3: unchanged (docs only)
+
+Zero new warnings.
+
+### Deferred (documented)
+
+- **Runtime feature detection** (probe-based, ~200 lines) --
+  hardcoded capability table is pragmatic v1
+- **`@supports selector(...)` complex args** -- v1 handles
+  simple `:pseudo` only
+- **Nested `@supports` inside `@supports`** -- 0 uses in target
+- **`@supports font-tech(...)` / `font-format(...)`** -- not
+  in target page
+- **Capability table auto-derivation** -- hand-maintained
+
