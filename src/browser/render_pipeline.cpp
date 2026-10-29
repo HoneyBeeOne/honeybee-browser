@@ -25,6 +25,8 @@
 #include "renderer/layout/style_values.hpp"
 #include "renderer/paint/paint.hpp"
 
+#include "base/log.hpp"
+
 namespace honeybee::browser {
 
 namespace {
@@ -292,6 +294,7 @@ void RenderPipeline::relayout(float viewport_width) {
     sheet_cache_ = renderer::css::Stylesheet::parse(
         merged_css_ + viewport_css);
     last_viewport_width_ = viewport_width;
+    HB_LOG(Pipeline, Info, "relayout: viewport=%.0f", viewport_width);
     // ADR-042: cascade_with_pseudo to also populate pseudo_styles.
     {
         auto result = renderer::css::cascade_with_pseudo(
@@ -300,6 +303,8 @@ void RenderPipeline::relayout(float viewport_width) {
         styles_cache_ = std::move(result.element_styles);
         pseudo_styles_cache_ = std::move(result.pseudo_styles);
     }
+    HB_LOG(Pipeline, Debug, "cascade: %zu elements styled, %zu with pseudo",
+           styles_cache_.size(), pseudo_styles_cache_.size());
 
     // ADR-035: thread an image-dimension lookup so <img>
     // elements reserve layout space. Cache hit = zero cost.
@@ -321,6 +326,8 @@ void RenderPipeline::relayout(float viewport_width) {
     layout_root_ = renderer::layout::layout_with_pseudo(
         *doc_, styles_cache_, pseudo_styles_cache_,
         &measure_with_pango, viewport_width, image_dims);
+    HB_LOG(Pipeline, Debug, "layout: root h=%.0f",
+           layout_root_.height);
 
     // ADR-023: detect hover level and precompute hover-sensitive
     // elements for Level 1. Costs ~0.1ms per render on Wikipedia
@@ -525,6 +532,7 @@ void RenderPipeline::restyle() {
     // Fallback path: cache empty (never rendered, or cleared by a
     // failed render()). Full cascade, same cost as ADR-021.
     if (styles_cache_.empty()) {
+        HB_LOG(Pipeline, Info, "restyle: cache empty, full cascade");
         sheet_cache_ = renderer::css::Stylesheet::parse(merged_css_);
         // ADR-042: cascade_with_pseudo for pseudo_styles.
         {
@@ -543,6 +551,7 @@ void RenderPipeline::restyle() {
     // hover state can't change any style. Bonus speedup for pages
     // with no :hover CSS at all.
     if (hover_level_ == renderer::css::HoverLevel::None) {
+        HB_LOG(Pipeline, Debug, "restyle: no :hover rules, skipping");
         prev_hovered_ = state_.hovered_element;
         return;
     }

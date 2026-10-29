@@ -2,6 +2,7 @@
 add_library(honeybee_lib
   base/version.cpp
   base/url.cpp
+  base/log.cpp
   net/client.cpp
   renderer/dom/node.cpp
   renderer/css/selectors.cpp

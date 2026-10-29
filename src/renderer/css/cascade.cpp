@@ -5,6 +5,8 @@
 #include <string_view>
 #include <utility>
 
+#include "base/log.hpp"
+
 namespace honeybee::renderer::css {
 
 bool is_inherited(std::string_view property) {
@@ -204,6 +206,8 @@ CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
     compute_styles(doc, ua_sheet, author_sheet, state, viewport_width,
                    out);
     propagate_inheritance(doc, out.element_styles);
+    HB_LOG(Cascade, Debug, "cascade: %zu elements, %zu pseudo",
+           out.element_styles.size(), out.pseudo_styles.size());
     return out;
 }
 

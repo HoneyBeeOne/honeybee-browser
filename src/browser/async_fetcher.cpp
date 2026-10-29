@@ -17,6 +17,8 @@
 // استيراد دالة الجلب التي سنُشغّلها في الخيط.
 #include "net/client.hpp"
 
+#include "base/log.hpp"
+
 // =============================================================
 // المُنشئ: تهيئة الموزِّع
 //
@@ -34,6 +36,7 @@ AsyncFetcher::AsyncFetcher() {
     m_dispatcher.connect([this]() {
         // قبل استدعاء رد النداء، نتأكد أنه مُعيَّن.
         if (m_callback) {
+            HB_LOG(Fetch, Debug, "fetch callback dispatched");
             // نستدعي رد النداء المُقدَّم من المستخدم، ونمرّر
             // له نتيجة الجلب المحفوظة.
             m_callback(m_result);
@@ -70,6 +73,7 @@ AsyncFetcher::~AsyncFetcher() {
 // =============================================================
 
 void AsyncFetcher::fetch(const std::string& url, Callback on_done) {
+    HB_LOG(Fetch, Info, "fetch: %s", url.c_str());
     // الخطوة الأولى: انتظار الجلب السابق.
     // لو كان هناك خيط لا يزال يعمل، ننتظره حتى ينتهي.
     // هذا يمنع تشغيل جلبين في وقت واحد، ويضمن أن النتيجة

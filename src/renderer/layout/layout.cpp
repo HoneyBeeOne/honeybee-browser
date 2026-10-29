@@ -12,6 +12,8 @@
 #include "renderer/layout/style_values.hpp"
 #include "renderer/layout/text_utils.hpp"
 
+#include "base/log.hpp"
+
 namespace honeybee::renderer::layout {
 
 namespace {
@@ -1827,8 +1829,12 @@ LayoutBox layout(const dom::Document& doc,
                  TextMeasurer measurer,
                  float viewport_width,
                  ImageDimLookup image_dims) {
+    HB_LOG(Layout, Info, "layout: viewport=%.0f", viewport_width);
     const dom::Element* root = find_root_element(doc);
-    if (!root) return LayoutBox{};
+    if (!root) {
+        HB_LOG(Layout, Warn, "layout: no root element");
+        return LayoutBox{};
+    }
 
     const css::ComputedStyle* root_style = lookup(styles, *root);
     const float root_fs =
