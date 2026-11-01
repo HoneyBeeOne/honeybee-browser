@@ -1,6 +1,6 @@
 # ADR-054: CSS transform: rotate()
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-01
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-013 (length units), ADR-034 (image paint), ADR-039 (box model), ADR-044 (border-radius paint), ADR-053 (clamp machinery)
@@ -242,3 +242,137 @@ ADR-054 is complete when:
       translateY parsed but not painted)
 - [ ] README row + CHANGELOG
 - [ ] ADR-054 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/transform-rotate-impl` across two commits
+(Commit 1 = four-layer implementation + fixture, Commit 2 =
+this docs update).
+
+### What shipped
+
+**`style_values.hpp` / `.cpp`:**
+- New `float parse_angle(std::string_view s)`
+- Handles `deg` / `rad` / `turn` / `grad`; unitless = degrees
+- Returns 0 for empty / malformed / unknown units
+
+**`stylesheet.cpp`:**
+- `"transform"` and `"transform-origin"` added to
+  `supported_properties()`
+
+**`layout_box.hpp`:**
+- New `float transform_rotate_deg = 0.0f`
+
+**`layout.cpp`:**
+- Extract first `rotate(<angle>)` from the transform string
+  during `layout_element`; other functions (translateY,
+  scale, matrix) skipped in v1
+
+**`paint.cpp`:**
+- Wrap `paint_box` body in `cairo_save` / `translate(cx,cy)`
+  / `rotate(rad)` / `translate(-cx,-cy)` / `cairo_restore`,
+  where `(cx, cy)` is the box center
+- 0 degrees = no-op (`did_rotate` stays false, zero cairo
+  state change)
+
+**`test_layout.cpp`:**
+- 4 new tests: `parse_angle` units, `rotate(45deg)` layout,
+  no-transform layout, `translateY(-50%)` regression safety
+
+**`docs/adr054-rotate-test.html`:**
+- Permanent reproducibility fixture with three stacked
+  boxes: control square, `rotate(45deg)` diamond,
+  `rotate(30deg)` tilted rectangle
+
+### Verified delta (synthetic fixture)
+
+**Screenshot at 2026-11-01 confirmed**:
+
+```
+Control (no transform):     upright orange square
+rotate(45deg):              orange DIAMOND, corners at
+                            rotated positions
+rotate(30deg) rectangle:    tilted blue rectangle
+```
+
+All three render correctly. First cycle to establish the
+"synthetic-fixture verified" category with a concrete visual
+result.
+
+**Diagnostic logs during the verification run** confirmed
+each layer:
+
+```
+ADR-054-LAYOUT-INPUT: tag=div class="box rotated-45"
+  transform=rotate(45deg)
+ADR-054-LAYOUT: tag=div angle=45.00
+ADR-054-PAINT: angle=45.00 cx=72.00 cy=280.00 rad=0.7854
+```
+
+### A real finding during fixture setup
+
+The first fixture used CSS shorthand:
+
+```css
+background: #d35400;
+border: 2px solid #333;
+```
+
+**Both silently failed** -- only the longhand forms render.
+The fixture was rewritten with:
+
+```css
+background-color: #d35400;
+border-width: 2px;
+border-style: solid;
+border-color: #333;
+```
+
+This is a **pre-existing parser gap** (shorthand
+`background` and `border` are not decomposed into
+longhands). It is **out of ADR-054's scope** -- rotate is
+not the cause and the fix belongs in a dedicated shorthand
+ADR. Documented here so future contributors using the
+fixture know to expect it.
+
+### Honest delta framing
+
+**Synthetic fixture: visible** -- 3 boxes render with
+correct rotation. The diamond is unmistakable; the tilted
+rectangle confirms non-45-degree angles.
+
+**Wikipedia: zero production PNG delta** -- the only
+transform reaching cascade is `translateY(-50%)` on the
+search magnifier (from ADR-054's Context measurement). The
+rotate parser skips it (no `rotate(` substring), leaves
+`transform_rotate_deg = 0`, paint applies no transform.
+Before/after screenshots on the HTML article are
+**identical** -- the primary safety property.
+
+### Test count
+
+- 647 -> 651 cases (+4 new)
+- 2471 -> 2490 assertions (+19 new)
+- Zero pre-existing tests affected
+
+### New verification category
+
+**"synthetic-fixture verified"** -- structurally the same
+rigor as "scroll-PNG verified": a committed `.html` fixture,
+a `python3 -m http.server` local serve, and a visual
+confirmation of the render. Uses `file://` + local server
+because the project's fetch layer doesn't implement
+`file://` yet (URL validator accepts it; `net/client.cpp`
+returns status 0 -- separate latent inconsistency, future
+ADR territory).
+
+### Deferred (documented)
+
+- `translate()` / `translateX()` / `translateY()` --
+  blocked on `parent_content_height` threading
+- `scale()` / `matrix()` -- different paint operations
+- `transform-origin` custom values -- v1 always 50% 50%
+- `transform` on `<img>` -- early-return path limitation
+- **Background / border shorthand parsing** -- the fixture
+  bypass revealed this gap; separate ADR needed
+

@@ -273,6 +273,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 647 cases, 2471 assertions (+3 cases / +6
   assertions).
 
+- **CSS transform: rotate()** (ADR-054): 
+  `parse_angle` (deg/rad/turn/grad) + whitelist `transform`
+  + `LayoutBox::transform_rotate_deg` + cairo save/rotate/
+  restore wrapper around the whole `paint_box` body
+  (transform-origin = box center).
+
+  First cycle shipped under the new "synthetic-fixture
+  verified" category. Permanent fixture at
+  `docs/adr054-rotate-test.html` renders: upright orange
+  control square, `rotate(45deg)` orange diamond,
+  `rotate(30deg)` tilted blue rectangle -- all three
+  confirmed via screenshot 2026-11-01.
+
+  Zero production PNG delta: Wikipedia's only transform
+  reaching cascade is `translateY(-50%)` on the search
+  magnifier, which the rotate parser skips (field stays 0,
+  no paint change).
+
+  New finding documented: CSS shorthand `background: #d35400`
+  and `border: 2px solid #333` do not parse yet -- only
+  longhand forms render. The fixture was rewritten with
+  longhand. Pre-existing parser gap, out of ADR-054 scope.
+
+  4 new tests: parse_angle units, rotate(45deg) layout,
+  no-transform layout, translateY(-50%) regression safety.
+
+  Test count: 651 cases, 2490 assertions (+4 cases / +19
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

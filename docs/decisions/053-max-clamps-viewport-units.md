@@ -292,3 +292,40 @@ used when `parse_operand` discovery forced a test change.
 48px)`) now computes and clamps. Only ancestor culling
 remains before the sticky sidebar shows real content.
 
+
+
+## Post-ADR-054 note
+
+ADR-054 (CSS `transform: rotate()`) established a new
+verification category, **"synthetic-fixture verified"**,
+that is structurally the same rigor as "scroll-PNG
+verified" and "log-verified" but uses a committed `.html`
+fixture plus a `python3 -m http.server` local serve
+instead of a scroll position.
+
+The render category matrix now has **seven categories**
+(eight counting the `deferred` category):
+
+1. PNG-verified (first viewport) -- ADR-040 / 042 / 043
+2. Scroll-PNG (mid-scroll position) -- ADR-045 / 051 pending
+3. Behaviorally-complete, visually-subtle -- ADR-044
+4. Behaviorally-complete, visually-zero -- ADR-047 / 048
+5. Measured, no target, deferred -- ADR-049
+6. Layout-tree verified -- ADR-050 / 051
+7. Log-verified -- ADR-052
+8. **Synthetic-fixture verified** -- ADR-054
+
+The two findings from ADR-054 that affect future ADR
+planning:
+
+- **`file://` URL accepts but fails at fetch** -- `is_valid_url`
+  whitelists `file://` (src/base/url.cpp:23-24) but
+  `net/client.cpp` doesn't implement the scheme, returning
+  status 0. Latent inconsistency -- either add `file://` to
+  the net layer or remove it from the validator. Separate
+  ADR.
+- **Background/border shorthand don't parse** -- the ADR-054
+  fixture's first version used `background: #d35400` and
+  `border: 2px solid #333`. Both silently produced no
+  visible fill. Rewritten with longhand. Pre-existing
+  parser gap, separate ADR.
