@@ -463,7 +463,11 @@ void HoneyBeeWindow::update_nav_buttons() {
 // =============================================================
 
 void HoneyBeeWindow::render_html(const std::string& html) {
-    m_pipeline.render(html, static_cast<float>(m_drawing_area.get_width()));
+    // ADR-052: pass m_scroll_window.get_height() (visible viewport)
+    // alongside the DrawingArea width.
+    m_pipeline.render(html,
+                      static_cast<float>(m_drawing_area.get_width()),
+                      static_cast<float>(m_scroll_window.get_height()));
     sync_drawing_area_size();
 
     const std::string title = m_pipeline.title();
@@ -482,9 +486,11 @@ void HoneyBeeWindow::render_html(const std::string& html) {
 void HoneyBeeWindow::render_with_preparsed_doc(
     std::unique_ptr<honeybee::renderer::dom::Document> doc,
     std::string merged_css) {
+    // ADR-052: pass m_scroll_window.get_height() alongside width.
     m_pipeline.render_with_css(
         std::move(doc), std::move(merged_css),
-        static_cast<float>(m_drawing_area.get_width()));
+        static_cast<float>(m_drawing_area.get_width()),
+        static_cast<float>(m_scroll_window.get_height()));
     sync_drawing_area_size();
     const std::string title = m_pipeline.title();
     if (!title.empty()) {
@@ -564,9 +570,17 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
     // full DrawingArea height (= layout height), not the
     // viewport. We paint the entire layout tree; Cairo clips to
     // the visible viewport region automatically.
-    if (width != m_last_width) {
+    //
+    // ADR-052: viewport height is m_scroll_window.get_height()
+    // (visible viewport), NOT the DrawingArea's height parameter
+    // (which is content height). Relayout on EITHER width or
+    // height change.
+    const int viewport_h = m_scroll_window.get_height();
+    if (width != m_last_width || viewport_h != m_last_height) {
         m_last_width = width;
-        m_pipeline.relayout(static_cast<float>(width));
+        m_last_height = viewport_h;
+        m_pipeline.relayout(static_cast<float>(width),
+                            static_cast<float>(viewport_h));
         sync_drawing_area_size();
     }
 
