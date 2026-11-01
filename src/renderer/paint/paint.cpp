@@ -28,8 +28,13 @@ void fill_rect(cairo_t* cr, const layout::Color& c,
 // scaled to the box's rect. The provider owns the surface; we
 // borrow it. Zero-height + non-zero-width boxes (the wordmark
 // case) derive height from the surface's intrinsic aspect ratio.
-void paint_image(cairo_t* cr, const layout::LayoutBox& box,
-                 const std::string& url, const ImageProvider* images) {
+// ADR-056: paint_image split into paint_img_element (stretch-to-
+// box for <img>) and paint_background_image (intrinsic + explicit
+// size + position + repeat for block backgrounds). This function
+// keeps the pre-ADR-056 stretch behavior for <img> elements.
+void paint_img_element(cairo_t* cr, const layout::LayoutBox& box,
+                       const std::string& url,
+                       const ImageProvider* images) {
     if (!images || !images->get_surface) return;
     cairo_surface_t* surf = images->get_surface(url);
     if (!surf) return;
@@ -54,6 +59,67 @@ void paint_image(cairo_t* cr, const layout::LayoutBox& box,
     cairo_scale(cr, pw / iw, ph / ih);
     cairo_set_source_surface(cr, surf, 0, 0);
     cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+// ADR-056: paint block background-image with size/position/repeat.
+// Mirrors ADR-047's paint_mask_image pattern matrix; cairo_mask
+// becomes cairo_paint (fill vs mask). Intrinsic size by default,
+// explicit background_size_w overrides; aspect-derive _h when
+// only _w is set. Position relative to box; repeat via
+// CAIRO_EXTEND_REPEAT clipped to box rect.
+void paint_background_image(cairo_t* cr, const layout::LayoutBox& box,
+                            const ImageProvider* images) {
+    if (box.background_image_url.empty()) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(box.background_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: explicit background_size_w wins; aspect-derive _h if
+    // only _w set. Both 0 = intrinsic.
+    float pw = box.background_size_w > 0.0f ? box.background_size_w : iw;
+    float ph = box.background_size_h > 0.0f ? box.background_size_h
+             : (box.background_size_w > 0.0f
+                ? box.background_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position keywords relative to box.
+    float ix = box.x;
+    if (box.background_pos_x == layout::BgPosX::Right) {
+        ix = box.x + box.width - pw;
+    } else if (box.background_pos_x == layout::BgPosX::Center) {
+        ix = box.x + (box.width - pw) * 0.5f;
+    }
+    float iy = box.y;
+    if (box.background_pos_y == layout::BgPosY::Bottom) {
+        iy = box.y + box.height - ph;
+    } else if (box.background_pos_y == layout::BgPosY::Center) {
+        iy = box.y + (box.height - ph) * 0.5f;
+    }
+
+    cairo_save(cr);
+    // Clip to box so repeat doesn't bleed outside the element.
+    cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+    cairo_clip(cr);
+
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+    cairo_matrix_t mat;
+    cairo_matrix_init_scale(&mat, iw / pw, ih / ph);
+    cairo_matrix_translate(&mat, -ix, -iy);
+    cairo_pattern_set_matrix(pat, &mat);
+    cairo_pattern_set_extend(pat, box.background_no_repeat
+                                  ? CAIRO_EXTEND_NONE
+                                  : CAIRO_EXTEND_REPEAT);
+    cairo_set_source(cr, pat);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pat);
     cairo_restore(cr);
 }
 
@@ -287,14 +353,14 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
 
     // ADR-034: draw background-image if present.
     if (images && !box.background_image_url.empty()) {
-        paint_image(cr, box, box.background_image_url, images);
+        paint_background_image(cr, box, images);
     }
 
     // ADR-034: draw <img> element if this box is one.
     if (images && box.element && box.element->tag() == "img") {
         std::string src = box.element->get_attribute("src");
         if (!src.empty()) {
-            paint_image(cr, box, src, images);
+            paint_img_element(cr, box, src, images);
         }
     }
 
