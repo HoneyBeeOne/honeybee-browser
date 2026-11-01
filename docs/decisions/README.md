@@ -59,11 +59,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 054 | [CSS transform: rotate()](054-transform-rotate.md) | Four-layer implementation: `parse_angle` + whitelist + field + cairo rotate wrapper. Verified via permanent fixture (diamond + tilted rect render correctly). Zero production delta (Wikipedia uses translateY, deferred). Revealed shorthand `background:`/`border:` parser gap. |
 | 055 | [CSS shorthand background: (color forms)](055-background-shorthand.md) | `try_expand_background` handles color / none / !important / var forms; url/gradient/multi-layer drop entirely. Fixture-verified (5 rows, 2026-11-01). Corrects ADR-054's imprecise "background: and border: fail" claim. |
 | 056 | [CSS background: URL forms](056-background-url-forms.md) | 5 new `LayoutBox` fields mirroring mask; `paint_background_image` (Cairo pattern matrix, repeat); grammar parser for all 4 Wikipedia url() forms. **Production-verified 2026-11-01** (search icon + external link icons render on Wikipedia). 11/11 forms parse. |
+| 057 | [`parent_content_height` threading + `%` height/max-height](057-parent-content-height.md) | Threads parent content height through `layout_element` (8 call sites); resolves `%` height / min-height / max-height; `<html>`/`<body>` special case uses `viewport_h`. Enables ADR-058 (translateY chain). |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 056 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 057 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
