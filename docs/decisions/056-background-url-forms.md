@@ -1,6 +1,6 @@
 # ADR-056: CSS `background:` URL forms (image + repeat + position + size)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-01
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-034 (image paint), ADR-045 (inline background-size), ADR-047 (mask-image size/pos), ADR-055 (background color forms)
@@ -259,3 +259,172 @@ ADR-056 is complete when:
 - [ ] Post-ADR-056 note in ADR-045 (inline bg pattern echoed at block level)
 - [ ] README row + CHANGELOG
 - [ ] ADR-056 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/background-url-forms` across three
+commits (Commit 1 = infrastructure, Commit 2 = grammar
+parser, Commit 3 = fixture + README). Single PR #249
+merged at `dec064d`.
+
+### What shipped
+
+**Commit 1 (`2e9bff5`) -- infrastructure, no behavior change:**
+
+- `LayoutBox` + 5 fields mirroring mask: `background_size_w/h`,
+  `background_pos_x/y`, `background_no_repeat`
+- `layout_element` reads `background-size`, `-position`,
+  `-repeat` (mirror mask block at line 558)
+- **`paint_image` split into two functions:**
+  - `paint_img_element`: unchanged stretch-to-box for `<img>`
+  - `paint_background_image`: intrinsic by default, explicit
+    `background_size_w` overrides, aspect-derive `_h` from
+    `_w`, position via `BgPosX/Y` keywords, repeat via
+    `CAIRO_EXTEND_REPEAT`, clipped to box rect. Uses Cairo
+    pattern matrix (mirrors `paint_mask_image`;
+    `cairo_mask` -> `cairo_paint`).
+- **Checkpoint**: all 658 tests pass unchanged. Verified
+  the split didn't regress ADR-034 `<img>` rendering,
+  ADR-047 mask, or ADR-045 inline background.
+
+**Commit 2 (`a0e2c0e`) -- grammar parser, visible delta:**
+
+- Replaces `try_expand_background`'s 3 early-return lines
+  with token classifier + assembler for the CSS background
+  shorthand grammar
+- Handles `[color || image || repeat || position [/ size]]*`
+  order-free per CSS spec
+- 5 helper functions: `is_color_token`, `is_repeat_token`,
+  `is_position_token`, `is_url_token`, `is_length_token`
+- `bg_detail::classify` + `bg_detail::BgTokens` for token
+  accumulation with `valid` flag for malformed detection
+- Emits canonical order (color, image, repeat, position,
+  size) regardless of source order -- CSS longhands are
+  order-independent
+
+**Commit 3 (`10f1eb2`) -- fixture + README:**
+
+- `docs/adr056-background-url-test.html`: 5-row permanent
+  fixture, self-contained via inline `data:image/svg+xml`
+  URLs (no external network or local server dependency)
+- Each row exercises one Wikipedia form
+
+### Verified delta (production, screenshot 2026-11-01)
+
+Ran against Wikipedia HTML article:
+
+| Icon | Before ADR-056 | After ADR-056 |
+|---|---|---|
+| **Search magnifier** (top bar) | invisible | **renders** (~10px high) |
+| **External link icons** (body) | invisible | **renders** |
+| **Wikipedia logo** (`<img>`, not background) | renders | renders unchanged |
+| **Article body / layout** | correct | correct (zero regression) |
+
+**This is a real production delta on Wikipedia.**
+First ADR since ADR-045 to produce material visual change
+on the target page.
+
+### Honest caveat (the magnifier)
+
+`.cdx-text-input__start-icon` renders at correct size,
+**~10px too high**. The CSS is:
+```css
+position: absolute;
+top: 50%;
+transform: translateY(-50%);
+```
+
+**`top: 50%` doesn't resolve** -- needs `parent_content_height`
+in `LengthContext` (deferred since ADR-053). Feeding
+`translateY(-50%)` alone moves the icon to `y=-3` (above
+the container), a regression. So it's deferred.
+
+After ADR-056: **the icon renders.** After the future
+`parent_content_height` cycle: **it'll be perfectly
+centered.** Two-step improvement.
+
+### 11/11 `background:` form coverage
+
+**Complete.** Every `background:` form in Wikipedia's
+site.styles bundle now parses:
+
+| Form | ADR |
+|---|---|
+| `#fff` / `#ffffff` / `var(--x, #fff)` | ADR-055 |
+| `none` / `none !important` | ADR-055 |
+| `#fff !important` | ADR-055 |
+| `url(x)` | ADR-056 |
+| `url(x) no-repeat right` | ADR-056 |
+| `url(x) 100% 50% no-repeat` | ADR-056 |
+| `#fff url(x) repeat` | ADR-056 |
+| `no-repeat center / 1.23em url(x)` | ADR-056 |
+| `#fff url(x) repeat` (var variant) | ADR-056 |
+| `linear-gradient(...)` | **still dropped** (no gradient support) |
+
+10 of 11 render. The 11th (linear-gradient) needs an
+entirely new paint path -- separate ADR.
+
+### Test count
+
+- 658 -> 663 cases (+5 net)
+  - 1 flipped (ADR-055's `url() forms dropped entirely`
+    -> `now expand to 3 longhands`)
+  - 5 new ADR-056 tests (one per Wikipedia form + malformed)
+- 2514 -> 2550 assertions (+36)
+- Zero regression on 662 pre-existing tests
+
+### Design decisions applied
+
+**Mirror ADR-047 mask pattern**: `mask_size_w/h` /
+`mask_pos_x/y` / `mask_no_repeat` transfer almost directly
+to `background_size_w/h` / `background_pos_x/y` /
+`background_no_repeat`. The Cairo pattern matrix math is
+identical (`cairo_mask` -> `cairo_paint` for backgrounds).
+
+**Split `paint_image` into two functions** rather than add
+parameters: `<img>` elements have fixed stretch behavior
+that must not change; block backgrounds need the new
+pattern matrix. Splitting preserves each path's contract.
+
+**Color classifier duplicated in css/**: `layout::parse_color`
+isn't accessible from `css/` (layering). The 19-name set is
+duplicated in `is_color_token` -- **for token discrimination
+only**. Actual color resolution still happens in
+`layout_element` via `parse_color`. No risk of divergence
+on named color list -- both reference the same CSS names.
+
+**Preserve ADR-055's `none` and malformed handling**:
+`background: none` -> transparent stays. Gradients and
+multi-layer (comma) still drop entirely. Unknown tokens
+drop entirely (mirror border/grid-template/flex).
+
+### A real, non-obvious regression that was caught
+
+**First attempt at Commit 1 placed the new reads at line
+336** -- before `LengthContext ctx` was declared at line
+434. Build error: `'ctx' was not declared in this scope`.
+The fix was to relocate the entire block to line 558
+alongside the mask reads, where `ctx` is in scope.
+
+This is the same category of bug ADR-051's `parse_operand`
+discovery surfaced: **subsystems that look unified from the
+outside can have surprising internal scope boundaries.**
+Worth noting for future readers: adding reads to
+`layout_element` requires checking `LengthContext ctx`
+location first.
+
+### Deferred (documented)
+
+- **`translateY()` / `top: 50%`** -- blocked on
+  `parent_content_height`
+- **Percentage `background-size`** -- needs element
+  dimensions at parse time
+- **`cover` / `contain`** -- needs paint-time aspect math
+- **`repeat-x` / `repeat-y` / `space` / `round`** --
+  variants beyond `repeat` / `no-repeat`
+- **Multi-layer** (`url(a), url(b)`) -- rare
+- **`linear-gradient` / `radial-gradient`** -- no gradient
+  support anywhere in paint
+- **`background-clip` / `background-origin`** -- separate
+  properties
+

@@ -621,3 +621,38 @@ layout.
 - `mask-composite`, `mask-border`, `mask-clip`
 - Percentage `mask-size` / `mask-position`
 - `mask-repeat: repeat | repeat-x | repeat-y`
+
+
+## Post-ADR-056 note
+
+**ADR-056 brings block backgrounds to parity with the inline
+background pattern ADR-045 established.**
+
+ADR-045 introduced `bg_size_w` / `bg_size_h` /
+`bg_pos_x` / `bg_pos_y` on `LineFragment` -- size and
+position support for **inline-element** background-images
+(the external link icons case). ADR-047 then independently
+built `mask_size_w/h` / `mask_pos_x/y` on `LayoutBox`.
+
+ADR-056 completes the trio: `LayoutBox` now has
+`background_size_w/h` / `background_pos_x/y` /
+`background_no_repeat` for **block-element** background-
+images (the search magnifier, PDF icons, arrows case).
+
+**The three patterns are now:**
+
+| Subsystem | Fields | Paint |
+|---|---|---|
+| Inline bg (ADR-045) | `LineFragment::bg_*` | inline render path |
+| Block bg (ADR-056) | `LayoutBox::background_*` | `paint_background_image` |
+| Mask (ADR-047) | `LayoutBox::mask_*` | `paint_mask_image` |
+
+All three use `BgPosX` / `BgPosY` enums for keyword
+positioning. All three aspect-derive size when only one
+dimension is set. All three place via Cairo pattern
+matrices.
+
+**This is the composition payoff**: ADR-045 + ADR-047's
+already-shipped patterns made ADR-056 mostly a copying
+exercise. The grammar parser was the only genuinely new
+logic -- the paint infrastructure was already there twice.

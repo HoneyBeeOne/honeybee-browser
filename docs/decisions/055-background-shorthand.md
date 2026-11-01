@@ -320,3 +320,41 @@ in ADR-054's Post-ADR-055 note.
 - **`background-size` / `-position` / `-repeat` shorthand
   sub-parsing** -- part of url work
 
+
+
+## Post-ADR-056 note
+
+**ADR-056 closes the `url()` gap that ADR-055 deferred.**
+
+ADR-055 shipped `background:` color-only forms (7 of 11
+Wikipedia forms). URL forms (4 of 11) still dropped entirely
+because they needed `background-image` + `-repeat` +
+`-position` + `-size` coordination -- four longhands, each
+with its own grammar.
+
+ADR-056 completes the grammar. **All 11 `background:`
+forms now parse** (10 render; `linear-gradient` still
+dropped for lack of gradient support).
+
+**The `try_expand_background` function evolved:**
+
+| ADR | Grammar coverage |
+|---|---|
+| ADR-055 | `color` / `none` / `!important` / `var` |
+| ADR-056 | + `url(...)` / `repeat` / `position` / `size` |
+
+The three drop conditions ADR-055 established are all
+preserved in ADR-056:
+- `linear-gradient` -> drop entirely (no gradient support)
+- Multi-layer (`url(a), url(b)`) -> drop entirely
+- Unknown token -> drop entirely
+
+ADR-055's tests still pass unchanged (the url-form test
+was flipped to assert expansion, but the color/none/
+!important/gradient/multi-layer tests remain identical).
+
+**Production impact**: with ADR-056, Wikipedia's search
+magnifier, external link icons, and PDF icons now render
+for the first time. Combined 055 + 056 closes the entire
+`background:` shorthand surface for the actual Wikipedia
+CSS bundle.
