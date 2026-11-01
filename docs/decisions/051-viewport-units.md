@@ -541,3 +541,42 @@ touched by this ADR).
   currently passes 0; future ADR can plumb
   `m_scroll_window.get_allocated_height()` or equivalent
 
+
+
+## Post-ADR-052 note
+
+**ADR-051's Deferred item "GTK allocated height threading to
+`render_pipeline`" is closed by ADR-052.**
+
+ADR-051 threaded `viewport_height` through `layout()` /
+`layout_with_pseudo()` / `layout_element()` but passed `0.0f`
+from `render_pipeline.cpp` because GTK height wasn't in scope.
+
+ADR-052 sources viewport height from
+`m_scroll_window.get_height()` (the visible viewport,
+~678px), not `m_drawing_area.get_height()` (content height,
+~60000px on Wikipedia). The two are distinct; only the
+ScrolledWindow matches CSS `vh` semantics.
+
+**Verified via `HONEYBEE_LOG=layout`:**
+
+```
+Before ADR-052: layout: viewport=1024x0
+After ADR-052:  layout: viewport=1024x678
+```
+
+`parse_length("calc(100vh - 48px)")` now returns `678 - 48 =
+630` in production instead of `-48`.
+
+**Remaining sticky-sidebar prerequisites** after ADR-051 +
+ADR-052 (unchanged from ADR-050's Post-ADR-051 note):
+
+1. **`max-height` honoring in layout** -- separate min/max
+   clamp ADR; `viewport_h` is now correct so this ADR only
+   needs to add the clamp logic
+2. **Ancestor culling unblock** -- `.vector-column-start h=0`
+   comes from other rules
+3. **`position: sticky` scroll-Y** -- separate cycle
+
+The `viewport_h` plumbing is now complete. No future ADR needs
+to revisit it.

@@ -228,6 +228,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 626 -> 644 cases, 2407 -> 2465 assertions.
 
+- **GTK viewport height threading** (ADR-052): `m_scroll_window.get_height()`
+  (visible viewport) now flows through `render()` /
+  `render_with_css()` / `relayout()` into `layout_with_pseudo()`
+  into `LengthContext.viewport_h`. `on_draw` tracks height in
+  `m_last_height`, relayouts on either width or height change.
+
+  Closes ADR-051's Deferred item "GTK allocated height
+  threading". `HONEYBEE_LOG=layout` before/after:
+  `viewport=1024x0` -> `viewport=1024x678`.
+
+  Zero visible PNG delta (max-height still ignored by layout;
+  sticky sidebar still ancestor-culled). Same category as
+  ADR-047/048: correct infrastructure before consumer.
+
+  Test count: 644 cases, 2465 assertions (unchanged -- default
+  viewport_height=0.0f protects existing test callers).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
