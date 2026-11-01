@@ -376,3 +376,37 @@ ADR territory).
 - **Background / border shorthand parsing** -- the fixture
   bypass revealed this gap; separate ADR needed
 
+
+
+## Post-ADR-055 note
+
+**ADR-054's "shorthand background: and border: don't
+parse yet" finding was imprecise.**
+
+ADR-055's isolation fixture (4 rows, each changing one
+variable) showed:
+
+| Row | Background | Border | Rendered |
+|---|---|---|---|
+| 1 | longhand | longhand | GREEN fill + border |
+| 2 | **shorthand** | longhand | white fill + border |
+| 3 | longhand | **shorthand** | orange fill + border |
+| 4 | both shorthand | | white fill + border |
+
+**`border:` shorthand was working all along** -- ADR-040's
+`try_expand_border` at `stylesheet.cpp:482` (tested at
+889-1002). ADR-054's fixture changed multiple variables
+at once (`box-sizing`, `margin`, `background`, `border`);
+the 2px border was rendered but invisible against white
+at small size, making it look like both shorthands failed.
+
+**`background:` shorthand is the actual gap.** Closed by
+ADR-055 for color-only forms (`#fff`, `#ffffff`,
+`none`, `!important`, `var(--x, #fff)`). URL forms and
+gradients remain deferred.
+
+**Lesson**: when a fixture fails, isolate one variable
+per row before drawing conclusions. The ADR-054 fixture
+changed five variables simultaneously and produced a
+misleading result that survived into the ADR record for
+one cycle. Corrected here.

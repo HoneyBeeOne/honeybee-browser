@@ -445,3 +445,25 @@ for honest visual-delta assessment). Both deltas are
 individually verified; the ADR-044 rounding's perceptibility
 is documented as "subtle at 2px, more visible at larger radii
 (future sites)."
+
+
+## Post-ADR-055 note
+
+**ADR-055 confirmed ADR-040's `border:` shorthand has
+been working since ADR-040 shipped.** ADR-054's fixture
+failure was misinterpreted for one cycle as both border
+and background shorthand failing; the isolation fixture
+in ADR-055 showed border shorthand rendered correctly
+all along -- the 2px line was just invisible against
+white at small size.
+
+ADR-055 adds the sibling `background:` shorthand (color
+forms) following the same `expand_shorthand` dispatcher
+pattern that ADR-040 established for `border:`. The
+dispatcher pattern is now used by:
+- ADR-028: `grid-template`
+- ADR-029: `flex` and `flex-flow`
+- ADR-040: `border` and per-side borders
+- **ADR-055: `background` (color forms)**
+- ADR-012: box shorthands (`margin` / `padding` /
+  `border-width`)

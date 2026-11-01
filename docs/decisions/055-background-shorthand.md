@@ -1,6 +1,6 @@
 # ADR-055: CSS shorthand `background:` (color forms)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-01
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-026 (var() resolution), ADR-029 (flex/flex-flow shorthand pattern), ADR-040 (border shorthand), ADR-054 (fixture that surfaced the gap)
@@ -192,3 +192,131 @@ ADR-055 is complete when:
 - [ ] Post-ADR-055 note in ADR-040 (border shorthand confirmed working; sibling background shipped)
 - [ ] README row + CHANGELOG
 - [ ] ADR-055 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/background-shorthand` across two commits
+(Commit 1 = implementation + tests + fixture, Commit 2 = this
+docs update).
+
+### What shipped
+
+**`stylesheet.cpp`:**
+- `try_expand_background(value, important, out)` (~25 lines)
+- Rejects values containing `url(`, `gradient(`, or `,` --
+  drops declaration entirely (matches `border` /
+  `grid-template` / `flex` malformed handling)
+- `none` -> `background-color: transparent` (CSS spec)
+- Any other value -> `background-color: <raw string>`
+  (matching `border-color` behavior -- layout's
+  `parse_color` resolves at layout time)
+- Dispatcher hook before box-shorthand default:
+  `if (property == "background") { try_expand_background; return; }`
+
+**`test_stylesheet.cpp`:**
+- 7 tests:
+  - `#fff` -> `background-color: #fff`
+  - `#2980b9` -> `background-color: #2980b9`
+  - `none` -> `background-color: transparent`
+  - `!important` preserved through expansion
+  - `url()` -> dropped
+  - `linear-gradient()` -> dropped
+  - multi-layer (comma) -> dropped
+
+**`docs/adr055-background-shorthand-test.html`:**
+- 5-row permanent fixture testing control (longhand),
+  shorthand bg, shorthand border, both shorthands, and
+  cascade order (`background: none` overriding earlier
+  `background-color`)
+
+**`docs/README.md`:**
+- Fixture list updated
+
+### Verified delta (synthetic fixture)
+
+**Screenshot 2026-11-01 confirmed**:
+
+```
+Row 1 GREEN   -- control (longhand bg + longhand border)
+Row 2 BLUE    -- bg shorthand works (was WHITE pre-ADR-055)
+Row 3 ORANGE  -- border shorthand works (ADR-040, unchanged)
+Row 4 PURPLE  -- both shorthands together
+Row 5 NO FILL -- 'none' correctly overrides #c0392b
+                (was RED pre-ADR-055, text now readable
+                on transparent white)
+```
+
+All five rows correct. **Two consecutive ADR cycles
+(054 + 055) verified via the synthetic-fixture category**,
+which is now the primary verification path for
+non-production-reachable features.
+
+### Honest delta framing
+
+**Synthetic fixture: visible.** Rows 2 and 4 were white,
+now blue/purple. Row 5 was red, now transparent.
+
+**Wikipedia: 7 of 11 forms now render** -- `#fff`,
+`#ffffff`, `#fff !important`, `var(--x, #fff)`, `none`,
+`none !important` -- the most common article chrome
+backgrounds. **This is a real production delta** for the
+first time since ADR-045.
+
+**4 of 11 forms still drop** -- 3 `url()` forms + 1
+`linear-gradient`. No regression: same as today (transparent
+fill, no image, no gradient).
+
+### Design decisions applied
+
+**Color-only v1**: url forms need four-longhand
+coordination (`background-image`, `-repeat`, `-position`,
+`-size`), each with its own grammar. Separate ADR.
+
+**Drop url / gradient / multi-layer entirely**: extracting
+only the color from `#fff url(x)` produces a *worse* state
+than dropping (fill but no image, vs. today: neither).
+
+**Raw color string pass-through**: matches `border-color`;
+layout's `parse_color` resolves at layout time. Malformed
+colors (e.g. `background: garbage`) produce
+`background-color: garbage` in the cascade, which layout
+parses to transparent -- identical observable behavior to
+longhand `background-color: garbage`.
+
+**`none` -> transparent**: matches CSS spec, equivalent
+to today's no-op.
+
+### A real finding this cycle
+
+**ADR-054's claim was imprecise.** The original ADR-054
+recorded "shorthand background: and border: don't parse
+yet." The isolation fixture proved that **`border:` was
+working all along** (ADR-040's `try_expand_border` at
+`stylesheet.cpp:482`, tested at 889-1002). ADR-054's
+fixture changed multiple variables at once
+(`box-sizing`, `margin`, `background`, `border`), and
+the 2px border was rendered but invisible against white
+at small size. The actual gap was background-only.
+
+This is the first cycle in the session to ship an
+**honest correction to a prior ADR's finding**. Recorded
+in ADR-054's Post-ADR-055 note.
+
+### Test count
+
+- 651 -> 658 cases (+7 new)
+- 2490 -> 2514 assertions (+24 new)
+- Zero pre-existing tests affected
+
+### Deferred (documented)
+
+- **url() forms** (3 in Wikipedia CSS) -- needs
+  background-image + repeat + position + size
+  coordination
+- **linear-gradient** (1 in Wikipedia CSS) -- no gradient
+  support in paint
+- **Multi-layer** (`url(a), url(b)`) -- rare
+- **Compound** (`#fff url(...)`) -- part of url work
+- **`background-size` / `-position` / `-repeat` shorthand
+  sub-parsing** -- part of url work
+
