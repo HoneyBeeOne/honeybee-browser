@@ -57,7 +57,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 052 | [GTK Viewport Height Threading](052-gtk-viewport-height.md) | `m_scroll_window.get_height()` threaded through render/relayout; verified via log (`viewport=1024x678`); closes ADR-051 Deferred |
 | 053 | [Honor viewport units in max-width / max-height clamps](053-max-clamps-viewport-units.md) | Removes ADR-037-era vw/vh skip guard; clamps verified via 3 new tests (100vw/100vh/calc(100vh-48px)); consumer blocked by ancestor culling |
 | 054 | [CSS transform: rotate()](054-transform-rotate.md) | Four-layer implementation: `parse_angle` + whitelist + field + cairo rotate wrapper. Verified via permanent fixture (diamond + tilted rect render correctly). Zero production delta (Wikipedia uses translateY, deferred). Revealed shorthand `background:`/`border:` parser gap. |
-| 055 | [CSS shorthand background: (color forms)](055-background-shorthand.md) | `try_expand_background` for color/none/!important/var forms. URL + gradient + multi-layer deferred. Corrects ADR-054's imprecise "background: and border: fail" claim -- border: already works (ADR-040). |
+| 055 | [CSS shorthand background: (color forms)](055-background-shorthand.md) | `try_expand_background` handles color / none / !important / var forms; url/gradient/multi-layer drop entirely. Fixture-verified (5 rows, 2026-11-01). Corrects ADR-054's imprecise "background: and border: fail" claim. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 

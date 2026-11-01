@@ -302,6 +302,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 651 cases, 2490 assertions (+4 cases / +19
   assertions).
 
+- **CSS shorthand `background:` (color forms)** (ADR-055): 
+  `try_expand_background` in `expand_shorthand` covers
+  `background: #fff`, `#2980b9`, `none` (→ transparent),
+  `!important`, and `var(--x, #fff)` (resolved by cascade
+  before parser). URL forms, gradients, and multi-layer
+  (comma) drop entirely — half-parsing would produce a
+  worse state than dropping.
+
+  Verified via permanent fixture at
+  `docs/adr055-background-shorthand-test.html`: 5 rows
+  covering longhand bg, shorthand bg, shorthand border,
+  both shorthands, and cascade order. Screenshot
+  2026-11-01 confirmed rows 2 and 4 now fill (blue/purple,
+  was white pre-ADR-055); row 5's `none` correctly
+  overrides earlier `#c0392b` (was red, now transparent).
+
+  Wikipedia impact: 7 of 11 `background:` forms now
+  render (the most common chrome backgrounds) — first
+  real production delta since ADR-045. 4 url/gradient
+  forms still drop entirely (no regression).
+
+  **Corrects ADR-054's imprecise finding**: the original
+  ADR-054 claim "shorthand background: and border: don't
+  parse yet" was wrong — only `background:` was failing.
+  `border:` shorthand has been working since ADR-040;
+  ADR-054's fixture changed five variables at once and
+  produced a misleading result.
+
+  7 new tests: color forms, none, !important, url drop,
+  gradient drop, multi-layer drop.
+
+  Test count: 658 cases, 2514 assertions (+7 cases / +24
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
