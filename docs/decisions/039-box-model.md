@@ -526,3 +526,35 @@ first with clean measurement. box-sizing lands separately with
 its own measurement + easy revert if needed. Same pattern as
 ADR-028's "ship the fix, correct the record if measured-delta
 shows otherwise."
+
+
+## Post-ADR-057 note
+
+**ADR-057 closes ADR-039's `%` height deferral.**
+
+ADR-039 added explicit `height:` support but skipped
+percentage values because `LengthContext` had no
+`parent_content_height`. ADR-057 threads the field through
+`layout_element` (8 call sites, mirroring
+`parent_content_width`'s threading shape) and adds
+`parse_length_for_height` to resolve trailing `%`.
+
+The three skip guards that lived in `layout.cpp` since
+ADR-039 are removed:
+- `height:` (line 1835)
+- `min-height:` (line 1848)
+- `max-height:` (line 1857)
+
+All three now resolve `%` against `parent_content_height`
+(or `viewport_h` for `<html>` / `<body>`, matching CSS
+spec's "initial containing block").
+
+**The auto-parent skip is preserved** -- CSS spec:
+`%` on an auto-height parent resolves to `auto`. This is
+not a limitation; it's correct behavior, and ADR-057
+documents it explicitly.
+
+**Consequence for ADR-039's "v1 limitation" note**: it can
+be considered closed for the percentage case. The
+`parent_content_height` field it cited as missing is now
+present and threaded.

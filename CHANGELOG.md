@@ -375,6 +375,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 663 cases, 2550 assertions (+5 cases / +36
   assertions net; 1 test flipped, 5 new).
 
+- **`parent_content_height` threading + `%` height/max-height** (ADR-057): 
+  `LengthContext` gains `parent_content_height`;
+  `parse_length_for_height()` resolves trailing `%` against
+  parent height (or `viewport_h` for `<html>` / `<body>` via
+  the initial containing block rule). `layout_element` threads
+  the field through 8 recursive call sites, mirroring
+  `parent_content_width`'s shape.
+
+  Three skip guards removed from `layout.cpp`: `height: %`,
+  `min-height: %`, `max-height: %` now resolve via
+  `parse_length_for_height`. Closes ADR-039's and ADR-053's
+  `%` deferrals.
+
+  `<html>` special case: `<html>`'s containing block is the
+  viewport, so `html { height: 100% }` -- the near-universal
+  CSS reset -- resolves against `viewport_h`. `<body>` picks
+  it up as its parent height, and children inherit the chain.
+
+  Auto-parent skip preserved: `%` on an auto-height parent
+  resolves to `auto` (CSS spec correctness, not a limitation).
+
+  Verified via 6 new tests: html 100% -> viewport_h,
+  html/body/grandchild chain, 50% on fixed 200px parent -> 100,
+  50% on auto parent -> skip, max-height 30% -> 60,
+  min-height 50% -> 100. Fixture:
+  `docs/adr057-percent-height-test.html` (4 rows).
+
+  Visible delta: `html, body { height: 100% }` now works;
+  body background extends to full viewport on short pages.
+
+  Enables ADR-058 (translateY + top: 50%) -- the magnifier
+  centering chain is now 2 layers from complete.
+
+  Test count: 669 cases, 2562 assertions (+6 cases / +12
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
