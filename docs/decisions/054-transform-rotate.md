@@ -410,3 +410,33 @@ per row before drawing conclusions. The ADR-054 fixture
 changed five variables simultaneously and produced a
 misleading result that survived into the ADR record for
 one cycle. Corrected here.
+
+
+## Post-ADR-057 note
+
+**ADR-057 ships the `parent_content_height` that ADR-058
+needs to center the search magnifier.**
+
+ADR-054 diagnosed that `.cdx-text-input__start-icon` sits
+at `y=7` (container top) and needs `top: 50%` +
+`translateY(-50%)` to center at `y=18`. `top: 50%`
+requires `parent_content_height` -- which ADR-057 now
+provides.
+
+**The magnifier chain, current state:**
+
+| Layer | Status |
+|---|---|
+| background-image renders | ADR-056 |
+| parent_content_height available | **ADR-057** |
+| top: 50% resolves | Deferred to ADR-058 |
+| translateY(-50%) centers | Deferred to ADR-058 |
+
+**Why `top: 50%` isn't shipped in ADR-057**: alone, it
+would move the magnifier from `y=7` to `y=7 + (42 * 0.5) =
+28` -- the bottom of the search box instead of the top.
+Only with `translateY(-50%)` does it land at the correct
+`y=18`. So ADR-058 must ship both together.
+
+**After ADR-058**: the magnifier will be perfectly
+centered. ADR-054's deferred chain reaches its end.

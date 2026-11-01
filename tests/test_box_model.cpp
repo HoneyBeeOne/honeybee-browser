@@ -106,12 +106,15 @@ TEST_CASE("height: content taller than explicit height",
     CHECK(near(x->height, 20.0f));
 }
 
-TEST_CASE("height: percentage skipped (parent_content_height deferred)",
-          "[layout][box-model][adr-039]") {
-    // v1: LengthContext has only parent_content_width, no
-    // parent_content_height. Percentage heights would resolve
-    // against WIDTH which is semantically wrong (and catastrophic
-    // for height:100% on <html>/<body>). Skip until threading.
+TEST_CASE("height: percentage with default viewport_h=0 skips",
+          "[layout][box-model][adr-039][adr-057]") {
+    // ADR-057 threaded parent_content_height. This test's run()
+    // uses default viewport_height=0, so <html> gets
+    // parent_content_height = 0, %-height resolves to 0, and
+    // the whole chain stays at 0 -- still a skip, but now a
+    // correct-spec skip (auto parent = 0, % = auto), not the
+    // old "field doesn't exist" skip. See the ADR-057 tests
+    // below for % resolution with explicit viewport_height.
     auto t = run(
         "<html><body><div class='x'>A</div></body></html>",
         "body,html{margin:0;padding:0;height:100%} .x{height:100%}");

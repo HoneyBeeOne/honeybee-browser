@@ -329,3 +329,30 @@ planning:
   `border: 2px solid #333`. Both silently produced no
   visible fill. Rewritten with longhand. Pre-existing
   parser gap, separate ADR.
+
+
+## Post-ADR-057 note
+
+**ADR-057 closes ADR-053's `%` max-height deferral.**
+
+ADR-053 removed the vw/vh skip from `max-width` and
+`max-height`, but preserved a `%` skip specifically because
+`LengthContext` had no `parent_content_height`. (The `%`
+would have resolved against `parent_content_width`, which
+is catastrophically wrong for height.)
+
+ADR-057 threads `parent_content_height` and adds
+`parse_length_for_height`. The `%` guard on
+`max-height` / `min-height` (and `height`) is now removed.
+
+**Both deferrals ADR-053 listed are now closed:**
+- `%` max-height -- **ADR-057** (this note)
+- `%` min-height -- same
+
+The remaining ADR-053 deferral (`parent_content_height`
+threading) is also now complete.
+
+**Both max-width/max-height now fully resolve all unit
+types**: px / em / rem / vw / vh / vmin / vmax / % /
+calc() / min() / max() / clamp(). The full length grammar
+is honored.
