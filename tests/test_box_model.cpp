@@ -37,13 +37,15 @@ std::pair<float, float> fake_measure(
 }
 
 TestDoc run(const std::string& html, const std::string& css_text,
-            float viewport = 800.0f) {
+            float viewport = 800.0f,
+            float viewport_height = 0.0f) {  // ADR-053: viewport units in clamps
     TestDoc t;
     t.doc = honeybee::renderer::html::parse(html);
     auto sheet = css::Stylesheet::parse(css_text);
     t.styles = css::cascade(css::ua_stylesheet(), sheet, *t.doc,
                             css::RenderState{}, viewport);
-    t.root = layout::layout(*t.doc, t.styles, fake_measure, viewport);
+    t.root = layout::layout(*t.doc, t.styles, fake_measure,
+                            viewport, nullptr, viewport_height);
     return t;
 }
 
@@ -164,15 +166,19 @@ TEST_CASE("max-width: none is no-op", "[layout][box-model][adr-039]") {
     CHECK(near(x->width, 400.0f));
 }
 
-TEST_CASE("max-width: containing vw is skipped (not collapsed)",
-          "[layout][box-model][adr-039]") {
+TEST_CASE("max-width: containing vw now clamps (ADR-053)",
+          "[layout][box-model][adr-039][adr-053]") {
+    // ADR-037-era test asserted the guard skipped vw. ADR-051 made
+    // parse_length resolve viewport units; ADR-052 made viewport_h
+    // nonzero in production; ADR-053 removed the stale guard.
+    // Default viewport_width=800 -> 75vw=600; min(100, 600)=100.
+    // Width clamps from 400 to 100.
     auto t = run(
         "<html><body><div class='x'>A</div></body></html>",
         "body,html{margin:0;padding:0} .x{width:400px;max-width:min(100px, 75vw)}");
     const auto* x = find_by_class(t.root, "x");
     REQUIRE(x != nullptr);
-    // vw deferred per ADR-037; clamp skipped
-    CHECK(near(x->width, 400.0f));
+    CHECK(near(x->width, 100.0f));
 }
 
 // =============================================================
@@ -243,4 +249,52 @@ TEST_CASE("overflow: hidden auto (two-value) also clips",
     const auto* x = find_by_class(t.root, "x");
     REQUIRE(x != nullptr);
     CHECK(x->clip_children == true);
+}
+
+// =============================================================
+// ADR-053: viewport units in max clamps
+//
+// Before ADR-053, the max-width and max-height clamps skipped
+// any value containing "vw" or "vh" -- a defensive ADR-037-era
+// guard because parse_length returned 0 for viewport units at
+// that time. ADR-051 made parse_length resolve vw/vh/vmin/vmax;
+// ADR-052 made viewport_h nonzero in production; ADR-053
+// removes the stale guard. These 3 tests prove the clamp fires.
+//
+// Each test sets an explicit width/height larger than the max
+// so the clamp actually activates (natural size must exceed
+// max for the "max < natural" condition to hold).
+// =============================================================
+
+TEST_CASE("max-width: 100vw clamps to viewport width (ADR-053)",
+          "[layout][box-model][adr-053]") {
+    auto t = run(
+        "<html><body><div class='x'>A</div></body></html>",
+        "body,html{margin:0;padding:0} .x{width:5000px;max-width:100vw}",
+        800.0f, 600.0f);
+    const auto* x = find_by_class(t.root, "x");
+    REQUIRE(x != nullptr);
+    CHECK(near(x->width, 800.0f));
+}
+
+TEST_CASE("max-height: 100vh clamps to viewport height (ADR-053)",
+          "[layout][box-model][adr-053]") {
+    auto t = run(
+        "<html><body><div class='x'>A</div></body></html>",
+        "body,html{margin:0;padding:0} .x{height:5000px;max-height:100vh}",
+        800.0f, 600.0f);
+    const auto* x = find_by_class(t.root, "x");
+    REQUIRE(x != nullptr);
+    CHECK(near(x->height, 600.0f));
+}
+
+TEST_CASE("max-height: calc(100vh - 48px) clamps (ADR-053)",
+          "[layout][box-model][adr-053]") {
+    auto t = run(
+        "<html><body><div class='x'>A</div></body></html>",
+        "body,html{margin:0;padding:0} .x{height:5000px;max-height:calc(100vh - 48px)}",
+        800.0f, 600.0f);
+    const auto* x = find_by_class(t.root, "x");
+    REQUIRE(x != nullptr);
+    CHECK(near(x->height, 552.0f));   // 600 - 48
 }

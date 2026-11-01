@@ -1732,10 +1732,12 @@ LayoutBox layout_element(const dom::Element& el,
     // ADR-039: box model completion.
 
     // (1) min-width / max-width clamps. Applied after the width
-    // resolution above. auto/none are no-ops. vw/vh in
-    // max-width skipped -- ADR-037 defers those units; a
-    // max-width that resolves to 0 due to vw would collapse
-    // the element (worse than current no-clamp behavior).
+    // resolution above. auto/none are no-ops. ADR-037 originally
+    // skipped vw/vh here because parse_length returned 0 for
+    // viewport units at that time; ADR-051 + ADR-052 fixed that
+    // (parse + production viewport_h), so ADR-053 removes the
+    // skip. The > 0.0f check below is the safety net for the
+    // initial render (viewport dims are 0 before GTK allocates).
     if (style) {
         if (auto mw = style->get("min-width")) {
             if (!is_auto(*mw) && *mw != "none") {
@@ -1744,9 +1746,7 @@ LayoutBox layout_element(const dom::Element& el,
             }
         }
         if (auto xw = style->get("max-width")) {
-            if (!is_auto(*xw) && *xw != "none" &&
-                xw->find("vw") == std::string::npos &&
-                xw->find("vh") == std::string::npos) {
+            if (!is_auto(*xw) && *xw != "none") {
                 const float max_w = parse_length(*xw, ctx);
                 if (max_w > 0.0f && max_w < content_w) content_w = max_w;
             }
@@ -1772,7 +1772,10 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
-    // (3) min-height / max-height clamps. Same vw/vh skip rule.
+    // (3) min-height / max-height clamps. ADR-053 removed the
+    // vw/vh skip (same reasoning as max-width above). % max-height
+    // is still skipped -- parent_content_height threading is a
+    // separate concern (ADR-040 territory).
     if (style) {
         if (auto mh = style->get("min-height")) {
             if (!is_auto(*mh) && *mh != "none" &&
@@ -1785,8 +1788,6 @@ LayoutBox layout_element(const dom::Element& el,
         }
         if (auto xh = style->get("max-height")) {
             if (!is_auto(*xh) && *xh != "none" &&
-                xh->find("vh") == std::string::npos &&
-                xh->find("vw") == std::string::npos &&
                 xh->find('%') == std::string::npos) {
                 const float max_h = parse_length(*xh, ctx);
                 if (max_h > 0.0f && max_h < (cursor_y - content_y)) {
