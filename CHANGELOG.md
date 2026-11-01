@@ -336,6 +336,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 658 cases, 2514 assertions (+7 cases / +24
   assertions).
 
+- **CSS `background:` URL forms** (ADR-056): 
+  `try_expand_background` now handles the full shorthand
+  grammar `[color || image || repeat || position [/ size]]*`
+  (order-free per CSS spec). 5 helpers: `is_color_token`,
+  `is_repeat_token`, `is_position_token`, `is_url_token`,
+  `is_length_token`.
+
+  `LayoutBox` + 5 fields mirroring ADR-047 mask:
+  `background_size_w/h`, `background_pos_x/y`,
+  `background_no_repeat`. `layout_element` reads
+  `background-size`, `-position`, `-repeat`.
+  `paint_image` split into `paint_img_element` (unchanged
+  `<img>` stretch) + `paint_background_image` (intrinsic
+  size, explicit override, position keywords, repeat via
+  `CAIRO_EXTEND_REPEAT`, clipped to box).
+
+  **Production delta (screenshot 2026-11-01, Wikipedia HTML
+  article): search magnifier renders (was invisible),
+  external link icons render (was invisible), Wikipedia
+  logo unchanged (img split held), article layout
+  unchanged (zero regression).**
+
+  **11/11 `background:` forms parse** (10 render; the
+  linear-gradient form still drops for lack of gradient
+  support). First cycle since ADR-045 with production-
+  verified visual delta on the target page.
+
+  **Magnifier caveat**: renders ~10px too high. Needs
+  `translateY(-50%)` (deferred on `parent_content_height`,
+  same blocker as ADR-053/054). After the
+  `parent_content_height` cycle, the icon will center.
+
+  Fixture: `docs/adr056-background-url-test.html` — 5 rows,
+  one per Wikipedia form, self-contained inline
+  `data:image/svg+xml` URLs.
+
+  Test count: 663 cases, 2550 assertions (+5 cases / +36
+  assertions net; 1 test flipped, 5 new).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

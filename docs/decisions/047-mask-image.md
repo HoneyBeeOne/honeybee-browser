@@ -539,3 +539,39 @@ ADR-047 adds a fifth category to the session's honest ledger:
 Each category is legitimate, each is honestly labeled, none
 pretends to be a different category.
 
+
+
+## Post-ADR-056 note
+
+**ADR-056 reuses ADR-047's mask pattern for block
+backgrounds.** The `mask_size_w/h` / `mask_pos_x/y` /
+`mask_no_repeat` field set transfers almost directly:
+
+| Mask field (ADR-047) | Background field (ADR-056) |
+|---|---|
+| `mask_image_url` | `background_image_url` (pre-existing) |
+| `mask_size_w/h` | `background_size_w/h` |
+| `mask_pos_x/y` | `background_pos_x/y` |
+| `mask_no_repeat` | `background_no_repeat` |
+| `mask_has` | `!background_image_url.empty()` (implicit) |
+
+**The `paint_mask_image` math is directly transferable:**
+the Cairo pattern matrix (`cairo_matrix_init_scale` +
+`cairo_matrix_translate` + `cairo_pattern_set_matrix`)
+is identical. The only difference is the final operation:
+`cairo_mask` for masks (alpha overlay), `cairo_paint` for
+backgrounds (direct fill).
+
+ADR-047 shipped with `mask_no_repeat` declared but unused
+(masks are overlay semantics, single-draw). ADR-056
+actually uses the equivalent field
+(`background_no_repeat`) -- and the Cairo pattern extend
+mode (`CAIRO_EXTEND_REPEAT` vs. `CAIRO_EXTEND_NONE`) is
+the one-line difference. The mask field's existence
+anticipated this exact use case one ADR ahead.
+
+**Consequence**: future background variants (radial
+gradients, pattern tiling beyond the simple repeat) have
+the machinery already in place. The paint infrastructure
+is no longer a blocker for the next layer of background
+work.
