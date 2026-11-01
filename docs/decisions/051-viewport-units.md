@@ -580,3 +580,34 @@ ADR-052 (unchanged from ADR-050's Post-ADR-051 note):
 
 The `viewport_h` plumbing is now complete. No future ADR needs
 to revisit it.
+
+
+## Post-ADR-053 note
+
+**ADR-053 honors viewport units in `max-width` / `max-height`
+clamps.** ADR-051 made `parse_length("100vw")` and
+`parse_length("calc(100vh - 48px)")` compute; ADR-052 made
+`ctx.viewport_h` nonzero in production; ADR-053 removed the
+stale ADR-037-era guard that had skipped any value containing
+`vw` or `vh` from the clamps.
+
+**Effect**: the 7 renderable vh/vw rules from ADR-051's
+Context section now flow through to actual box dimensions:
+
+- `max-width: min(0.85 * 59.25rem, 75vw)` -- clamps
+- `max-height: calc(100vh - 48px)` -- clamps
+- `max-height: 75vh` / `65vh` -- clamp (still hidden behind
+  `visibility: hidden`, no visible consumer)
+
+**Remaining sticky-sidebar prerequisites** after ADR-051 +
+ADR-052 + ADR-053:
+
+1. **Ancestor culling unblock** -- `.vector-column-start
+   h=0` comes from `.vector-toc-landmark` /
+   `.vector-main-menu-landmark` display:none rules; needs
+   its own cycle
+2. **`position: sticky` scroll-Y** -- separate cycle
+
+The `viewport_h` plumbing **and** the clamp machinery are
+both complete. No future ADR needs to touch viewport units
+or max-clamps again.

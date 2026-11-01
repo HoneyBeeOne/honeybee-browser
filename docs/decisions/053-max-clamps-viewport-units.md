@@ -1,6 +1,6 @@
 # ADR-053: Honor viewport units in max-width / max-height clamps
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-01
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-037 (calc() + clamp origin), ADR-039 (box model), ADR-051 (viewport units in parse_length), ADR-052 (viewport height in production)
@@ -205,3 +205,90 @@ ADR-053 is complete when:
 - [ ] Post-ADR-053 note in ADR-051 (viewport units now
       honored by clamps)
 - [ ] ADR-053 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/max-clamps-viewport-units` across two
+commits (Commit 1 = 4-line removal + tests, Commit 2 = this
+docs update).
+
+### What shipped
+
+**`layout.cpp`:**
+- `max-width` clamp: removed `find("vw")`/`find("vh")` guard
+  (2 lines)
+- `max-height` clamp: removed `find("vh")`/`find("vw")` guard
+  (2 lines)
+- `%` guard on `max-height` **preserved** (`parent_content_height`
+  threading is separate, ADR-040 territory)
+- `> 0.0f` safety checks **preserved** (initial render safety
+  net -- already in the code, ADR-037 didn't trust it)
+- Comment blocks (1) and (3) updated to cite ADR-053
+
+**`test_box_model.cpp`:**
+- `run()` helper: `+ float viewport_height = 0.0f`, forwarded
+  to the 6-arg `layout()` overload (default 0.0f protects all
+  existing callers -- zero churn)
+- **1 test flipped in place**: the ADR-037-era
+  `"max-width: containing vw is skipped (not collapsed)"` test
+  became `"max-width: containing vw now clamps (ADR-053)"`
+  with `CHECK(width == 100)` instead of `CHECK(width == 400)`.
+  Tagged `[adr-039][adr-053]`.
+- **3 new tests appended**:
+  - `max-width: 100vw` @ vw=800, explicit width 5000 -> 800
+  - `max-height: 100vh` @ vh=600, explicit height 5000 -> 600
+  - `max-height: calc(100vh - 48px)` @ vh=600, explicit
+    height 5000 -> 552
+
+### Verified delta
+
+**Test count:** 644 -> 647 cases, 2465 -> 2471 assertions.
+All pass. The flipped test moves from `CHECK(400)` to
+`CHECK(100)`, which is the clamp firing on
+`min(100px, 75vw)` @ vw=800.
+
+The 3 new tests each use explicit 5000px width/height so the
+natural size exceeds the max and the clamp actually
+activates. Without the explicit size, natural content height
+(~80px for 5 paragraphs) is already below the max
+(600px) and the clamp no-ops -- test passes for the wrong
+reason.
+
+### Honest delta framing
+
+**Zero visible PNG delta.** `.vector-sticky-pinned-container`
+is `h=0` from ancestor culling. The clamp fires but the
+element has nothing to clamp. Same category as ADR-047/048
+(behaviorally-complete, visually-zero, consumer pending).
+
+**What changes semantically**: three viewport-unit max
+clamps now compute correct pixel values. Any future
+un-culling immediately gets a correctly-clamped box.
+
+### Honest correction to spec
+
+The ADR-053 spec's claim "no existing test relies on
+unclamped behavior" was **wrong**. One test did --
+`"max-width: containing vw is skipped (not collapsed)"` --
+and it was the exact test that needed to flip. Updated in
+place with an explanatory comment, per the pattern ADR-051
+used when `parse_operand` discovery forced a test change.
+
+### Prerequisite chain after ADR-053
+
+| Layer | Status |
+|---|---|
+| `@supports (display: grid)` gate | ADR-050 unblocked |
+| `calc(100vh - 48px)` parses | ADR-051 |
+| `viewport_h` in production | ADR-052 |
+| **Layout reads `max-height`** | **ADR-053 (this ADR)** |
+| Ancestor culling | Deferred (separate) |
+| `position: sticky` scroll-Y | Deferred (separate) |
+
+### What this closes
+
+**One more sticky-sidebar prerequisite.** The exact rule on
+`.vector-sticky-pinned-container` (`max-height: calc(100vh -
+48px)`) now computes and clamps. Only ancestor culling
+remains before the sticky sidebar shows real content.
+

@@ -55,7 +55,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 050 | [@supports Conditional Rules](050-supports.md) | `@supports` parse + feature-query evaluator; 73 blocks unblocked; layout-verified `.vector-pinned-container` display:block |
 | 051 | [Viewport Units (vh/vw/vmin/vmax)](051-viewport-units.md) | `vh`/`vw`/`vmin`/`vmax` in `parse_length` + `parse_operand`; viewport dims threaded; layout-tree verified, 0 production delta pending GTK height |
 | 052 | [GTK Viewport Height Threading](052-gtk-viewport-height.md) | `m_scroll_window.get_height()` threaded through render/relayout; verified via log (`viewport=1024x678`); closes ADR-051 Deferred |
-| 053 | [Honor viewport units in max-width / max-height clamps](053-max-clamps-viewport-units.md) | Removes ADR-037-era vw/vh skip guard; clamps fire for `max-width: 100vw`, `max-height: 100vh`, `calc(100vh - 48px)`; consumer blocked by ancestor culling |
+| 053 | [Honor viewport units in max-width / max-height clamps](053-max-clamps-viewport-units.md) | Removes ADR-037-era vw/vh skip guard; clamps verified via 3 new tests (100vw/100vh/calc(100vh-48px)); consumer blocked by ancestor culling |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
