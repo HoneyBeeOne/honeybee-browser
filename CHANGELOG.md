@@ -245,6 +245,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 644 cases, 2465 assertions (unchanged -- default
   viewport_height=0.0f protects existing test callers).
 
+- **Honor viewport units in max-width/max-height clamps** (ADR-053): 
+  the ADR-037-era guard that skipped `vw`/`vh` values in the
+  `max-width` and `max-height` clamps is removed. ADR-051 made
+  `parse_length` resolve viewport units; ADR-052 made
+  `viewport_h` nonzero in production; the guard was stale.
+
+  `max-width: 100vw`, `max-height: 100vh`, and
+  `max-height: calc(100vh - 48px)` now clamp -- the exact rule
+  on `.vector-sticky-pinned-container`.
+
+  `%` guard on `max-height` preserved (parent_content_height
+  threading is separate). `> 0.0f` safety checks preserved
+  (initial render with viewport dims 0 skips the clamp, no
+  collapse).
+
+  One existing test flipped in place: "max-width: containing
+  vw is skipped (not collapsed)" -> "now clamps", expecting
+  100 (was 400). This test was explicitly written to guard the
+  old behavior.
+
+  3 new tests: 100vw / 100vh / calc(100vh - 48px) clamps.
+
+  Zero visible PNG delta still (`.vector-sticky-pinned-container`
+  is h=0 from ancestor culling). Same category as ADR-047/048.
+
+  Test count: 647 cases, 2471 assertions (+3 cases / +6
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
