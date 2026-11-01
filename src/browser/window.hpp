@@ -179,6 +179,11 @@ private:
     // Width used in the last layout pass. -1 forces relayout.
     int m_last_width = -1;
 
+    // ADR-052: height used in the last layout pass. Sourced from
+    // m_scroll_window.get_height() (visible viewport, not DrawingArea
+    // content height). -1 forces relayout on first draw.
+    int m_last_height = -1;
+
     // Draw handler for the view area (Gtk::DrawingArea).
     void on_draw(const Cairo::RefPtr<Cairo::Context>& cr, int width, int height);
 

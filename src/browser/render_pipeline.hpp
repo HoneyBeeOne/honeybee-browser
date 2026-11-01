@@ -37,7 +37,8 @@ public:
     // parses the HTML, extracts inline-only CSS via
     // collect_css_sources, and delegates to render_with_css with
     // no external CSS. Behavior-preserving vs. pre-ADR-025.
-    void render(const std::string& html, float viewport_width);
+    void render(const std::string& html, float viewport_width,
+                float viewport_height = 0.0f);  // ADR-052
 
     // ADR-025: render with pre-parsed DOM and pre-fetched merged
     // CSS (inline <style> content concatenated with external
@@ -46,11 +47,13 @@ public:
     void render_with_css(
         std::unique_ptr<renderer::dom::Document> doc,
         std::string merged_css,
-        float viewport_width);
+        float viewport_width,
+        float viewport_height = 0.0f);  // ADR-052
 
     // Recompute layout at a new viewport width, keeping the DOM.
     // Called on window resize.
-    void relayout(float viewport_width);
+    void relayout(float viewport_width,
+                  float viewport_height = 0.0f);  // ADR-052
 
     // Paint the current layout tree via Pango.
     void paint(cairo_t* cr) const;

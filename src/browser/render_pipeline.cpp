@@ -188,7 +188,8 @@ void apply_viewport_feature_classes(
 } // namespace
 
 void RenderPipeline::render(const std::string& html,
-                            float viewport_width) {
+                            float viewport_width,
+                            float viewport_height) {
     // ADR-025: parse once, extract inline-only CSS, delegate.
     auto doc = renderer::html::parse(html);
     std::string inline_css;
@@ -202,13 +203,14 @@ void RenderPipeline::render(const std::string& html,
         }
     }
     render_with_css(std::move(doc), std::move(inline_css),
-                    viewport_width);
+                    viewport_width, viewport_height);
 }
 
 void RenderPipeline::render_with_css(
     std::unique_ptr<renderer::dom::Document> doc,
     std::string merged_css,
-    float viewport_width) {
+    float viewport_width,
+    float viewport_height) {
 
     // ADR-034: new page load invalidates image cache.
     for (auto& [url, surf] : image_cache_) {
@@ -239,10 +241,11 @@ void RenderPipeline::render_with_css(
         layout_root_ = renderer::layout::LayoutBox{};
         return;
     }
-    relayout(viewport_width);
+    relayout(viewport_width, viewport_height);
 }
 
-void RenderPipeline::relayout(float viewport_width) {
+void RenderPipeline::relayout(float viewport_width,
+                             float viewport_height) {
     if (!doc_) return;
 
     // ADR-029: viewport-driven feature class flips MUST run
@@ -323,14 +326,14 @@ void RenderPipeline::relayout(float viewport_width) {
         };
     };
     // ADR-042: layout_with_pseudo to synthesize ::before / ::after.
-    // ADR-051: viewport_height passed as 0. GTK allocated height
-    // isn't in scope here; vh/vw resolve to 0 in production. Same
-    // "unknown viewport -> 0" semantics as the pre-ADR-051
-    // unparsed state. Correctness for calc(100vh - ...) requires
-    // future GTK height threading (separate concern).
+    // ADR-051: viewport_height threaded through layout() chain.
+    // ADR-052: viewport_height now sourced from
+    // m_scroll_window.get_height() in production (visible viewport,
+    // not DrawingArea content height). vh/vw resolve to real values.
     layout_root_ = renderer::layout::layout_with_pseudo(
         *doc_, styles_cache_, pseudo_styles_cache_,
-        &measure_with_pango, viewport_width, image_dims, 0.0f);
+        &measure_with_pango, viewport_width, image_dims,
+        viewport_height);
     HB_LOG(Pipeline, Debug, "layout: root h=%.0f",
            layout_root_.height);
 
