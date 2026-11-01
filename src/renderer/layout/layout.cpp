@@ -1808,6 +1808,25 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
+    // ADR-054: transform: rotate(<angle>) -- extract first
+    // rotate() only. Other functions (translateY, scale,
+    // matrix) are skipped in v1; the search magnifier's
+    // translateY(-50%) parses to field=0 with zero paint
+    // delta.
+    if (style) {
+        if (auto tf = style->get("transform")) {
+            auto open = tf->find("rotate(");
+            if (open != std::string::npos) {
+                const auto start = open + 7;  // "rotate(" is 7 chars
+                const auto close = tf->find(')', start);
+                if (close != std::string::npos) {
+                    box.transform_rotate_deg = parse_angle(
+                        std::string_view(*tf).substr(start, close - start));
+                }
+            }
+        }
+    }
+
     box.width = content_w
               + box.padding[3] + box.padding[1]
               + box.border[3] + box.border[1];

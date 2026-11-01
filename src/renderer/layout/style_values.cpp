@@ -41,6 +41,55 @@ bool ends_with(std::string_view s, std::string_view suffix) {
 
 } // namespace
 
+// ADR-054: parse a CSS angle to degrees. Supports deg/rad/
+// turn/grad; unitless = deg per CSS spec. Returns 0 for
+// empty/malformed/unknown units.
+float parse_angle(std::string_view s) {
+    s = trim(s);
+    if (s.empty()) return 0.0f;
+    if (has_internal_ws(s)) return 0.0f;
+
+    auto parse_number = [](std::string_view num) -> float {
+        float val = 0.0f;
+        float sign = 1.0f;
+        std::size_t i = 0;
+        if (i < num.size() && (num[i] == '-' || num[i] == '+')) {
+            if (num[i] == '-') sign = -1.0f;
+            ++i;
+        }
+        while (i < num.size() &&
+               std::isdigit(static_cast<unsigned char>(num[i]))) {
+            val = val * 10.0f + static_cast<float>(num[i] - '0');
+            ++i;
+        }
+        if (i < num.size() && num[i] == '.') {
+            ++i;
+            float frac = 0.1f;
+            while (i < num.size() &&
+                   std::isdigit(static_cast<unsigned char>(num[i]))) {
+                val += static_cast<float>(num[i] - '0') * frac;
+                frac *= 0.1f;
+                ++i;
+            }
+        }
+        return val * sign;
+    };
+
+    if (ends_with(s, "grad")) {
+        return parse_number(s.substr(0, s.size() - 4)) * 0.9f;
+    }
+    if (ends_with(s, "deg")) {
+        return parse_number(s.substr(0, s.size() - 3));
+    }
+    if (ends_with(s, "rad")) {
+        return parse_number(s.substr(0, s.size() - 3)) * 57.29577951f;
+    }
+    if (ends_with(s, "turn")) {
+        return parse_number(s.substr(0, s.size() - 4)) * 360.0f;
+    }
+    return parse_number(s);  // unitless = deg
+}
+
 float parse_px(std::string_view s) {
     s = trim(s);
     if (s.empty()) return 0.0f;

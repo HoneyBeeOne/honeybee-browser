@@ -3,6 +3,7 @@
 
 
 #include <cmath>
+#include <cstdio>
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -182,6 +183,24 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     // paint_box().
     if (!box.visible) return;
 
+    // ADR-054: rotate transform. Wrap the entire paint_box
+    // body (background, border, box-shadow, mask, images,
+    // children) in a cairo save/rotate/restore around the
+    // box center (default transform-origin 50% 50%). 0
+    // degrees is a no-op (did_rotate stays false, zero
+    // cairo state change).
+    bool did_rotate = false;
+    if (box.transform_rotate_deg != 0.0f) {
+        const float cx = box.x + box.width * 0.5f;
+        const float cy = box.y + box.height * 0.5f;
+        const float rad = box.transform_rotate_deg * 0.017453292519943295f;
+        cairo_save(cr);
+        cairo_translate(cr, cx, cy);
+        cairo_rotate(cr, rad);
+        cairo_translate(cr, -cx, -cy);
+        did_rotate = true;
+    }
+
     // ADR-043: draw box-shadow before background (CSS z-order:
     // shadow renders behind the element's own background/border).
     // Only non-inset, non-blurred shadows render in v1; inset
@@ -294,6 +313,11 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     }
     paint_children(cr, box.children, drawer, images);
     if (box.clip_children) cairo_restore(cr);
+
+    // ADR-054: pop the rotate save if it was pushed above.
+    // Balanced: save was pushed at function entry, restored
+    // here before the function returns.
+    if (did_rotate) cairo_restore(cr);
 }
 
 // ADR-045: draw an inline-element background-image on a
