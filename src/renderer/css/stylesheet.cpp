@@ -529,23 +529,145 @@ bool try_expand_border_side(std::string_view property,
 // "background: garbage") produce "background-color: garbage" in
 // the cascade, which layout parses to transparent -- identical
 // observable behavior to longhand "background-color: garbage".
+// ADR-056: background shorthand token classifiers.
+// Mirrors layout::parse_color's named-color set; css/ cannot
+// include layout/ (layering), so the classifier is duplicated
+// here for parse-time token discrimination only.
+bool is_color_token(std::string_view t) {
+    if (t.empty()) return false;
+    if (t[0] == '#') return true;
+    static const std::unordered_set<std::string> named = {
+        "transparent", "black", "white", "red", "green", "blue",
+        "navy", "yellow", "orange", "purple", "gray", "grey",
+        "silver", "maroon", "teal", "aqua", "fuchsia", "lime", "olive",
+    };
+    return named.count(std::string(t)) > 0;
+}
+
+bool is_repeat_token(std::string_view t) {
+    return t == "no-repeat" || t == "repeat" || t == "repeat-x"
+        || t == "repeat-y" || t == "space" || t == "round";
+}
+
+bool is_position_token(std::string_view t) {
+    if (t == "left" || t == "right" || t == "center"
+        || t == "top" || t == "bottom") return true;
+    if (t.empty()) return false;
+    const char c = t[0];
+    return std::isdigit(static_cast<unsigned char>(c))
+        || c == '-' || c == '+' || c == '.';
+}
+
+bool is_url_token(std::string_view t) {
+    return t.rfind("url(", 0) == 0;
+}
+
+bool is_length_token(std::string_view t) {
+    if (t.empty()) return false;
+    const char c = t[0];
+    return std::isdigit(static_cast<unsigned char>(c))
+        || c == '-' || c == '+' || c == '.';
+}
+
+namespace bg_detail {
+struct BgTokens {
+    std::string color, image, repeat, position;
+    bool valid = true;
+    bool has_any() const {
+        return !color.empty() || !image.empty()
+            || !repeat.empty() || !position.empty();
+    }
+};
+
+void classify(const std::string& t, BgTokens& out) {
+    if (!out.valid) return;
+    if (is_url_token(t)) {
+        if (!out.image.empty()) { out.valid = false; return; }
+        out.image = t;
+    } else if (is_repeat_token(t)) {
+        if (!out.repeat.empty()) { out.valid = false; return; }
+        out.repeat = t;
+    } else if (is_color_token(t)) {
+        if (!out.color.empty()) { out.valid = false; return; }
+        out.color = t;
+    } else if (is_position_token(t)) {
+        if (!out.position.empty()) out.position += ' ';
+        out.position += t;
+    } else {
+        out.valid = false;
+    }
+}
+} // namespace bg_detail
+
+// ADR-056: full background shorthand grammar (color forms +
+// URL forms). Handles `[color || image || repeat || position
+// [/ size]]*` per CSS spec -- order-free.
+//
+// Deferred (drop entirely):
+//   - linear-gradient / radial-gradient
+//   - multi-layer (any unescaped comma outside url())
+//   - url() with embedded spaces (rare; tokenized as separate
+//     tokens and rejected as unknown)
+//
+// `%` background-size: parsed but skipped by layout_element
+// (needs element dims; see layout.cpp's background-size read).
 bool try_expand_background(std::string_view value, bool important,
                            std::vector<Declaration>& out) {
-    if (value.find("url(") != std::string_view::npos) return false;
     if (value.find("gradient(") != std::string_view::npos) return false;
     if (value.find(',') != std::string_view::npos) return false;
 
     const std::string v = trim(value);
     if (v.empty()) return false;
 
-    // CSS spec: `background: none` is equivalent to transparent
-    // background-color with no image.
+    // ADR-055 preserved: `background: none` = transparent, no image.
     if (v == "none") {
         out.push_back({"background-color", "transparent", important});
         return true;
     }
 
-    out.push_back({"background-color", v, important});
+    // Split off /size part.
+    std::string_view before_slash = value;
+    std::string_view after_slash;
+    bool has_slash = false;
+    if (auto slash = value.find('/'); slash != std::string_view::npos) {
+        before_slash = value.substr(0, slash);
+        after_slash = value.substr(slash + 1);
+        has_slash = true;
+    }
+
+    bg_detail::BgTokens tokens;
+
+    for (const auto& t : split_tokens(before_slash)) {
+        bg_detail::classify(t, tokens);
+        if (!tokens.valid) return false;
+    }
+
+    std::string size;
+    if (has_slash) {
+        auto after = split_tokens(after_slash);
+        std::size_t start = 0;
+        if (!after.empty() && is_length_token(after[0])) {
+            size = after[0];
+            start = 1;
+        }
+        for (std::size_t i = start; i < after.size(); ++i) {
+            bg_detail::classify(after[i], tokens);
+            if (!tokens.valid) return false;
+        }
+    }
+
+    if (!tokens.has_any() && size.empty()) return false;
+
+    if (!tokens.color.empty())
+        out.push_back({"background-color", tokens.color, important});
+    if (!tokens.image.empty())
+        out.push_back({"background-image", tokens.image, important});
+    if (!tokens.repeat.empty())
+        out.push_back({"background-repeat", tokens.repeat, important});
+    if (!tokens.position.empty())
+        out.push_back({"background-position", tokens.position, important});
+    if (!size.empty())
+        out.push_back({"background-size", size, important});
     return true;
 }
 

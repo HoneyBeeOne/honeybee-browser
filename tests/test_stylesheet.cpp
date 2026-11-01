@@ -1193,12 +1193,21 @@ TEST_CASE("background: !important preserved through expansion",
     CHECK(decls[0].important);
 }
 
-TEST_CASE("background: url() forms dropped entirely",
-          "[css][stylesheet][adr-055]") {
+TEST_CASE("background: url() forms now expand (ADR-056)",
+          "[css][stylesheet][adr-055][adr-056]") {
+    // ADR-055 originally asserted this dropped (url deferred).
+    // ADR-056 ships the grammar; the value expands to 3 longhands.
     auto sheet = honeybee::renderer::css::Stylesheet::parse(
         "body { background: #fff url(x.png) repeat; }");
     REQUIRE(sheet.rules.size() == 1);
-    CHECK(sheet.rules[0].declarations.empty());
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    REQUIRE(decls[0].property == "background-color");
+    CHECK(decls[0].value == "#fff");
+    REQUIRE(decls[1].property == "background-image");
+    CHECK(decls[1].value == "url(x.png)");
+    REQUIRE(decls[2].property == "background-repeat");
+    CHECK(decls[2].value == "repeat");
 }
 
 TEST_CASE("background: linear-gradient dropped entirely",
@@ -1213,6 +1222,77 @@ TEST_CASE("background: multi-layer (comma) dropped entirely",
           "[css][stylesheet][adr-055]") {
     auto sheet = honeybee::renderer::css::Stylesheet::parse(
         "body { background: url(a.png), url(b.png); }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+// =============================================================
+// ADR-056: background shorthand URL forms
+// =============================================================
+
+TEST_CASE("background: url() alone -> background-image",
+          "[css][stylesheet][adr-056]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: url(a.png); }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "background-image");
+    CHECK(decls[0].value == "url(a.png)");
+}
+
+TEST_CASE("background: url() no-repeat -> image + repeat",
+          "[css][stylesheet][adr-056]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: url(a.png) no-repeat; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 2);
+    CHECK(decls[0].property == "background-image");
+    CHECK(decls[0].value == "url(a.png)");
+    CHECK(decls[1].property == "background-repeat");
+    CHECK(decls[1].value == "no-repeat");
+}
+
+TEST_CASE("background: url() <pos> <pos> no-repeat -> image + pos + repeat",
+          "[css][stylesheet][adr-056]") {
+    // Wikipedia form 4.
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: url(a.png) 100% 50% no-repeat; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 3);
+    CHECK(decls[0].property == "background-image");
+    CHECK(decls[0].value == "url(a.png)");
+    CHECK(decls[1].property == "background-repeat");
+    CHECK(decls[1].value == "no-repeat");
+    CHECK(decls[2].property == "background-position");
+    CHECK(decls[2].value == "100% 50%");
+}
+
+TEST_CASE("background: repeat pos / size url() -> 4 longhands",
+          "[css][stylesheet][adr-056]") {
+    // Wikipedia form 2: `no-repeat center / 1.23076923em url(...)`
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: no-repeat center / 1.23076923em "
+        "url(search.svg); }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 4);
+    CHECK(decls[0].property == "background-image");
+    CHECK(decls[0].value == "url(search.svg)");
+    CHECK(decls[1].property == "background-repeat");
+    CHECK(decls[1].value == "no-repeat");
+    CHECK(decls[2].property == "background-position");
+    CHECK(decls[2].value == "center");
+    CHECK(decls[3].property == "background-size");
+    CHECK(decls[3].value == "1.23076923em");
+}
+
+TEST_CASE("background: unknown token drops entirely",
+          "[css][stylesheet][adr-056]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: url(a.png) bogus-token; }");
     REQUIRE(sheet.rules.size() == 1);
     CHECK(sheet.rules[0].declarations.empty());
 }
