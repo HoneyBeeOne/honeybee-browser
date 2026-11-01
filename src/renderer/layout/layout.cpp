@@ -1697,6 +1697,9 @@ LayoutBox layout_element(const dom::Element& el,
             abs_ctx.parent_font_size = parent_font_size;
             abs_ctx.root_font_size = root_font_size;
             abs_ctx.parent_content_width = abs_cw;
+            // ADR-058: % in top:/bottom: resolves against the
+            // containing block's height, not its width.
+            abs_ctx.parent_content_height = abs_ch;
             abs_ctx.viewport_w = viewport_w;
             abs_ctx.viewport_h = viewport_h;
 
@@ -1716,8 +1719,11 @@ LayoutBox layout_element(const dom::Element& el,
                 const float natural_w = abs_box->width;
                 const float natural_h = abs_box->height;
 
-                // Parse offsets (auto = nullopt).
-                auto parse_off = [&](const char* prop)
+                // ADR-058: parse_off_h uses width reference
+                // (left/right); parse_off_v uses height reference
+                // (top/bottom) so % resolves against the correct
+                // containing-block axis.
+                auto parse_off_h = [&](const char* prop)
                         -> std::optional<float> {
                     if (auto v = abs_style->get(prop);
                         v && *v != "auto") {
@@ -1725,10 +1731,18 @@ LayoutBox layout_element(const dom::Element& el,
                     }
                     return std::nullopt;
                 };
-                const auto top_o    = parse_off("top");
-                const auto bottom_o = parse_off("bottom");
-                const auto left_o   = parse_off("left");
-                const auto right_o  = parse_off("right");
+                auto parse_off_v = [&](const char* prop)
+                        -> std::optional<float> {
+                    if (auto v = abs_style->get(prop);
+                        v && *v != "auto") {
+                        return parse_length_for_height(*v, abs_ctx);
+                    }
+                    return std::nullopt;
+                };
+                const auto top_o    = parse_off_v("top");
+                const auto bottom_o = parse_off_v("bottom");
+                const auto left_o   = parse_off_h("left");
+                const auto right_o  = parse_off_h("right");
 
                 // Horizontal: compute target_x (x_before_margin)
                 // and target_w. Over-constrained: left wins
@@ -1904,10 +1918,11 @@ LayoutBox layout_element(const dom::Element& el,
     }
 
     // ADR-054: transform: rotate(<angle>) -- extract first
-    // rotate() only. Other functions (translateY, scale,
-    // matrix) are skipped in v1; the search magnifier's
-    // translateY(-50%) parses to field=0 with zero paint
-    // delta.
+    // rotate() only.
+    // ADR-058: also extract translateY(<value>). The raw value
+    // is resolved AFTER box.height below, because % in
+    // translateY is relative to the element's OWN height.
+    std::string transform_ty_raw;
     if (style) {
         if (auto tf = style->get("transform")) {
             auto open = tf->find("rotate(");
@@ -1919,6 +1934,26 @@ LayoutBox layout_element(const dom::Element& el,
                         std::string_view(*tf).substr(start, close - start));
                 }
             }
+            // ADR-058: extract translateY raw token.
+            auto ty_open = tf->find("translateY(");
+            if (ty_open != std::string::npos) {
+                const auto start = ty_open + 11;  // "translateY(" is 11 chars
+                const auto close = tf->find(')', start);
+                if (close != std::string::npos) {
+                    std::string_view raw =
+                        std::string_view(*tf).substr(start, close - start);
+                    // Trim surrounding whitespace.
+                    while (!raw.empty() &&
+                           (raw.front() == ' ' || raw.front() == '\t')) {
+                        raw.remove_prefix(1);
+                    }
+                    while (!raw.empty() &&
+                           (raw.back() == ' ' || raw.back() == '\t')) {
+                        raw.remove_suffix(1);
+                    }
+                    transform_ty_raw = std::string(raw);
+                }
+            }
         }
     }
 
@@ -1928,6 +1963,18 @@ LayoutBox layout_element(const dom::Element& el,
     box.height = (cursor_y - content_y)
                + box.padding[0] + box.padding[2]
                + box.border[0] + box.border[2];
+
+    // ADR-058: resolve translateY now that box.height is known.
+    // % resolves against own height; px/em/rem go through
+    // parse_length. Reuses parse_length_for_height with a
+    // temporarily-overridden ctx (parent_content_height =
+    // own box.height).
+    if (!transform_ty_raw.empty()) {
+        LengthContext ty_ctx = ctx;
+        ty_ctx.parent_content_height = box.height;
+        box.transform_translate_y =
+            parse_length_for_height(transform_ty_raw, ty_ctx);
+    }
 
     return box;
 }
