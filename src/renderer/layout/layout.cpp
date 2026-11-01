@@ -555,6 +555,72 @@ LayoutBox layout_element(const dom::Element& el,
                 }
             }
         }
+    // ADR-056: read background-size / -position / -repeat
+    // (mirror ADR-047's mask block at lines 558-635).
+    if (style && !box.background_image_url.empty()) {
+        if (auto sz = style->get("background-size")) {
+            std::string tok;
+            for (char c : *sz) {
+                if (c == ' ' || c == '\t') break;
+                tok.push_back(c);
+            }
+            if (!tok.empty() && tok != "auto" && tok != "cover"
+                && tok != "contain" && tok.back() != '%') {
+                box.background_size_w = parse_length(tok, ctx);
+            }
+        }
+        if (auto ps = style->get("background-position")) {
+            std::vector<std::string> toks;
+            {
+                std::string t;
+                for (char c : *ps) {
+                    if (c == ' ' || c == '\t') {
+                        if (!t.empty()) {
+                            toks.push_back(t); t.clear();
+                        }
+                    } else t.push_back(c);
+                }
+                if (!t.empty()) toks.push_back(t);
+            }
+            auto px = [](const std::string& t) -> BgPosX {
+                if (t == "right") return BgPosX::Right;
+                if (t == "center") return BgPosX::Center;
+                return BgPosX::Left;
+            };
+            auto py = [](const std::string& t) -> BgPosY {
+                if (t == "bottom") return BgPosY::Bottom;
+                if (t == "center") return BgPosY::Center;
+                return BgPosY::Top;
+            };
+            if (toks.size() == 1) {
+                const auto& t = toks[0];
+                if (t == "center") {
+                    box.background_pos_x = BgPosX::Center;
+                    box.background_pos_y = BgPosY::Center;
+                } else if (t == "left" || t == "right") {
+                    box.background_pos_x = px(t);
+                } else if (t == "top" || t == "bottom") {
+                    box.background_pos_y = py(t);
+                }
+            } else if (toks.size() >= 2) {
+                const auto& t0 = toks[0];
+                const auto& t1 = toks[1];
+                if (t1 == "left" || t1 == "right") {
+                    box.background_pos_x = px(t1);
+                    box.background_pos_y = py(t0);
+                } else {
+                    box.background_pos_x = px(t0);
+                    box.background_pos_y = py(t1);
+                }
+            }
+        }
+        if (auto rr = style->get("background-repeat")) {
+            if (rr->find("no-repeat") != std::string::npos) {
+                box.background_no_repeat = true;
+            }
+        }
+    }
+
         if (box.mask_has) {
             if (const std::string sz = mask_lookup(
                     "mask-size", "-webkit-mask-size");

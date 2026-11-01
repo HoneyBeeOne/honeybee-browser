@@ -31,6 +31,7 @@ Several HTML files in this directory are manual visual test pages:
 - `dir-test.html` -- RTL and LTR text direction handling (ADR-016)
 - `adr054-rotate-test.html` -- `transform: rotate()` diamond/tilted rendering (ADR-054)
 - `adr055-background-shorthand-test.html` -- `background:` shorthand color-forms vs. url/gradient drop (ADR-055)
+- `adr056-background-url-test.html` -- `background:` URL forms (image + repeat + position + size), 5 rows (ADR-056)
 - `inline-test.html` -- inline formatting with styled spans (ADR-016)
 - `inline-color-test.html` -- inline color inheritance (ADR-016)
 - `wrap-test.html` -- word-level line breaking (ADR-015)

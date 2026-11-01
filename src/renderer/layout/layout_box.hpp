@@ -149,6 +149,17 @@ struct LayoutBox final : LayoutNode {
     // rect. Handles data: URLs (search icon).
     std::string background_image_url;
 
+    // ADR-056: background-image size/position/repeat (mirror
+    // ADR-047's mask pattern). Set during layout from
+    // background-size / -position / -repeat. Paint uses a Cairo
+    // pattern matrix to place the image at the resolved size/
+    // position; repeat via CAIRO_EXTEND_REPEAT clipped to box.
+    float background_size_w = 0.0f;    // 0 = auto (intrinsic)
+    float background_size_h = 0.0f;    // 0 = auto (aspect from _w if _w > 0)
+    BgPosX background_pos_x = BgPosX::Left;
+    BgPosY background_pos_y = BgPosY::Top;
+    bool background_no_repeat = false;  // false = repeat
+
     // ADR-039: paint clips children to box content bounds when
     // true. Set during layout from `overflow: hidden`. Children
     // render normally (positions computed as if not clipped);
