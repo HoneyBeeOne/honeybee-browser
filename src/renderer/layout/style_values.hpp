@@ -38,6 +38,11 @@ float parse_px(std::string_view s);
 // Supports px, em, rem, %. Returns 0 for auto or unknown units.
 float parse_length(std::string_view s, const LengthContext& ctx);
 
+// ADR-054: parse a CSS angle. Supports deg/rad/turn/grad.
+// Unitless input is degrees per CSS spec. Returns 0 for
+// unknown units or malformed input.
+float parse_angle(std::string_view s);
+
 // ADR-037: CSS math expression evaluator. Handles calc(),
 // min(), max(), clamp(). Called from parse_length for values
 // starting with those function names.

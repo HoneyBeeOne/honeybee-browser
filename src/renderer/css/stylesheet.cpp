@@ -682,6 +682,7 @@ const std::unordered_set<std::string>& supported_properties() {
         "grid", "grid-template", "grid-template-columns",
         "grid-template-rows", "grid-template-areas", "grid-area",
         "gap", "column-gap", "row-gap",
+        "transform", "transform-origin",  // ADR-054
     };
     return s;
 }

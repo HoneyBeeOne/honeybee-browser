@@ -4,6 +4,7 @@
 // =============================================================
 
 #include <cstdio>
+#include <cmath>
 #include "renderer/css/cascade.hpp"
 #include "renderer/css/stylesheet.hpp"
 #include "renderer/css/ua_stylesheet.hpp"
@@ -3757,3 +3758,58 @@ TEST_CASE("min: min(100vh, 400px) at viewport_h=800",
     REQUIRE(b != nullptr);
     CHECK(b->height == Catch::Approx(400.0f).margin(1.0f));
 }
+
+// =============================================================
+// ADR-054: transform: rotate()
+// =============================================================
+
+TEST_CASE("parse_angle: deg/rad/turn/grad/unitless",
+          "[layout][style_values][adr-054]") {
+    CHECK(std::abs(layout::parse_angle("45deg") - 45.0f) < 0.01f);
+    CHECK(std::abs(layout::parse_angle("180deg") - 180.0f) < 0.01f);
+    CHECK(std::abs(layout::parse_angle("0.5turn") - 180.0f) < 0.01f);
+    CHECK(std::abs(layout::parse_angle("3.14159rad") - 180.0f) < 0.1f);
+    CHECK(std::abs(layout::parse_angle("100grad") - 90.0f) < 0.1f);
+    CHECK(std::abs(layout::parse_angle("45") - 45.0f) < 0.01f);
+    CHECK(std::abs(layout::parse_angle("-90deg") - (-90.0f)) < 0.01f);
+    CHECK(layout::parse_angle("") == 0.0f);
+    CHECK(layout::parse_angle("auto") == 0.0f);
+    CHECK(layout::parse_angle("not-a-number") == 0.0f);
+}
+
+TEST_CASE("layout: transform:rotate(45deg) sets box field",
+          "[layout][transform][adr-054]") {
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px;"
+        "transform:rotate(45deg)}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(std::abs(divs[0]->transform_rotate_deg - 45.0f) < 0.01f);
+}
+
+TEST_CASE("layout: no transform leaves rotate field at 0",
+          "[layout][transform][adr-054]") {
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(divs[0]->transform_rotate_deg == 0.0f);
+}
+
+TEST_CASE("layout: translateY(-50%) leaves rotate field at 0",
+          "[layout][transform][adr-054]") {
+    // ADR-054 regression safety: the search magnifier uses
+    // translateY(-50%) -- rotate parser finds no rotate(,
+    // field stays 0, paint applies nothing. Before/after
+    // screenshots on Wikipedia are identical.
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px;"
+        "transform:translateY(-50%)}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(divs[0]->transform_rotate_deg == 0.0f);
+}
+

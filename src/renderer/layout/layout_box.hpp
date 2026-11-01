@@ -155,6 +155,13 @@ struct LayoutBox final : LayoutNode {
     // paint wraps their draw in a Cairo clip rectangle.
     bool clip_children = false;
 
+    // ADR-054: rotate transform in degrees. Set by
+    // layout_element when the computed style's transform
+    // contains rotate(<angle>). 0 = no rotation. Painted by
+    // wrapping paint_box's body in cairo save/translate/
+    // rotate/translate/restore around the box center.
+    float transform_rotate_deg = 0.0f;
+
     // ADR-047: CSS mask (alpha channel from image, fill =
     // background-color). Painted via cairo_mask_surface after
     // background fill, before border. Both mask-image AND
