@@ -21,6 +21,10 @@ struct LengthContext {
     float parent_font_size = 16.0f;     // parent font-size (for em on font-size)
     float root_font_size = 16.0f;       // root font-size (for rem)
     float parent_content_width = 0.0f;  // parent content width (for %)
+    // ADR-057: parent content height for % height resolution.
+    // 0 for auto-height parents (CSS spec: % on auto parent -> auto).
+    // <html> / <body> special-case this to viewport_h.
+    float parent_content_height = 0.0f;
     bool on_font_size_property = false; // true when resolving the font-size property itself
     // ADR-051: viewport dimensions for vh/vw/vmin/vmax units.
     // Defaults 0 preserve existing test behavior -- no test
@@ -37,6 +41,13 @@ float parse_px(std::string_view s);
 // Parse a CSS length in the given context.
 // Supports px, em, rem, %. Returns 0 for auto or unknown units.
 float parse_length(std::string_view s, const LengthContext& ctx);
+
+// ADR-057: parse a length where trailing `%` resolves against
+// ctx.parent_content_height. Falls back to parse_length for
+// everything else. Returns 0 for `%` when parent_content_height
+// is 0 (auto parent -- CSS spec: % on auto -> auto, i.e. skip).
+float parse_length_for_height(std::string_view s,
+                              const LengthContext& ctx);
 
 // ADR-054: parse a CSS angle. Supports deg/rad/turn/grad.
 // Unitless input is degrees per CSS spec. Returns 0 for

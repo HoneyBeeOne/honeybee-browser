@@ -41,6 +41,51 @@ bool ends_with(std::string_view s, std::string_view suffix) {
 
 } // namespace
 
+// ADR-057: parse a length where trailing `%` resolves against
+// ctx.parent_content_height. Non-% values delegate to parse_length.
+float parse_length_for_height(std::string_view s,
+                              const LengthContext& ctx) {
+    std::string_view trimmed = s;
+    while (!trimmed.empty() &&
+           (trimmed.back() == ' ' || trimmed.back() == '\t'
+            || trimmed.back() == '\n' || trimmed.back() == '\r')) {
+        trimmed.remove_suffix(1);
+    }
+    if (trimmed.empty() || trimmed.back() != '%') {
+        return parse_length(s, ctx);
+    }
+    std::string_view num = trimmed.substr(0, trimmed.size() - 1);
+    while (!num.empty() &&
+           (num.front() == ' ' || num.front() == '\t')) {
+        num.remove_prefix(1);
+    }
+    std::size_t i = 0;
+    float sign = 1.0f;
+    if (i < num.size() && (num[i] == '-' || num[i] == '+')) {
+        if (num[i] == '-') sign = -1.0f;
+        ++i;
+    }
+    float val = 0.0f;
+    bool has_digit = false;
+    while (i < num.size() && num[i] >= '0' && num[i] <= '9') {
+        val = val * 10.0f + static_cast<float>(num[i] - '0');
+        ++i;
+        has_digit = true;
+    }
+    if (i < num.size() && num[i] == '.') {
+        ++i;
+        float frac = 0.1f;
+        while (i < num.size() && num[i] >= '0' && num[i] <= '9') {
+            val += static_cast<float>(num[i] - '0') * frac;
+            frac *= 0.1f;
+            ++i;
+            has_digit = true;
+        }
+    }
+    if (!has_digit) return 0.0f;
+    return sign * val * 0.01f * ctx.parent_content_height;
+}
+
 // ADR-054: parse a CSS angle to degrees. Supports deg/rad/
 // turn/grad; unitless = deg per CSS spec. Returns 0 for
 // empty/malformed/unknown units.

@@ -298,3 +298,86 @@ TEST_CASE("max-height: calc(100vh - 48px) clamps (ADR-053)",
     REQUIRE(x != nullptr);
     CHECK(near(x->height, 552.0f));   // 600 - 48
 }
+
+// =============================================================
+// ADR-057: parent_content_height + % height resolution
+// =============================================================
+
+TEST_CASE("html height:100% resolves to viewport_h",
+          "[layout][box-model][adr-057]") {
+    auto t = run(
+        "<html><body><div class='x'>A</div></body></html>",
+        "html{margin:0;padding:0;height:100%} body{margin:0;padding:0}",
+        800.0f, 600.0f);
+    // t.root is the <html> box (find_root_element returns it).
+    CHECK(near(t.root.height, 600.0f));
+}
+
+TEST_CASE("html,body height:100% chains through to grandchild",
+          "[layout][box-model][adr-057]") {
+    auto t = run(
+        "<html><body><div class='x'>A</div></body></html>",
+        "body,html{margin:0;padding:0;height:100%} .x{height:100%}",
+        800.0f, 600.0f);
+    const auto* x = find_by_class(t.root, "x");
+    REQUIRE(x != nullptr);
+    CHECK(near(x->height, 600.0f));
+}
+
+TEST_CASE("height:50% on fixed-height parent -> half parent",
+          "[layout][box-model][adr-057]") {
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0} .p{height:200px;margin:0;padding:0}"
+        " .c{height:50%}",
+        800.0f, 600.0f);
+    const auto* c = find_by_class(t.root, "c");
+    REQUIRE(c != nullptr);
+    CHECK(near(c->height, 100.0f));
+}
+
+TEST_CASE("height:50% on auto-height parent skips (CSS spec)",
+          "[layout][box-model][adr-057]") {
+    // parent has height:auto -> parent_content_height passed to
+    // child is 0 -> % returns 0 -> skip. Child renders at
+    // content height (16px for "A").
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0} .p{margin:0;padding:0} .c{height:50%}",
+        800.0f, 600.0f);
+    const auto* c = find_by_class(t.root, "c");
+    REQUIRE(c != nullptr);
+    CHECK(c->height < 100.0f);   // content height, not 50% of anything
+    CHECK(c->height > 0.0f);
+}
+
+TEST_CASE("max-height:30% on fixed-height parent clamps",
+          "[layout][box-model][adr-057]") {
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0} .p{height:200px;margin:0;padding:0}"
+        " .c{height:500px;max-height:30%}",
+        800.0f, 600.0f);
+    const auto* c = find_by_class(t.root, "c");
+    REQUIRE(c != nullptr);
+    // max-height 30% of 200 = 60 -> clamps the 500px explicit height
+    CHECK(near(c->height, 60.0f));
+}
+
+TEST_CASE("min-height:50% on fixed-height parent raises",
+          "[layout][box-model][adr-057]") {
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0} .p{height:200px;margin:0;padding:0}"
+        " .c{min-height:50%}",
+        800.0f, 600.0f);
+    const auto* c = find_by_class(t.root, "c");
+    REQUIRE(c != nullptr);
+    // min-height 50% of 200 = 100 -> raises the content-height box to 100
+    CHECK(near(c->height, 100.0f));
+}
+

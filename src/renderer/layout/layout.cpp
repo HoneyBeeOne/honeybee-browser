@@ -283,12 +283,25 @@ void apply_inline_bg_pp(
     }
 }
 
+// ADR-057: compute what this element's content height WILL be,
+// based on its own CSS height: property (or 0 for auto). Used to
+// thread parent_content_height into children before they lay out.
+float own_declared_content_height(
+    const css::ComputedStyle* style, const LengthContext& ctx) {
+    if (!style) return 0.0f;
+    auto h = style->get("height");
+    if (!h || is_auto(*h)) return 0.0f;
+    const float v = parse_length_for_height(*h, ctx);
+    return v > 0.0f ? v : 0.0f;
+}
+
 LayoutBox layout_element(const dom::Element& el,
                          const css::ComputedStyleMap& styles,
                          const TextMeasurer& measurer,
                          float x_before_margin,
                          float y_before_margin,
                          float parent_content_width,
+                         float parent_content_height,    // ADR-057
                          float parent_font_size,
                          float root_font_size,
                          float viewport_w,   // ADR-051
@@ -370,9 +383,22 @@ LayoutBox layout_element(const dom::Element& el,
     ctx.parent_font_size = parent_font_size;
     ctx.root_font_size = root_font_size;
     ctx.parent_content_width = parent_content_width;
+    // ADR-057: <html>'s containing block is the viewport (CSS
+    // spec: initial containing block). So % heights on <html>
+    // resolve against viewport_h, not parent_content_height.
+    // <body> gets the correct value automatically -- its
+    // parent is <html>, and html's own_content_height (computed
+    // below) flows into body as its parent_content_height.
+    ctx.parent_content_height =
+        (el.tag() == "html") ? viewport_h : parent_content_height;
     ctx.on_font_size_property = false;
     ctx.viewport_w = viewport_w;
     ctx.viewport_h = viewport_h;
+
+    // ADR-057: compute own declared content height upfront --
+    // this becomes the parent_content_height for all children.
+    const float own_content_height =
+        own_declared_content_height(style, ctx);
 
     fill_sides(box.margin, style, ctx,
                "margin-top", "margin-right", "margin-bottom", "margin-left");
@@ -1063,6 +1089,7 @@ LayoutBox layout_element(const dom::Element& el,
                         auto fixed_box = std::make_unique<LayoutBox>(
                             layout_element(child_el, styles, measurer,
                                            0.0f, 0.0f, content_w,
+                                           own_content_height,
                                            own_font_size, root_font_size,
                                            viewport_w, viewport_h,
                                            own_dir, image_dims));
@@ -1108,6 +1135,7 @@ LayoutBox layout_element(const dom::Element& el,
                     auto probe = std::make_unique<LayoutBox>(
                         layout_element(child_el, styles, measurer,
                                        content_x, cursor_y, content_w,
+                                       own_content_height,
                                        own_font_size, root_font_size,
                                        viewport_w, viewport_h,
                                        own_dir, image_dims));
@@ -1191,7 +1219,8 @@ LayoutBox layout_element(const dom::Element& el,
 
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, narrow_x, cursor_y,
-                                   narrow_w, own_font_size, root_font_size,
+                                   narrow_w, own_content_height,
+                                   own_font_size, root_font_size,
                                    viewport_w, viewport_h,
                                    own_dir, image_dims));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
@@ -1277,6 +1306,7 @@ LayoutBox layout_element(const dom::Element& el,
             // First pass: natural size for basis resolution.
             LayoutBox natural = layout_element(
                 child_el, styles, measurer, 0.0f, 0.0f, content_w,
+                own_content_height,
                 own_font_size, root_font_size, viewport_w, viewport_h,
                 own_dir, image_dims);
             const float natural_main =
@@ -1395,6 +1425,7 @@ LayoutBox layout_element(const dom::Element& el,
 
                 fc.final_box = std::make_unique<LayoutBox>(
                     layout_element(*fc.el, styles, measurer, x, y, cw,
+                                   own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
                                    own_dir, image_dims));
@@ -1561,7 +1592,8 @@ LayoutBox layout_element(const dom::Element& el,
 
                 auto child_box = std::make_unique<LayoutBox>(
                     layout_element(child_el, styles, measurer, cell_x, 0.0f,
-                                   cell_w, own_font_size, root_font_size,
+                                   cell_w, own_content_height,
+                                   own_font_size, root_font_size,
                                    viewport_w, viewport_h,
                                    own_dir, image_dims));
                 PlacedChild pc;
@@ -1676,6 +1708,7 @@ LayoutBox layout_element(const dom::Element& el,
                 auto abs_box = std::make_unique<LayoutBox>(
                     layout_element(*abs_el, styles, measurer,
                                    0.0f, 0.0f, abs_cw,
+                                   own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
                                    own_dir, image_dims));
@@ -1825,37 +1858,33 @@ LayoutBox layout_element(const dom::Element& el,
     // block above). This is ADR-037's deferred height gap --
     // search icon w=20 h=0 becomes w=20 h=20.
     //
-    // v1 limitation: percentage heights skipped. LengthContext
-    // has only parent_content_width, no parent_content_height.
-    // `height: 100%` on <html>/<body> would resolve to viewport
-    // WIDTH (1774px) which is catastrophic. Deferred until
-    // parent_content_height threading (ADR-040).
+    // ADR-057: % heights resolve against parent_content_height
+    // (or viewport_h for <html>/<body>). When the parent is
+    // auto-height (parent_content_height = 0), parse_length_for_
+    // height returns 0 and the guard below skips -- matching
+    // CSS spec (% on auto parent -> auto).
     if (style) {
-        if (auto h = style->get("height");
-            h && !is_auto(*h) && h->find('%') == std::string::npos) {
-            const float eh = parse_length(*h, ctx);
+        if (auto h = style->get("height"); h && !is_auto(*h)) {
+            const float eh = parse_length_for_height(*h, ctx);
             if (eh > 0.0f) cursor_y = content_y + eh;
         }
     }
 
     // (3) min-height / max-height clamps. ADR-053 removed the
-    // vw/vh skip (same reasoning as max-width above). % max-height
-    // is still skipped -- parent_content_height threading is a
-    // separate concern (ADR-040 territory).
+    // vw/vh skip. ADR-057 removed the % skip -- % resolves
+    // against parent_content_height (or viewport_h for <html>).
     if (style) {
         if (auto mh = style->get("min-height")) {
-            if (!is_auto(*mh) && *mh != "none" &&
-                mh->find('%') == std::string::npos) {
-                const float min_h = parse_length(*mh, ctx);
+            if (!is_auto(*mh) && *mh != "none") {
+                const float min_h = parse_length_for_height(*mh, ctx);
                 if (min_h > (cursor_y - content_y)) {
                     cursor_y = content_y + min_h;
                 }
             }
         }
         if (auto xh = style->get("max-height")) {
-            if (!is_auto(*xh) && *xh != "none" &&
-                xh->find('%') == std::string::npos) {
-                const float max_h = parse_length(*xh, ctx);
+            if (!is_auto(*xh) && *xh != "none") {
+                const float max_h = parse_length_for_height(*xh, ctx);
                 if (max_h > 0.0f && max_h < (cursor_y - content_y)) {
                     cursor_y = content_y + max_h;
                 }
@@ -2124,7 +2153,8 @@ LayoutBox layout(const dom::Document& doc,
                  TextMeasurer measurer,
                  float viewport_width,
                  ImageDimLookup image_dims,
-                 float viewport_height) {
+                 float viewport_height,
+                 float parent_content_height) {   // ADR-057
     HB_LOG(Layout, Info, "layout: viewport=%.0fx%.0f",
            viewport_width, viewport_height);
     const dom::Element* root = find_root_element(doc);
@@ -2138,7 +2168,9 @@ LayoutBox layout(const dom::Document& doc,
         font_size_of(root_style, kDefaultFontSize, kDefaultFontSize);
 
     return layout_element(*root, styles, measurer, 0.0f, 0.0f,
-                          viewport_width, kDefaultFontSize, root_fs,
+                          viewport_width,
+                          parent_content_height,
+                          kDefaultFontSize, root_fs,
                           viewport_width, viewport_height,
                           Direction::Ltr, image_dims);
 }
@@ -2212,9 +2244,11 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
                              TextMeasurer measurer,
                              float viewport_width,
                              ImageDimLookup image_dims,
-                             float viewport_height) {
+                             float viewport_height,
+                             float parent_content_height) {   // ADR-057
     LayoutBox root = layout(doc, styles, measurer, viewport_width,
-                            image_dims, viewport_height);
+                            image_dims, viewport_height,
+                            parent_content_height);   // ADR-057
     // Root font size defaults to 16 (pseudo font-size inheritance
     // from root isn't needed for content: '' -- no text).
     apply_pseudo_elements(root, pseudo_styles,
