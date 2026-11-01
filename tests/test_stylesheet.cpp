@@ -1142,3 +1142,78 @@ TEST_CASE("@supports (display: grid) with non-trivial rule body preserved",
     REQUIRE(sheet.rules.size() == 1);
     REQUIRE(sheet.rules[0].declarations.size() == 2);
 }
+
+// =============================================================
+// ADR-055: background shorthand (color-only forms)
+// =============================================================
+
+TEST_CASE("background: #fff expands to background-color",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: #fff; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "background-color");
+    REQUIRE(decls[0].value == "#fff");
+    CHECK_FALSE(decls[0].important);
+}
+
+TEST_CASE("background: #2980b9 expands to background-color",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: #2980b9; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "background-color");
+    REQUIRE(decls[0].value == "#2980b9");
+}
+
+TEST_CASE("background: none expands to transparent",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: none; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "background-color");
+    REQUIRE(decls[0].value == "transparent");
+}
+
+TEST_CASE("background: !important preserved through expansion",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: #fff !important; }");
+    REQUIRE(sheet.rules.size() == 1);
+    const auto& decls = sheet.rules[0].declarations;
+    REQUIRE(decls.size() == 1);
+    REQUIRE(decls[0].property == "background-color");
+    REQUIRE(decls[0].value == "#fff");
+    CHECK(decls[0].important);
+}
+
+TEST_CASE("background: url() forms dropped entirely",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: #fff url(x.png) repeat; }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("background: linear-gradient dropped entirely",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: linear-gradient(red, blue); }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("background: multi-layer (comma) dropped entirely",
+          "[css][stylesheet][adr-055]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: url(a.png), url(b.png); }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+

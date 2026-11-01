@@ -517,6 +517,38 @@ bool try_expand_border_side(std::string_view property,
     return true;
 }
 
+// ADR-055: background shorthand (color-only forms).
+// Defer url() / gradient() / multi-layer (comma) forms entirely --
+// half-parsing "background: #fff url(x)" by extracting just the
+// color produces a worse state than dropping (fill but no image,
+// vs. today: neither). Drop declaration consistently, like
+// border / grid-template / flex malformed handling.
+//
+// Like border-color, we store the raw color string here; layout's
+// parse_color resolves it at layout time. Malformed colors (e.g.
+// "background: garbage") produce "background-color: garbage" in
+// the cascade, which layout parses to transparent -- identical
+// observable behavior to longhand "background-color: garbage".
+bool try_expand_background(std::string_view value, bool important,
+                           std::vector<Declaration>& out) {
+    if (value.find("url(") != std::string_view::npos) return false;
+    if (value.find("gradient(") != std::string_view::npos) return false;
+    if (value.find(',') != std::string_view::npos) return false;
+
+    const std::string v = trim(value);
+    if (v.empty()) return false;
+
+    // CSS spec: `background: none` is equivalent to transparent
+    // background-color with no image.
+    if (v == "none") {
+        out.push_back({"background-color", "transparent", important});
+        return true;
+    }
+
+    out.push_back({"background-color", v, important});
+    return true;
+}
+
 void expand_shorthand(std::string_view property, std::string_view value,
                       bool important, std::vector<Declaration>& out) {
     // ADR-028: grid-template shorthand.
@@ -552,6 +584,13 @@ void expand_shorthand(std::string_view property, std::string_view value,
         property == "border-bottom" || property == "border-left") {
         if (try_expand_border_side(property, value, important, out)) return;
         // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-055: background shorthand (color-only forms).
+    if (property == "background") {
+        if (try_expand_background(value, important, out)) return;
+        // url / gradient / multi-layer: drop declaration entirely.
         return;
     }
 
