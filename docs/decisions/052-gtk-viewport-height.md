@@ -1,6 +1,6 @@
 # ADR-052: GTK Viewport Height Threading
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-01
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-021 (ScrolledWindow), ADR-050 (@supports, sticky chain), ADR-051 (viewport units, closed Deferred item)
@@ -338,3 +338,82 @@ Deferred item is closed.
 4. **Initial render before allocation** — `get_height()` returns
    0 until GTK allocates; `on_draw` re-runs with real dims.
    Existing pattern preserved.
+
+## Implementation
+
+Implemented on `feat/gtk-viewport-height` across two commits
+(Commit 1 = threading, Commit 2 = this docs update).
+
+### What shipped
+
+- `render()` / `render_with_css()` / `relayout()` gain
+  `viewport_height` param (default `0.0f`, protecting all ~15
+  existing test callers)
+- `render_pipeline.cpp` forwards `viewport_height` through to
+  `layout_with_pseudo(..., viewport_height)` -- the call site
+  ADR-051 prepared
+- `window.cpp`: `on_draw` reads `m_scroll_window.get_height()`,
+  tracks it in `m_last_height`, triggers relayout on **either**
+  width or height change
+- `window.cpp`: `render_html` / `render_with_preparsed_doc`
+  pass `m_scroll_window.get_height()` alongside
+  `m_drawing_area.get_width()`
+- `window.hpp`: `int m_last_height = -1;`
+
+### Verified delta
+
+**Log verification (`HONEYBEE_LOG=layout` on Wikipedia HTML
+article):**
+
+```
+[honeybee][layout][info] layout: viewport=0x0       <- first render (pre-allocation)
+[honeybee][layout][info] layout: viewport=1024x678  <- second render (real viewport)
+```
+
+`viewport_h = 678` is `m_scroll_window.get_height()`, the
+actual allocated visible viewport. **Before ADR-052**: `viewport
+= 1024x0`.
+
+### Honest delta framing
+
+**Zero visible PNG delta.** Even with correct height threaded:
+
+1. `vh` feeds only `max-height` / `max-width` (7 renderable
+   rules from ADR-051)
+2. Layout doesn't read either (deferred to min/max clamp ADR)
+3. `.vector-sticky-pinned-container` still `h=0` from ancestor
+   culling
+
+**What changes**:
+- `parse_length("calc(100vh - 48px)")` returns `window_height -
+  48` in production (630 at this 678px window, was -48)
+- Lands in `ComputedStyle.max-height` -- correct semantically
+- Layout ignores it (no min/max clamp yet)
+
+**Same category as ADR-047/048**: correct infrastructure
+shipped before its consumer.
+
+### Test count
+
+- 644 cases, 2465 assertions unchanged (default
+  `viewport_height=0.0f` protects all existing test callers)
+- Zero new warnings introduced
+
+### Deferred (documented)
+
+- **`max-height` / `max-width` honoring in layout** -- separate
+  min/max clamp ADR; finds `viewport_h` now correct
+- **`svh` / `lvh` / `dvh`** -- remain deferred (ADR-051)
+- **Percentage `max-height`** -- remains deferred (needs
+  `parent_content_height`, separate concern)
+
+### What this closes
+
+**ADR-051's Deferred item** "GTK allocated height threading to
+`render_pipeline`" -- verified via log showing nonzero
+`viewport_h` in production for the first time.
+
+**One fewer prerequisite** on the sticky sidebar chain. The
+max-height clamp ADR can now read correct `calc(100vh - ...)`
+values without touching viewport-height plumbing.
+
