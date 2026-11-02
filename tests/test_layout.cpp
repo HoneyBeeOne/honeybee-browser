@@ -1233,17 +1233,17 @@ TEST_CASE("RenderPipeline::restyle re-cascades only dirty subtrees",
     p.restyle();
     const auto unhover_calls = css::apply_rule_call_count();
 
-    // Threshold logic (measured baseline: 17 calls per transition --
-    // exactly one element x 17 UA rules). Full cascade on this
-    // document would be ~1,734 (102 elements x 17 rules).
+    // Threshold logic (original baseline pre-ADR-059: 17 calls per
+    // transition -- one element x 17 UA rules). ADR-059 indexes the
+    // cascade by rightmost-simple anchor, so the count drops to
+    // approximately the number of rules whose anchor matches the <a>
+    // element (typically 3-6: the `a` tag rules + universal rules).
+    // Full cascade on this document would still be ~1,734 (102
+    // elements x 17 rules).
     //
-    // < 100 gives 5.9x headroom over the baseline (catches 5x
-    // regressions like accidental double-cascade) while remaining
-    // robust to legitimate UA-stylesheet growth: false positives
-    // would require UA rules to exceed ~100, which is a UA-sheet
-    // overhaul that would come with its own ADR. Full-cascade
-    // reversion (17 -> 1,734) fails at any threshold, and this one
-    // fails fast and unmistakably.
+    // < 100 gives generous headroom above both the pre-ADR-059 (17)
+    // and post-ADR-059 (~5) baselines. Full-cascade reversion
+    // (17 -> 1,734) fails at any threshold.
     INFO("hover_calls = " << hover_calls
          << ", unhover_calls = " << unhover_calls);
     CHECK(hover_calls < 100);

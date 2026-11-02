@@ -88,17 +88,44 @@ void compute_styles(const dom::Node& node,
     if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
 
+        // ADR-059: compute candidate rules once per element via
+        // the rightmost-simple anchor index, reuse across the 3
+        // pseudo-target passes. Candidates are rule indices into
+        // ua_sheet.rules / author_sheet.rules (order-preserving).
+        const std::string el_id = el.get_attribute("id");
+        std::vector<std::string> el_classes;
+        {
+            const std::string cls = el.get_attribute("class");
+            std::string cur;
+            for (char c : cls) {
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                    if (!cur.empty()) {
+                        el_classes.push_back(cur);
+                        cur.clear();
+                    }
+                } else cur.push_back(c);
+            }
+            if (!cur.empty()) el_classes.push_back(cur);
+        }
+        const std::string el_tag = el.tag();
+        const auto ua_cands = ua_sheet.index.candidates_for(
+            el_id, el_classes, el_tag);
+        const auto author_cands = author_sheet.index.candidates_for(
+            el_id, el_classes, el_tag);
+
         // Element cascade (target=None).
         {
             ComputedStyle style;
             std::size_t counter = 0;
-            for (const auto& rule : ua_sheet.rules) {
-                apply_rule(rule, el, Origin::UserAgent, counter, state,
-                           viewport_width, PseudoElement::None, style);
+            for (std::size_t idx : ua_cands) {
+                apply_rule(ua_sheet.rules[idx], el, Origin::UserAgent,
+                           counter, state, viewport_width,
+                           PseudoElement::None, style);
             }
-            for (const auto& rule : author_sheet.rules) {
-                apply_rule(rule, el, Origin::Author, counter, state,
-                           viewport_width, PseudoElement::None, style);
+            for (std::size_t idx : author_cands) {
+                apply_rule(author_sheet.rules[idx], el, Origin::Author,
+                           counter, state, viewport_width,
+                           PseudoElement::None, style);
             }
             out.element_styles[&el] = std::move(style);
         }
@@ -107,13 +134,15 @@ void compute_styles(const dom::Node& node,
         {
             ComputedStyle style;
             std::size_t counter = 0;
-            for (const auto& rule : ua_sheet.rules) {
-                apply_rule(rule, el, Origin::UserAgent, counter, state,
-                           viewport_width, PseudoElement::Before, style);
+            for (std::size_t idx : ua_cands) {
+                apply_rule(ua_sheet.rules[idx], el, Origin::UserAgent,
+                           counter, state, viewport_width,
+                           PseudoElement::Before, style);
             }
-            for (const auto& rule : author_sheet.rules) {
-                apply_rule(rule, el, Origin::Author, counter, state,
-                           viewport_width, PseudoElement::Before, style);
+            for (std::size_t idx : author_cands) {
+                apply_rule(author_sheet.rules[idx], el, Origin::Author,
+                           counter, state, viewport_width,
+                           PseudoElement::Before, style);
             }
             if (!style.declarations.empty()) {
                 out.pseudo_styles[&el].before = std::move(style);
@@ -124,13 +153,15 @@ void compute_styles(const dom::Node& node,
         {
             ComputedStyle style;
             std::size_t counter = 0;
-            for (const auto& rule : ua_sheet.rules) {
-                apply_rule(rule, el, Origin::UserAgent, counter, state,
-                           viewport_width, PseudoElement::After, style);
+            for (std::size_t idx : ua_cands) {
+                apply_rule(ua_sheet.rules[idx], el, Origin::UserAgent,
+                           counter, state, viewport_width,
+                           PseudoElement::After, style);
             }
-            for (const auto& rule : author_sheet.rules) {
-                apply_rule(rule, el, Origin::Author, counter, state,
-                           viewport_width, PseudoElement::After, style);
+            for (std::size_t idx : author_cands) {
+                apply_rule(author_sheet.rules[idx], el, Origin::Author,
+                           counter, state, viewport_width,
+                           PseudoElement::After, style);
             }
             if (!style.declarations.empty()) {
                 out.pseudo_styles[&el].after = std::move(style);

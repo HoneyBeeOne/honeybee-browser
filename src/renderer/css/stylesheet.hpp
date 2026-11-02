@@ -57,6 +57,26 @@ struct Rule {
     std::optional<MediaQuery> media;
 };
 
+// ADR-059: rightmost-simple anchor index for cascade queries.
+// Buckets store rule indices (size_t), not Rule pointers, so
+// natural sort order preserves original rule order -- critical
+// for specificity tie-breaking (source_order is derived from
+// iteration order). DOM-free interface: callers extract id,
+// classes, and tag from the element themselves.
+struct RuleIndex {
+    std::unordered_map<std::string, std::vector<std::size_t>> by_id;
+    std::unordered_map<std::string, std::vector<std::size_t>> by_class;
+    std::unordered_map<std::string, std::vector<std::size_t>> by_type;
+    std::vector<std::size_t> universal;
+
+    // Returns candidate rule indices for an element with the
+    // given id, classes, and tag. Result is sorted and deduped.
+    std::vector<std::size_t> candidates_for(
+        const std::string& id,
+        const std::vector<std::string>& classes,
+        const std::string& tag) const;
+};
+
 struct Stylesheet {
     std::vector<Rule> rules;
 
@@ -65,10 +85,20 @@ struct Stylesheet {
     // parse(). Consumed by var() pre-resolution.
     std::unordered_map<std::string, std::string> variables;
 
+    // ADR-059: built by build_index() at end of parse().
+    // Invariant: `rules` must not be mutated post-parse or the
+    // index holds stale indices.
+    RuleIndex index;
+
     // Parses `text` into a stylesheet. Malformed rules are
     // skipped; the result is always a valid (possibly empty)
     // Stylesheet.
     static Stylesheet parse(std::string_view text);
+
+    // ADR-059: builds `index` from `rules`. Idempotent
+    // (clears + rebuilds). Called at end of parse(); exposed
+    // for testability.
+    void build_index();
 };
 
 } // namespace honeybee::renderer::css

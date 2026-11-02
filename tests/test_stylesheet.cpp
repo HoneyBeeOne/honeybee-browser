@@ -1297,3 +1297,66 @@ TEST_CASE("background: unknown token drops entirely",
     CHECK(sheet.rules[0].declarations.empty());
 }
 
+// =============================================================
+// ADR-059: RuleIndex bucketing + candidates_for
+// =============================================================
+
+TEST_CASE("RuleIndex: rule with #id lands in by_id",
+          "[css][stylesheet][adr-059]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "#foo { color: red }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.index.by_id.count("foo") == 1);
+    CHECK(sheet.index.by_id.at("foo").size() == 1);
+    CHECK(sheet.index.by_id.at("foo")[0] == 0);
+    CHECK(sheet.index.by_class.empty());
+    CHECK(sheet.index.by_type.empty());
+}
+
+TEST_CASE("RuleIndex: rule with .class lands in by_class",
+          "[css][stylesheet][adr-059]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        ".bar { color: red }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.index.by_class.count("bar") == 1);
+    CHECK(sheet.index.by_class.at("bar").size() == 1);
+}
+
+TEST_CASE("RuleIndex: rule with type lands in by_type",
+          "[css][stylesheet][adr-059]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "div { color: red }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.index.by_type.count("div") == 1);
+    CHECK(sheet.index.by_type.at("div").size() == 1);
+}
+
+TEST_CASE("RuleIndex: universal selectors land in universal bucket",
+          "[css][stylesheet][adr-059]") {
+    // *, :root, [attr] all lack Id/Class/Type anchors.
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "* { margin: 0 } :root { --x: 1 } [lang] { color: red }");
+    REQUIRE(sheet.rules.size() == 3);
+    CHECK(sheet.index.universal.size() == 3);
+    CHECK(sheet.index.by_id.empty());
+    CHECK(sheet.index.by_class.empty());
+    CHECK(sheet.index.by_type.empty());
+}
+
+TEST_CASE("RuleIndex: multi-selector rule lands in multiple buckets, "
+          "candidates_for dedupes",
+          "[css][stylesheet][adr-059]") {
+    // One rule with two selectors: .a and #b. Both anchors fire
+    // for an element with class="a" id="b".
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        ".a, #b { color: red }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.index.by_class.count("a") == 1);
+    CHECK(sheet.index.by_id.count("b") == 1);
+
+    auto cands = sheet.index.candidates_for(
+        "b", {"a"}, "div");
+    // Deduped to single entry.
+    REQUIRE(cands.size() == 1);
+    CHECK(cands[0] == 0);
+}
