@@ -64,11 +64,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 059 | [Selector index for cascade performance](059-selector-index.md) | `RuleIndex` + `anchor_for` + `candidates_for`. **5.6× cascade speedup measured across 3 runs** (1058ms → ~190ms, Release, Wikipedia). Cascade share drops 31% → 6-7%. Revealed layout variance (3×) — ADR-060 methodology lesson. |
 | 060 | [Layout copy elimination](060-layout-copy-elimination.md) | `ComputedStyle::get_view()` (transparent hash, `string_view` return) + `fill_sides` inline lookup. **12.0% layout win, median-of-3 measured** (2678ms → 2357ms). Combined with ADR-059: **25.5% total Wikipedia perf win.** |
 | 061 | [Layout perf diagnostic](061-perf-diagnostic.md) | **Decision record** (no code): typed `ComputedStyle` fields hypothesis disproven by re-profile. Post-ADR-060, the target lookup is 0.25% (not 25% as projected). Closes the perf stream — ADR-059 + 060 captured everything >5% individually. |
+| 062 | [`linear-gradient()` background support](062-linear-gradient.md) | Parser preserves `linear-gradient(...)` as `background-image`; layout parses structured form; paint uses Cairo linear pattern + stops. **Synthetic-fixture verified** — Wikipedia's gradient target is ancestor-culled (triple-blocked: pseudo-element, h=0 parent, sticky). Closes the last 1/11 `background:` form. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 061 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 062 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
