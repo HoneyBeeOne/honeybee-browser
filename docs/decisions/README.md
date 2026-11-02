@@ -63,11 +63,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 058 | [`top: 50%` + `transform: translateY(-50%)`](058-top-translate-y.md) | `top: %` against containing block height; `translateY()` against own box height. Paint wrapper `did_transform`. **Production-verified 2026-11-02** (magnifier centered at y=18). Closes 5-ADR chain 054/055/056/057/058. Also ships perf split-timer. |
 | 059 | [Selector index for cascade performance](059-selector-index.md) | `RuleIndex` + `anchor_for` + `candidates_for`. **5.6× cascade speedup measured across 3 runs** (1058ms → ~190ms, Release, Wikipedia). Cascade share drops 31% → 6-7%. Revealed layout variance (3×) — ADR-060 methodology lesson. |
 | 060 | [Layout copy elimination](060-layout-copy-elimination.md) | `ComputedStyle::get_view()` (transparent hash, `string_view` return) + `fill_sides` inline lookup. **12.0% layout win, median-of-3 measured** (2678ms → 2357ms). Combined with ADR-059: **25.5% total Wikipedia perf win.** |
+| 061 | [Layout perf diagnostic](061-perf-diagnostic.md) | **Decision record** (no code): typed `ComputedStyle` fields hypothesis disproven by re-profile. Post-ADR-060, the target lookup is 0.25% (not 25% as projected). Closes the perf stream — ADR-059 + 060 captured everything >5% individually. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 060 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 061 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.

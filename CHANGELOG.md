@@ -516,6 +516,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 683 cases, 2614 assertions (+3 cases / +6
   assertions).
 
+- **Layout perf diagnostic — typed-field hypothesis disproven** (ADR-061): 
+  **Decision record (no code shipped).**
+
+  Post-ADR-060 re-profile (1135 samples, `perf record
+  -g --call-graph dwarf`, Wikipedia HTML article) disproved
+  the ADR-061 typed-`ComputedStyle`-fields hypothesis. The
+  exact lookup typed fields would eliminate
+  (`unordered_map<string, CascadeValue>::find`) is **0.25%
+  of total self-time, not the ~25% projected** from ADR-060's
+  pre-fix profile. ADR-060's copy elimination had already
+  captured ~99% of the map-lookup cost by removing the
+  string allocations around it.
+
+  Three alternate targets individually disproven:
+  - **String→string `unordered_map::find`** — traced to
+    `Stylesheet::variables` (cascade-side, not layout; after
+    ADR-059 cascade is ~7% of total)
+  - **`parse_length` fast path** — not in top-10 self-time
+    post-ADR-060
+  - **`contains_word`** — real (5.43% self-time) but
+    maximum possible win is 3-5% of total; deferred to a
+    bundled cascade-perf cycle rather than a standalone
+    polish ADR
+
+  The post-ADR-060 profile is **flat**: no function exceeds
+  ~5% self-time and the top-10 covers ~15% total. That's the
+  correct shape after a successful optimization cycle — the
+  big fish has been caught.
+
+  **Perf stream conclusion** (ADR-058→059→060→061):
+  - ADR-058: split-timer shipped, measured baseline
+    cascade 1058ms / layout 2379ms
+  - ADR-059: cascade index, **5.6× cascade win**
+  - ADR-060: copy elimination, **12% layout win**
+  - ADR-061: typed fields hypothesis **disproven by
+    re-profile**
+  - **Combined ADR-059+060: 25.5% total Wikipedia render
+    win (3437ms → ~2555ms)**
+
+  Methodology validated: measure → fix → re-measure before
+  next cycle → ship the win or record the disproval. All
+  three outcomes demonstrated in this stream. No cycle
+  optimized without measuring.
+
+  Test count unchanged at 683 cases, 2614 assertions
+  (decision record only, zero code changes).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
