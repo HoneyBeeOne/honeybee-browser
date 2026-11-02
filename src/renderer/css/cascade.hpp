@@ -41,11 +41,38 @@ struct CascadeValue {
     std::size_t source_order = 0;
 };
 
+// ADR-060: heterogeneous lookup helpers for the declarations
+// map. A single operator() accepting std::string_view means both
+// std::string (at insertion) and std::string_view (at lookup)
+// route through the same hash function -- necessary for
+// transparent lookup correctness (std::hash<std::string> and
+// std::hash<std::string_view> need not agree).
+struct StringHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view s) const noexcept {
+        return std::hash<std::string_view>{}(s);
+    }
+};
+
+struct StringEq {
+    using is_transparent = void;
+    bool operator()(std::string_view a, std::string_view b) const noexcept {
+        return a == b;
+    }
+};
+
 struct ComputedStyle {
-    std::unordered_map<std::string, CascadeValue> declarations;
+    std::unordered_map<std::string, CascadeValue, StringHash, StringEq>
+        declarations;
 
     bool has(const std::string& property) const;
     std::optional<std::string> get(const std::string& property) const;
+
+    // ADR-060: read-only view of a property value. No copy.
+    // Returns a view into the stored CascadeValue::value; valid
+    // until the map is mutated. Nullopt if the property is
+    // absent.
+    std::optional<std::string_view> get_view(std::string_view property) const;
 };
 
 using ComputedStyleMap =
