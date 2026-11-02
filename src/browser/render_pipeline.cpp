@@ -1,4 +1,6 @@
 #include "render_pipeline.hpp"
+#include <vector>
+#include <algorithm>
 #include <chrono>
 #include "net/client.hpp"
 #include "base/url.hpp"
@@ -538,8 +540,36 @@ std::string RenderPipeline::title() const {
     return doc_ ? doc_->title() : std::string{};
 }
 
+
 float RenderPipeline::layout_height() const {
-    return layout_root_.height;
+    // ADR-064: true content extent. layout_root_.height is the
+    // <html> CSS box, clamped to viewport by ADR-057 when
+    // html { height: 100% } is present (Wikipedia's CSS reset).
+    // Walk Box nodes iteratively for the deepest y+height --
+    // descendants retain natural heights so this finds the true
+    // content bottom. Inline fragments are bounded by their
+    // parent Box so they don't need separate traversal.
+    float max_bottom = layout_root_.y + layout_root_.height;
+    std::vector<const renderer::layout::LayoutNode*> stack;
+    stack.push_back(&layout_root_);
+    while (!stack.empty()) {
+        const renderer::layout::LayoutNode* n = stack.back();
+        stack.pop_back();
+        const float bottom = n->y + n->height;
+        if (bottom > max_bottom) {
+            max_bottom = bottom;
+        }
+        if (n->kind == renderer::layout::LayoutKind::Box) {
+            const renderer::layout::LayoutBox* box =
+                static_cast<const renderer::layout::LayoutBox*>(n);
+            if (box != nullptr) {
+                for (const auto& child : box->children) {
+                    stack.push_back(child.get());
+                }
+            }
+        }
+    }
+    return max_bottom;
 }
 
 void RenderPipeline::restyle() {

@@ -66,11 +66,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 061 | [Layout perf diagnostic](061-perf-diagnostic.md) | **Decision record** (no code): typed `ComputedStyle` fields hypothesis disproven by re-profile. Post-ADR-060, the target lookup is 0.25% (not 25% as projected). Closes the perf stream — ADR-059 + 060 captured everything >5% individually. |
 | 062 | [`linear-gradient()` background support](062-linear-gradient.md) | Parser + layout + paint for linear-gradient. **`rgb()`/`rgba()` added to `parse_color`** (uncovered prerequisite). **Synthetic-fixture-verified** (5 rows, 2026-11-02). Zero Wikipedia delta (target triple-blocked: pseudo-element + h=0 parent + sticky). Closes the last 1/11 `background:` form; 11/11 forms parse. |
 | 063 | [Whitelist `float` + `clear`](063-float-whitelist.md) | Unlocks ADR-030/036's complete float layout implementation (180 lines) by adding 2 missing properties to `supported_properties()`. **User-reported production-visual delta** on Wikipedia. First real-world test of ADR-030/036. |
+| 064 | [Scroll height regression](064-scroll-height-regression.md) | `layout_height()` walks tree for deepest Box `y+height` (was: `layout_root_.height`, ADR-057-clamped to viewport). **Production-verified 2026-11-03** (scrollbar restored, scroll works on Wikipedia). Extra relayout on load. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 063 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 064 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
