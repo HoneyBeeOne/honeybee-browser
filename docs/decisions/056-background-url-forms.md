@@ -459,3 +459,56 @@ sits at `y=18` -- **perfectly centered in the search box.**
 
 11/11 background forms parse (from ADR-056). 10/11 render.
 The 11th (`linear-gradient`) remains deferred.
+
+
+## Post-ADR-062 note
+
+**ADR-062 closes the last remaining `background:` form.**
+
+ADR-056 shipped the `url()` grammar after ADR-055's color-only
+forms. Together they covered 10 of 11 Wikipedia forms. The
+11th (`linear-gradient(...)`) was dropped entirely -- the
+line `if (value.find("gradient(") != npos) return false;`
+was the last blanket rejection.
+
+**ADR-062 replaces that with targeted `linear-gradient(...)`
+preservation.** The grammar surface is now:
+
+| Form | ADR | Status |
+|---|---|---|
+| `#fff` / `#ffffff` / `#fff !important` | 055 | parse + render |
+| `var(--x, #fff)` | 055 | parse + render |
+| `none` | 055 | parse + render |
+| `url(x)` | 056 | parse + render |
+| `url(x) no-repeat right` | 056 | parse + render |
+| `url(x) 100% 50% no-repeat` | 056 | parse + render |
+| `#fff url(x) repeat` | 056 | parse + render |
+| `no-repeat center / 1.23em url(x)` | 056 | parse + render |
+| **`linear-gradient(...)`** | **062** | **parse + paint** (ancestor-culled on Wikipedia) |
+| `radial-gradient(...)` | -- | dropped (deferred) |
+| `conic-gradient(...)` | -- | dropped (deferred) |
+| Multi-layer (comma) | -- | dropped (deferred) |
+
+**11/11 forms in Wikipedia's site.styles bundle now parse.**
+10/11 render visibly on the target page -- the 11th parses
+and paints but is triple-blocked (pseudo-element,
+ancestor-culled parent, sticky).
+
+**Parser architecture final shape:**
+
+```cpp
+if (value.find("linear-gradient(") != npos) { ... preserve as background-image ... }
+if (value.find("gradient(") != npos) return false;  // radial/conic still drop
+// ... continue with url / color / repeat / position / size grammar
+```
+
+Gradient detection is first (before url/color), preserved as
+`background-image: <raw>`. `parse_color` handles stops in
+layout (`css/` can't call it per ADR-055 layering).
+
+**Honest gap**: `parse_color` didn't support `rgb()` /
+`rgba()` until ADR-062. Wikipedia's gradient starts with
+`rgba(255,255,255,0)`. This prerequisite was discovered
+during ADR-062's implementation, not anticipated in the
+spec. Bundled into the same commit -- same pattern as
+ADR-060's `#include` discovery.

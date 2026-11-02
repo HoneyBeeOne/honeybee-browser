@@ -1,6 +1,6 @@
 # ADR-062: `linear-gradient()` background support
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-02
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-034 (image paint), ADR-041 (pseudo-element synthesis), ADR-050 (ancestor culling diagnostic), ADR-055 / 056 (background shorthand + URL forms)
@@ -358,3 +358,179 @@ ADR-062 is complete when:
 - [ ] Post-ADR-062 notes in ADR-034 / 056
 - [ ] README row + CHANGELOG
 - [ ] ADR-062 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/linear-gradient` across two commits
+(Commit 1 = full implementation, Commit 2 = this docs
+update). Single PR #265 merged at `753aaa8`.
+
+### What shipped
+
+**`style_values.cpp`:**
+- `parse_color()` extended with `rgb()` / `rgba()` support
+  (~50 lines): integer (0-255) channels, percentage (0-100%)
+  channels, mixed forms, alpha via float or percentage,
+  `std::clamp` bounds. Uses existing `split_commas` +
+  `trim_ws`.
+
+**`stylesheet.cpp`:**
+- Replaces blanket gradient rejection with targeted
+  `linear-gradient(...)` preservation. Extracts the full
+  gradient token (respects nested parens for `var()` /
+  `rgba()` inside stops), emits as
+  `background-image: linear-gradient(<raw>)`. Stray commas
+  outside the gradient still drop (multi-layer deferral).
+  Radial / conic / repeating still drop entirely.
+
+**`layout_box.hpp`:**
+- `struct BackgroundGradientStop { Color color; float position; }`
+- `background_is_gradient` bool
+- `background_gradient_angle_deg` float (default 180)
+- `background_gradient_stops` vector
+
+**`layout.cpp`:**
+- `gradient_detail` local namespace: `g_trim`,
+  `g_split_commas`, `g_split_whitespace`,
+  `direction_to_deg`, `parse_angle_sv` -- duplicated from
+  `style_values.cpp`'s anonymous namespace (same pattern as
+  ADR-056's `is_color_token` duplication)
+- `parse_background_gradient(raw, box)` -- splits the raw
+  gradient on top-level commas, parses optional direction
+  (`<N>deg` or `to <keyword>` including corners), extracts
+  stop colors via `parse_color`, populates structured fields
+- Call site after `background_image_url` extraction, before
+  ADR-033 position parsing
+
+**`paint.cpp`:**
+- `paint_background_gradient(cr, box)` -- CSS Images 3
+  §3.1.1 gradient line formula: direction vector
+  `(sin θ, -cos θ)` in screen coords, length
+  `L = W·|sin θ| + H·|cos θ|`, half-diagonal `L/2`.
+  Cairo linear pattern with per-stop `add_color_stop_rgba`.
+- Call site in `paint_box` **before** `background_image_url`
+  (gradient is fill; URL image layers on top).
+
+**`test_stylesheet.cpp`:**
+- Flipped ADR-055's `"linear-gradient dropped entirely"` to
+  `"preserved as background-image"`. Tags updated to
+  `[adr-055][adr-062]`.
+- 4 new tests: angle preserved, rgba() colors preserved,
+  radial-gradient still dropped, multi-layer with gradient
+  dropped.
+
+**`docs/adr062-gradient-test.html`:**
+- 5-row fixture: solid control, default vertical, 45deg
+  diagonal, 3-stop `to right`, Wikipedia's rgba form.
+- `.row` has `background-color: #f0f0f0` so row 5's
+  `rgba(255,255,255,0) → white` gradient is visible
+  (transparent start shows base gray).
+
+### Verified delta (fixture, screenshot 2026-11-02)
+
+| Row | CSS | Rendered |
+|---|---|---|
+| 1 | `background-color: #d35400` (control) | Solid orange |
+| 2 | `linear-gradient(red, blue)` (default 180deg) | **Vertical red→blue** |
+| 3 | `linear-gradient(45deg, red, blue)` | Diagonal |
+| 4 | `linear-gradient(to right, red, white, blue)` | Horizontal 3-stop |
+| 5 | `linear-gradient(rgba(255,255,255,0), white)` | Gray→white |
+
+**All 5 render correctly.** First gradient rendered by
+HoneyBee.
+
+### The three bugs caught this cycle (all pre-shipping)
+
+1. **`parse_color` had no `rgb()` / `rgba()` support.**
+   Wikipedia's gradient starts with
+   `rgba(255,255,255,0)`. Without this, the first stop
+   silently fails, leaving 1 stop, no paint. **Caught by
+   the pre-patch diagnostic** (the `parse_color` audit).
+   Extended `parse_color` as part of ADR-062's scope.
+
+2. **`split_tokens` not in `layout.cpp`'s scope.** First
+   build attempt used `split_tokens(...)` inside
+   `parse_background_gradient`, but that helper lives in
+   `stylesheet.cpp`'s anonymous namespace. **Caught by the
+   compiler.** Fixed by adding local
+   `g_split_whitespace` to `gradient_detail`.
+
+3. **Angle math was rotated 90°.** First implementation
+   used math convention `(cos θ, sin θ)`. **Caught by the
+   fixture screenshot** -- "vertical" row rendered
+   horizontal. Correct CSS convention:
+   direction `(sin θ, -cos θ)` in screen coords (y down),
+   length `W·|sin θ| + H·|cos θ|`. Post-fix, all angles
+   map correctly.
+
+**Same discipline as ADR-057/058/059/060**: each cycle's
+bugs caught at the earliest possible check (diagnostic →
+build → fixture), never after shipping.
+
+### Honest delta framing: zero Wikipedia delta
+
+**Wikipedia production delta: zero.** The target is:
+
+```css
+.vector-sticky-pinned-container::after {
+    background: linear-gradient(rgba(255,255,255,0),
+                                var(--background-color-base,#fff));
+    position: sticky;
+}
+```
+
+**Triple-blocked:**
+
+| Layer | Status |
+|---|---|
+| `.vector-sticky-pinned-container` ancestor | `h=0` (culled, ADR-050) |
+| `::after` pseudo-element | Synthesized (ADR-041) but parent is `h=0` |
+| `position: sticky` | Deferred |
+
+Even with ADR-062 shipped, the target remains invisible on
+Wikipedia. **Screenshot before/after on Wikipedia HTML
+article is identical.**
+
+**This is the same category as ADR-054 (rotate).** Real,
+testable, reusable infrastructure — with a target that's
+invisible for reasons outside the ADR's scope.
+
+### What this closes
+
+**Last 1/11 `background:` grammar gap.** 11/11 forms parse.
+10/11 render. The one (linear-gradient) parses + paints but
+is ancestor-culled on Wikipedia.
+
+**New paint primitive** (`paint_background_gradient`)
+available for any future visible gradient (buttons, headers,
+dialogs, banners).
+
+**`rgb()` / `rgba()` support** in `parse_color` — reusable
+across all CSS consumers (any future color-bearing property).
+
+### Design decisions applied
+
+**Structured parse in layout (not css)**: `css/` cannot call
+`layout::parse_color` (layering, ADR-055). `css/` preserves
+raw gradient string; `layout` resolves structured form where
+`parse_color` + `LengthContext` are available.
+
+**Separate `paint_background_gradient`**: different Cairo
+primitives (linear pattern vs surface), different lifecycle.
+Separate = cold-path gradient doesn't touch hot-path image.
+
+**Stop positions parsed but ignored in v1**: Wikipedia's
+form uses defaults `0% / 100%` — unaffected. Real
+gradient-with-positions needs ~60-line position-fill
+algorithm; follow-up ADR.
+
+### Deferred (documented)
+
+- **Explicit stop positions** (`red 20%`) -- parsed, uniform
+  interpolation applied
+- **Radial / conic / repeating gradients** -- no consumer
+- **Multi-layer gradients** -- drop entirely
+- **Color interpolation spaces** (`in oklab`) -- not parsed
+- **`position: sticky`** -- the target's third blocker
+- **Ancestor culling unblock** -- the target's second blocker
+
