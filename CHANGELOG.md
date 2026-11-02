@@ -483,6 +483,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 680 cases, 2608 assertions (+5 cases /
   +22 assertions).
 
+- **Eliminate string-copy overhead in layout hot path** (ADR-060): 
+  `ComputedStyle::get_view(string_view)` returns
+  `optional<string_view>` (read-only, no copy). Transparent
+  `StringHash` / `StringEq` on the `declarations` map enable
+  heterogeneous lookup (no key allocation).
+  `fill_sides` rewritten to use direct `find` + reference
+  access to `CascadeValue::value` -- eliminates 3 allocations
+  per call × 12 calls per element × 5000 Wikipedia elements.
+
+  **12.0% layout win, median-of-3 measured (Release, Wikipedia):**
+  ```
+  Pre:  PERF-LAYOUT: 2678ms (median)
+  Post: PERF-LAYOUT: 2357ms (median of 2476/2328/2357)
+  ```
+  321ms saved per page load. Two of three post runs clustered
+  at 2328-2357 -- structural, not variance. Cascade unchanged
+  (~200ms) as expected.
+
+  **Session-wide perf progression** (ADR-058 baseline →
+  ADR-059 → ADR-060): 3437ms → 2950ms → ~2555ms = **25.5%
+  total win across two perf cycles.** Cascade dropped 31%→7%
+  of render time; layout dropped 12% structurally.
+
+  Remaining layout cost (ADR-061 candidate): typed
+  `ComputedStyle` fields to eliminate the residual
+  `unordered_map::find` hash/compare (~25% potential,
+  ~200 lines).
+
+  3 new `get_view` tests. Zero existing test regressions.
+
+  Test count: 683 cases, 2614 assertions (+3 cases / +6
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

@@ -436,3 +436,52 @@ The spec did not specify how CSS text reaches the cascade.
 elements and concatenates their contents into a `Stylesheet`.
 External `<link rel="stylesheet">` is deferred (needs network +
 URL resolution).
+
+
+## Post-ADR-060 note
+
+**The `fill_sides` lambda that ADR-011's block layout
+introduced is now the target of ADR-060's copy-elimination
+pass.**
+
+ADR-011 shipped block layout with a compact `fill_sides`
+helper that reads 4 CSS properties per call (margin/padding/
+border-width) via `ComputedStyle::get(prop)` and parses each
+with `parse_length`. The helper was called 3 times per
+element (margin + border + padding) = 12 property lookups per
+element.
+
+That pattern held for 22 ADRs without change. **ADR-060's
+perf profile (1099 samples) revealed the helper accounted for
+25.13% of total render time** -- not because of the parsing,
+but because each `get()` call allocated a `std::string` for
+the key (implicit `const char*` -> `const string&` conversion)
+and copied the value into an `optional<string>` return.
+
+ADR-060 fixed it in place:
+- `ComputedStyle::get_view(string_view)` returns
+  `optional<string_view>` -- no value copy
+- `StringHash` / `StringEq` on the declarations map enable
+  heterogeneous lookup -- no key allocation
+- `fill_sides` inline lambda uses direct `find` +
+  reference access
+
+**Same function, same behavior, same test coverage.
+Measured 12.0% layout win.** This is the ADR-011 `fill_sides`
+helper finally getting the implementation that matched its
+already-elegant signature.
+
+### A note on the pattern
+
+**Read-path copy elimination is the classic first-pass perf
+fix.** ADR-011's `fill_sides` shape was written in the spirit
+of "don't prematurely optimize" -- it used the obvious API
+(`ComputedStyle::get`), which happened to be copy-heavy. The
+correct sequence is exactly what happened:
+1. ADR-011: write clear code with the obvious API
+2. ADR-058: measure where time actually goes
+3. ADR-060: optimize the measured hotspot
+
+**The clear version isn't wrong; it's a starting point.** The
+optimized version keeps the same signature shape (`fill_sides`)
+so downstream callers don't change.
