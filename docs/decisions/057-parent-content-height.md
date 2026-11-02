@@ -498,3 +498,36 @@ regression). So ADR-058 ships them together.
   not the clamps. Extending to min/max-height is possible
   but not needed by any current fixture.
 
+
+
+## Post-ADR-058 note
+
+**ADR-058 is the first consumer of the `parent_content_height`
+that ADR-057 shipped.**
+
+ADR-057 threaded `parent_content_height` through 8 call sites
+to enable `%` height resolution for block-flow elements. That
+was a real delta (`html, body { height: 100% }` working) but
+narrower than the full "unblock the magnifier" story.
+
+**The absolute-positioning `top: %` case is where
+`parent_content_height` earns its keep for the magnifier.**
+ADR-058 sets `abs_ctx.parent_content_height = abs_ch` and
+routes top/bottom offsets through `parse_length_for_height`.
+That's the second consumer of the field (the first being
+block-flow `height: 100%`).
+
+**The two consumers of `parent_content_height` now:**
+
+1. **Block-flow `height:` / `min-height:` / `max-height:`**
+   (ADR-057 direct) -- `<html>` / `<body>` reset, `%`-height
+   parents
+2. **Absolute `top:` / `bottom:`** (ADR-058) -- the magnifier
+   centering formula
+
+**The field's design held up**: a single scalar threaded
+through the context, consumed differently by two subsystems
+that both needed it. ADR-057 chose the simplest possible
+abstraction (no struct-of-parent-dims, no context object)
+and that choice is validated by the second consumer plugging
+in with a 1-line assignment.

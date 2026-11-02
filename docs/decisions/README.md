@@ -60,7 +60,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 055 | [CSS shorthand background: (color forms)](055-background-shorthand.md) | `try_expand_background` handles color / none / !important / var forms; url/gradient/multi-layer drop entirely. Fixture-verified (5 rows, 2026-11-01). Corrects ADR-054's imprecise "background: and border: fail" claim. |
 | 056 | [CSS background: URL forms](056-background-url-forms.md) | 5 new `LayoutBox` fields mirroring mask; `paint_background_image` (Cairo pattern matrix, repeat); grammar parser for all 4 Wikipedia url() forms. **Production-verified 2026-11-01** (search icon + external link icons render on Wikipedia). 11/11 forms parse. |
 | 057 | [`parent_content_height` threading + `%` height/max-height](057-parent-content-height.md) | Threaded through 8 call sites; `%` height/min/max resolve (auto parent still skips per CSS spec); `<html>` uses `viewport_h`. 6 new tests. Closes ADR-039/053 `%` deferrals. Enables ADR-058. |
-| 058 | [`top: 50%` + `transform: translateY(-50%)`](058-top-translate-y.md) | Absolute `top: %` resolves against containing block height; `translateY()` resolves against own box height. Generalizes paint transform wrapper. **Centers the search magnifier** -- closes the 5-ADR chain 054/055/056/057/058. |
+| 058 | [`top: 50%` + `transform: translateY(-50%)`](058-top-translate-y.md) | `top: %` against containing block height; `translateY()` against own box height. Paint wrapper `did_transform`. **Production-verified 2026-11-02** (magnifier centered at y=18). Closes 5-ADR chain 054/055/056/057/058. Also ships perf split-timer. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
