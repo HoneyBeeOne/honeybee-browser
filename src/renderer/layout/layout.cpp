@@ -34,9 +34,14 @@ void fill_sides(float out[4], const css::ComputedStyle* style,
         out[0] = out[1] = out[2] = out[3] = 0.0f;
         return;
     }
-    auto px = [&](const char* p) {
-        const auto v = style->get(p);
-        return v ? parse_length(*v, ctx) : 0.0f;
+    // ADR-060: use direct find with transparent-hash lookup
+    // (string_view key, no allocation) + reference access to
+    // .value (no copy). Eliminates 3 allocs per call vs the old
+    // get() path.
+    auto px = [&](std::string_view p) -> float {
+        auto it = style->declarations.find(p);
+        if (it == style->declarations.end()) return 0.0f;
+        return parse_length(it->second.value, ctx);
     };
     out[0] = px(top);
     out[1] = px(right);

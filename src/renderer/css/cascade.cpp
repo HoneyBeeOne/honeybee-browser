@@ -220,6 +220,14 @@ ComputedStyle::get(const std::string& property) const {
     return it->second.value;
 }
 
+// ADR-060: read-only view, no copy.
+std::optional<std::string_view>
+ComputedStyle::get_view(std::string_view property) const {
+    auto it = declarations.find(property);
+    if (it == declarations.end()) return std::nullopt;
+    return std::string_view(it->second.value);
+}
+
 CascadeResult cascade_with_pseudo(const Stylesheet& ua_sheet,
                                   const Stylesheet& author_sheet,
                                   const dom::Document& doc,

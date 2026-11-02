@@ -2,6 +2,7 @@
 #include "renderer/html/convert.hpp"
 #include "renderer/dom/node.hpp"
 #include "renderer/css/stylesheet.hpp"
+#include "renderer/css/cascade.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1359,4 +1360,41 @@ TEST_CASE("RuleIndex: multi-selector rule lands in multiple buckets, "
     // Deduped to single entry.
     REQUIRE(cands.size() == 1);
     CHECK(cands[0] == 0);
+}
+
+// =============================================================
+// ADR-060: ComputedStyle::get_view()
+// =============================================================
+
+TEST_CASE("ComputedStyle::get_view: returns value for existing property",
+          "[css][cascade][adr-060]") {
+    honeybee::renderer::css::ComputedStyle style;
+    honeybee::renderer::css::CascadeValue cv;
+    cv.value = "10px";
+    style.declarations["margin-top"] = cv;
+
+    auto v = style.get_view("margin-top");
+    REQUIRE(v.has_value());
+    CHECK(*v == "10px");
+}
+
+TEST_CASE("ComputedStyle::get_view: nullopt for missing property",
+          "[css][cascade][adr-060]") {
+    honeybee::renderer::css::ComputedStyle style;
+    CHECK_FALSE(style.get_view("padding").has_value());
+    CHECK_FALSE(style.get_view("margin-top").has_value());
+}
+
+TEST_CASE("ComputedStyle::get_view: accepts const char* literal "
+          "(via string_view conversion, no key alloc)",
+          "[css][cascade][adr-060]") {
+    honeybee::renderer::css::ComputedStyle style;
+    honeybee::renderer::css::CascadeValue cv;
+    cv.value = "auto";
+    style.declarations["width"] = cv;
+
+    // const char* literal -> string_view -> transparent hash lookup.
+    auto v = style.get_view("width");
+    REQUIRE(v.has_value());
+    CHECK(*v == "auto");
 }
