@@ -444,6 +444,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 675 cases, 2586 assertions (+6 cases / +24
   assertions).
 
+- **Selector index for cascade performance** (ADR-059): 
+  `RuleIndex` buckets rules by rightmost-simple anchor
+  (`AnchorBucket`: Id / Class / Type / Universal) at parse
+  time. `anchor_for(Selector)` extracts the most selective
+  mandatory-match simple from the rightmost compound.
+  `candidates_for(id, classes, tag)` returns sorted +
+  deduped rule indices, DOM-free.
+
+  `cascade()` replaced 6 rule-iteration loops with 2
+  candidate groups (UA + author). Candidates computed
+  once per element, reused across 3 pseudo-target passes.
+  Stores `std::size_t` rule indices (not `Rule*` pointers)
+  -- preserves source-order tiebreaking for specificity.
+
+  **5.6× cascade speedup, measured stable across 3 runs
+  (Release, Wikipedia):**
+  ```
+  Run 1: PERF-CASCADE: 200.3ms
+  Run 2: PERF-CASCADE: 188.7ms
+  Run 3: PERF-CASCADE: 189.6ms
+  ```
+  Baseline was 1057.9ms (ADR-058). Saves ~870ms per page
+  load. Cascade share of render time drops from 31% to
+  6-7%.
+
+  **Layout variance discovered during measurement**: layout
+  (unchanged by ADR-059) showed 3× variance across the same
+  3 runs (2415ms - 7156ms). Environmental noise on the 8GB
+  test machine. **Methodology lesson for ADR-060**: layout
+  perf requires median-of-N multi-run sampling, not single
+  runs.
+
+  5 new tests: bucket landings + multi-selector dedupe.
+  Zero flips on existing ADR-022 threshold tests (`< 100`
+  bound accommodates both pre- and post-indexing baselines).
+
+  Test count: 680 cases, 2608 assertions (+5 cases /
+  +22 assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
