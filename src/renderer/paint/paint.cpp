@@ -249,22 +249,33 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     // paint_box().
     if (!box.visible) return;
 
-    // ADR-054: rotate transform. Wrap the entire paint_box
+    // ADR-054: rotate transform.
+    // ADR-058: translateY transform. Wrap the entire paint_box
     // body (background, border, box-shadow, mask, images,
-    // children) in a cairo save/rotate/restore around the
-    // box center (default transform-origin 50% 50%). 0
-    // degrees is a no-op (did_rotate stays false, zero
+    // children) in a cairo save/translate/rotate/restore. No
+    // transform is a no-op (did_transform stays false, zero
     // cairo state change).
-    bool did_rotate = false;
-    if (box.transform_rotate_deg != 0.0f) {
-        const float cx = box.x + box.width * 0.5f;
-        const float cy = box.y + box.height * 0.5f;
-        const float rad = box.transform_rotate_deg * 0.017453292519943295f;
+    // ADR-058: transform wrapper handles translateY AND rotate.
+    // Applied in a single save/restore pair (translate first,
+    // then rotate) -- correct for the magnifier case and
+    // independent for each when only one is set.
+    bool did_transform = false;
+    if (box.transform_rotate_deg != 0.0f
+        || box.transform_translate_y != 0.0f) {
         cairo_save(cr);
-        cairo_translate(cr, cx, cy);
-        cairo_rotate(cr, rad);
-        cairo_translate(cr, -cx, -cy);
-        did_rotate = true;
+        if (box.transform_translate_y != 0.0f) {
+            cairo_translate(cr, 0, box.transform_translate_y);
+        }
+        if (box.transform_rotate_deg != 0.0f) {
+            const float cx = box.x + box.width * 0.5f;
+            const float cy = box.y + box.height * 0.5f;
+            const float rad =
+                box.transform_rotate_deg * 0.017453292519943295f;
+            cairo_translate(cr, cx, cy);
+            cairo_rotate(cr, rad);
+            cairo_translate(cr, -cx, -cy);
+        }
+        did_transform = true;
     }
 
     // ADR-043: draw box-shadow before background (CSS z-order:
@@ -383,7 +394,7 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     // ADR-054: pop the rotate save if it was pushed above.
     // Balanced: save was pushed at function entry, restored
     // here before the function returns.
-    if (did_rotate) cairo_restore(cr);
+    if (did_transform) cairo_restore(cr);
 }
 
 // ADR-045: draw an inline-element background-image on a

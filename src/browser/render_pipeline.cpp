@@ -1,4 +1,5 @@
 #include "render_pipeline.hpp"
+#include <chrono>
 #include "net/client.hpp"
 #include "base/url.hpp"
 
@@ -298,6 +299,7 @@ void RenderPipeline::relayout(float viewport_width,
         merged_css_ + viewport_css);
     last_viewport_width_ = viewport_width;
     HB_LOG(Pipeline, Info, "relayout: viewport=%.0f", viewport_width);
+    auto _perf_t0 = std::chrono::steady_clock::now();
     // ADR-042: cascade_with_pseudo to also populate pseudo_styles.
     {
         auto result = renderer::css::cascade_with_pseudo(
@@ -330,12 +332,18 @@ void RenderPipeline::relayout(float viewport_width,
     // ADR-052: viewport_height now sourced from
     // m_scroll_window.get_height() in production (visible viewport,
     // not DrawingArea content height). vh/vw resolve to real values.
+    auto _perf_t_mid = std::chrono::steady_clock::now();
     layout_root_ = renderer::layout::layout_with_pseudo(
         *doc_, styles_cache_, pseudo_styles_cache_,
         &measure_with_pango, viewport_width, image_dims,
         viewport_height);
     HB_LOG(Pipeline, Debug, "layout: root h=%.0f",
            layout_root_.height);
+    auto _perf_t1 = std::chrono::steady_clock::now();
+    fprintf(stderr, "PERF-CASCADE: %.1fms  PERF-LAYOUT: %.1fms  PERF-TOTAL: %.1fms\n",
+            std::chrono::duration<double, std::milli>(_perf_t_mid - _perf_t0).count(),
+            std::chrono::duration<double, std::milli>(_perf_t1 - _perf_t_mid).count(),
+            std::chrono::duration<double, std::milli>(_perf_t1 - _perf_t0).count());
 
     // ADR-023: detect hover level and precompute hover-sensitive
     // elements for Level 1. Costs ~0.1ms per render on Wikipedia

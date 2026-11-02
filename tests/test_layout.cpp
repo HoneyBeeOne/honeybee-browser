@@ -3798,12 +3798,11 @@ TEST_CASE("layout: no transform leaves rotate field at 0",
     CHECK(divs[0]->transform_rotate_deg == 0.0f);
 }
 
-TEST_CASE("layout: translateY(-50%) leaves rotate field at 0",
-          "[layout][transform][adr-054]") {
-    // ADR-054 regression safety: the search magnifier uses
-    // translateY(-50%) -- rotate parser finds no rotate(,
-    // field stays 0, paint applies nothing. Before/after
-    // screenshots on Wikipedia are identical.
+TEST_CASE("layout: translateY(-50%) sets translate_y, leaves rotate at 0",
+          "[layout][transform][adr-054][adr-058]") {
+    // ADR-054: rotate parser finds no rotate(, leaves rotate
+    // field 0. ADR-058: translateY now resolves against own
+    // height. 100px box -> -50px translate.
     auto t = run(
         "<html><body><div>A</div></body></html>",
         "body,html{margin:0;padding:0} div{width:100px;height:100px;"
@@ -3811,5 +3810,112 @@ TEST_CASE("layout: translateY(-50%) leaves rotate field at 0",
     const auto divs = find_all_boxes(t.root, "div");
     REQUIRE(divs.size() == 1);
     CHECK(divs[0]->transform_rotate_deg == 0.0f);
+    CHECK(std::abs(divs[0]->transform_translate_y - (-50.0f)) < 0.01f);
+}
+
+// =============================================================
+// ADR-058: top: % + transform: translateY() -- magnifier chain
+// =============================================================
+
+TEST_CASE("layout: translateY(10px) sets translate_y",
+          "[layout][transform][adr-058]") {
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px;"
+        "transform:translateY(10px)}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(std::abs(divs[0]->transform_translate_y - 10.0f) < 0.01f);
+    CHECK(divs[0]->transform_rotate_deg == 0.0f);
+}
+
+TEST_CASE("layout: translateY(50%) on 100px box -> 50px",
+          "[layout][transform][adr-058]") {
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px;"
+        "transform:translateY(50%)}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(std::abs(divs[0]->transform_translate_y - 50.0f) < 0.01f);
+}
+
+TEST_CASE("layout: rotate + translateY sets both fields",
+          "[layout][transform][adr-054][adr-058]") {
+    auto t = run(
+        "<html><body><div>A</div></body></html>",
+        "body,html{margin:0;padding:0} div{width:100px;height:100px;"
+        "transform:rotate(45deg) translateY(-20px)}");
+    const auto divs = find_all_boxes(t.root, "div");
+    REQUIRE(divs.size() == 1);
+    CHECK(std::abs(divs[0]->transform_rotate_deg - 45.0f) < 0.01f);
+    CHECK(std::abs(divs[0]->transform_translate_y - (-20.0f)) < 0.01f);
+}
+
+TEST_CASE("absolute: top:50% resolves against containing block height",
+          "[layout][transform][adr-058]") {
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0}"
+        " .p{position:relative;width:200px;height:42px;margin:0;padding:0}"
+        " .c{position:absolute;top:50%;left:0;width:20px;height:20px}",
+        800.0f, 600.0f);
+    const auto divs = find_all_boxes(t.root, "div");
+    const layout::LayoutBox* parent = nullptr;
+    const layout::LayoutBox* child = nullptr;
+    for (const auto* b : divs) {
+        if (std::abs(b->height - 42.0f) < 0.5f) parent = b;
+        else if (std::abs(b->height - 20.0f) < 0.5f) child = b;
+    }
+    REQUIRE(parent != nullptr);
+    REQUIRE(child != nullptr);
+    // top:50% on 42px parent -> +21 offset from parent top.
+    CHECK(std::abs(parent->y - 0.0f) < 0.5f);
+    CHECK(std::abs(child->y - 21.0f) < 0.5f);
+}
+
+TEST_CASE("absolute: top:50% + translateY(-50%) centers icon",
+          "[layout][transform][adr-058]") {
+    // Magnifier centering: 20px icon in 42px container.
+    // y = 21 (top:50%), translate_y = -10 (translateY(-50%)).
+    // Painted position = 21 + (-10) = 11.
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0}"
+        " .p{position:relative;width:200px;height:42px;margin:0;padding:0}"
+        " .c{position:absolute;top:50%;left:0;width:20px;height:20px;"
+        "    transform:translateY(-50%)}",
+        800.0f, 600.0f);
+    const auto divs = find_all_boxes(t.root, "div");
+    const layout::LayoutBox* child = nullptr;
+    for (const auto* b : divs) {
+        if (std::abs(b->height - 20.0f) < 0.5f) child = b;
+    }
+    REQUIRE(child != nullptr);
+    CHECK(std::abs(child->y - 21.0f) < 0.5f);
+    CHECK(std::abs(child->transform_translate_y - (-10.0f)) < 0.01f);
+}
+
+TEST_CASE("absolute: bottom:50% resolves for free (parse_off_v)",
+          "[layout][transform][adr-058]") {
+    // bottom: % routes through parse_off_v (same axis as top).
+    // 42px parent, 20px child, bottom:50% => child.y = 1.
+    auto t = run(
+        "<html><body><div class='p'><div class='c'>A</div></div>"
+        "</body></html>",
+        "body,html{margin:0;padding:0}"
+        " .p{position:relative;width:200px;height:42px;margin:0;padding:0}"
+        " .c{position:absolute;bottom:50%;left:0;width:20px;height:20px}",
+        800.0f, 600.0f);
+    const auto divs = find_all_boxes(t.root, "div");
+    const layout::LayoutBox* child = nullptr;
+    for (const auto* b : divs) {
+        if (std::abs(b->height - 20.0f) < 0.5f) child = b;
+    }
+    REQUIRE(child != nullptr);
+    // 42 - 21 (bottom offset) - 20 (child height) = 1.
+    CHECK(std::abs(child->y - 1.0f) < 0.5f);
 }
 

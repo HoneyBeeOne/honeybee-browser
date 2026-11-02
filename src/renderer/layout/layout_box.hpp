@@ -173,6 +173,12 @@ struct LayoutBox final : LayoutNode {
     // rotate/translate/restore around the box center.
     float transform_rotate_deg = 0.0f;
 
+    // ADR-058: translateY transform in px. Resolved during
+    // layout_element after box.height is known (% relative to
+    // own height). Painted as cairo_translate(cr, 0, ty) inside
+    // the same save/restore wrapper as rotate.
+    float transform_translate_y = 0.0f;
+
     // ADR-047: CSS mask (alpha channel from image, fill =
     // background-color). Painted via cairo_mask_surface after
     // background fill, before border. Both mask-image AND
