@@ -154,4 +154,15 @@ struct SelectorList {
                                        const RenderState& state) const;
 };
 
+// ADR-059: rightmost-simple-selector anchor for cascade indexing.
+enum class AnchorBucket { Id, Class, Type, Universal };
+struct Anchor {
+    AnchorBucket bucket;
+    std::string key;
+};
+// Returns the most selective mandatory-match simple from the
+// rightmost compound. Priority: Id > Class > Type > Universal.
+// Empty string key when bucket == Universal.
+Anchor anchor_for(const Selector& sel);
+
 } // namespace honeybee::renderer::css

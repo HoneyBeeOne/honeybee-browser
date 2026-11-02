@@ -2,6 +2,7 @@
 
 #include <string>
 #include <cctype>
+#include <algorithm>
 #include <unordered_set>
 #include <optional>
 #include <string_view>
@@ -1459,7 +1460,54 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         }
     }
 
+    result.build_index();
     return result;
+}
+
+// ADR-059: build the rightmost-simple anchor index.
+void Stylesheet::build_index() {
+    index = RuleIndex{};
+    for (std::size_t i = 0; i < rules.size(); ++i) {
+        for (const auto& sel : rules[i].selectors.selectors) {
+            Anchor a = anchor_for(sel);
+            switch (a.bucket) {
+                case AnchorBucket::Id:
+                    index.by_id[a.key].push_back(i); break;
+                case AnchorBucket::Class:
+                    index.by_class[a.key].push_back(i); break;
+                case AnchorBucket::Type:
+                    index.by_type[a.key].push_back(i); break;
+                case AnchorBucket::Universal:
+                    index.universal.push_back(i); break;
+            }
+        }
+    }
+}
+
+std::vector<std::size_t> RuleIndex::candidates_for(
+    const std::string& id,
+    const std::vector<std::string>& classes,
+    const std::string& tag) const {
+    std::vector<std::size_t> out;
+    if (!id.empty()) {
+        auto it = by_id.find(id);
+        if (it != by_id.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    for (const auto& c : classes) {
+        auto it = by_class.find(c);
+        if (it != by_class.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    if (!tag.empty()) {
+        auto it = by_type.find(tag);
+        if (it != by_type.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    out.insert(out.end(), universal.begin(), universal.end());
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
 }
 
 } // namespace honeybee::renderer::css

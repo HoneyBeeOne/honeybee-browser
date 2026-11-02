@@ -908,4 +908,23 @@ SelectorList::matches(const dom::Node& node,
     return matches(node, state, PseudoElement::None);
 }
 
+// ADR-059: extract the anchor simple from the rightmost compound.
+Anchor anchor_for(const Selector& sel) {
+    if (sel.parts.empty()) return {AnchorBucket::Universal, {}};
+    const auto& simples = sel.parts.back().compound.simples;
+    for (const auto& s : simples) {
+        if (s.kind == SimpleKind::Id && !s.name.empty())
+            return {AnchorBucket::Id, s.name};
+    }
+    for (const auto& s : simples) {
+        if (s.kind == SimpleKind::Class && !s.name.empty())
+            return {AnchorBucket::Class, s.name};
+    }
+    for (const auto& s : simples) {
+        if (s.kind == SimpleKind::Type && !s.name.empty())
+            return {AnchorBucket::Type, s.name};
+    }
+    return {AnchorBucket::Universal, {}};
+}
+
 } // namespace honeybee::renderer::css
