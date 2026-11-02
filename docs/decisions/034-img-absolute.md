@@ -664,3 +664,44 @@ render -- the mask applies to the background fill layer).
 Implementation: all mask targets culled by ADR-032). The
 subsystem is complete and correct; it awaits a visible
 consumer (ADR-029 header flex, or a dropdown-open feature).
+
+
+## Post-ADR-062 note
+
+**ADR-062 adds `paint_background_gradient` as a sibling to
+`paint_background_image`.**
+
+ADR-034 established `paint_image` for `<img>` elements.
+ADR-056 split it into `paint_img_element` (stretch-to-box
+for `<img>`) + `paint_background_image` (Cairo pattern
+matrix with size/position/repeat for backgrounds).
+
+ADR-062 adds a third function: `paint_background_gradient`,
+which fills the box with a Cairo **linear pattern** (per
+CSS Images 3 SS3.1.1) rather than a surface pattern.
+
+**Call ordering in `paint_box`:**
+
+```cpp
+if (box.background_is_gradient) paint_background_gradient(...);
+if (images && !box.background_image_url.empty()) paint_background_image(...);
+```
+
+Gradient first (fill), then URL image (which typically has
+transparency in the layered case). Coexistence is
+theoretical -- multi-layer `url(x), linear-gradient(...)`
+drops in the parser for v1. But the ordering is correct if
+that changes.
+
+**The three-way paint image hierarchy is now complete:**
+
+| Path | Purpose | Cairo primitive |
+|---|---|---|
+| `paint_img_element` | `<img>` element | `cairo_set_source_surface` + `cairo_paint` |
+| `paint_background_image` | block background-image URL | `cairo_pattern_create_for_surface` + matrix + `cairo_paint` |
+| `paint_background_gradient` | block linear-gradient | `cairo_pattern_create_linear` + `cairo_fill` |
+
+Each has its own hot/cold profile -- gradient path is cold
+(most boxes are solid color), image path is hot (icons),
+element path is medium (article images). Separate functions
+keep each specialization tight.

@@ -563,6 +563,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count unchanged at 683 cases, 2614 assertions
   (decision record only, zero code changes).
 
+- **`linear-gradient()` background support** (ADR-062): 
+  Parser preserves `linear-gradient(...)` as
+  `background-image: <raw>`; layout parses into structured
+  form (`background_is_gradient`, angle, stops); paint uses
+  Cairo linear pattern per CSS Images 3 SS3.1.1 (direction
+  `(sin θ, -cos θ)`, length `W·|sin θ| + H·|cos θ|`).
+
+  **`rgb()` / `rgba()` support added to `parse_color`**
+  (~50 lines): integer (0-255), percentage (0-100%), mixed,
+  alpha via float or percent. Uncovered prerequisite
+  (Wikipedia's gradient uses `rgba(255,255,255,0)`).
+
+  **Synthetic-fixture-verified** (5 rows on
+  `docs/adr062-gradient-test.html`): solid control, default
+  vertical, 45° diagonal, 3-stop `to right`, Wikipedia's
+  rgba form. All 5 render correctly.
+
+  **Zero Wikipedia production delta** -- target is
+  triple-blocked (pseudo-element, ancestor-culled parent,
+  sticky deferred). Wikipedia screenshot identical pre/post.
+  Same category as ADR-054's rotate.
+
+  **Last 1/11 `background:` grammar gap closed.**
+  11/11 forms parse; 10/11 render (linear-gradient parses +
+  paints but target is ancestor-culled).
+
+  Three bugs caught pre-shipping:
+    * `parse_color` had no rgb/rgba (diagnostic catch)
+    * `split_tokens` not in layout.cpp scope (build catch)
+    * Angle math 90° rotated (fixture screenshot catch)
+
+  1 test flipped, 4 new tests. Test count: 687 cases, 2627
+  assertions (+4 cases / +13 assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
