@@ -614,6 +614,34 @@ void classify(const std::string& t, BgTokens& out) {
 // (needs element dims; see layout.cpp's background-size read).
 bool try_expand_background(std::string_view value, bool important,
                            std::vector<Declaration>& out) {
+    // ADR-062: linear-gradient(...) preserved as background-image.
+    // Extract the full gradient token (respects nested parens for
+    // var()/rgba() inside stops); reject multi-layer (stray comma
+    // outside the gradient's parens). Other gradients (radial,
+    // conic, repeating) still drop entirely -- deferred.
+    if (value.find("linear-gradient(") != std::string_view::npos) {
+        const auto open = value.find("linear-gradient(");
+        int depth = 0;
+        std::string_view grad;
+        for (std::size_t i = open; i < value.size(); ++i) {
+            if (value[i] == '(') ++depth;
+            else if (value[i] == ')') {
+                if (--depth == 0) {
+                    grad = value.substr(open, i - open + 1);
+                    break;
+                }
+            }
+        }
+        if (grad.empty()) return false;
+        // Reject multi-layer: any comma outside the gradient token.
+        for (std::size_t i = 0; i < value.size(); ) {
+            if (i == open) { i += grad.size(); continue; }
+            if (value[i] == ',') return false;
+            ++i;
+        }
+        out.push_back({"background-image", std::string(grad), important});
+        return true;
+    }
     if (value.find("gradient(") != std::string_view::npos) return false;
     if (value.find(',') != std::string_view::npos) return false;
 

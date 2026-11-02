@@ -160,6 +160,17 @@ struct LayoutBox final : LayoutNode {
     BgPosY background_pos_y = BgPosY::Top;
     bool background_no_repeat = false;  // false = repeat
 
+    // ADR-062: linear-gradient background. Parsed from the raw
+    // background-image string during layout_element. Paint uses
+    // Cairo linear pattern with per-stop color stops.
+    struct BackgroundGradientStop {
+        Color color;
+        float position;  // 0.0 .. 1.0
+    };
+    bool background_is_gradient = false;
+    float background_gradient_angle_deg = 180.0f;  // default: top -> bottom
+    std::vector<BackgroundGradientStop> background_gradient_stops;
+
     // ADR-039: paint clips children to box content bounds when
     // true. Set during layout from `overflow: hidden`. Children
     // render normally (positions computed as if not clipped);
