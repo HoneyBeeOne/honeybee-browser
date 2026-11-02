@@ -428,3 +428,34 @@ location first.
 - **`background-clip` / `background-origin`** -- separate
   properties
 
+
+
+## Post-ADR-058 note
+
+**The magnifier that ADR-056 first made visible is now
+centered.**
+
+ADR-056 shipped the `background:` URL form grammar that
+rendered `.cdx-text-input__start-icon` for the first time.
+The icon appeared, but at `y=7` (container top) --
+10px above where CSS intended. ADR-056's honest delta
+section noted this explicitly:
+
+> The search magnifier renders at correct size, **~10px
+> too high**. Needs `translateY(-50%)`, which alone would
+> move it to `y=-3` without `top: 50%`.
+
+ADR-058 ships both pieces of the formula together (they
+must, as ADR-056's note explains). After ADR-058, the icon
+sits at `y=18` -- **perfectly centered in the search box.**
+
+**The full `background:` chain:**
+
+| ADR | Contribution |
+|---|---|
+| 055 | `background: #fff` color forms |
+| 056 | `background: url(...)` URL forms |
+| 058 | (indirect) the rendered icon is now correctly positioned |
+
+11/11 background forms parse (from ADR-056). 10/11 render.
+The 11th (`linear-gradient`) remains deferred.

@@ -411,6 +411,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test count: 669 cases, 2562 assertions (+6 cases / +12
   assertions).
 
+- **`top: 50%` + `transform: translateY(-50%)`** (ADR-058): 
+  Absolute `top: %` resolves against containing block height
+  via `abs_ctx.parent_content_height` + split `parse_off_h`
+  / `parse_off_v` lambdas. `transform: translateY()` resolves
+  against **own** box height after `box.height` finalized,
+  stored in new `LayoutBox::transform_translate_y` field.
+  Paint wrapper generalizes `did_rotate` -> `did_transform`
+  (rotate OR translate). `bottom: %` works for free.
+
+  **The 5-ADR magnifier chain closes.** Screenshot 2026-11-02:
+  search magnifier at `y=18` (was `y=7`), perfectly centered
+  in the search box. Chain: 054 (diagnose) -> 055 (bg color)
+  -> 056 (bg URL, visible at y=7) -> 057
+  (`parent_content_height` prerequisite) -> 058 (centered).
+
+  1 test flipped (`translateY(-50%)` now sets `translate_y`),
+  6 new ADR-058 tests covering all layers: translateY px/%,
+  rotate+translate, absolute top:50%, top:50%+translateY
+  centering, bottom:50%.
+
+  `docs/adr058-top-translate-test.html`: 4-row fixture
+  demonstrating the two-%-reference distinction (parent for
+  top, own for translateY).
+
+  **Also ships `PERF-CASCADE` / `PERF-LAYOUT` / `PERF-TOTAL`
+  timing in `relayout()`** (diagnostic-only). First Release
+  measurement on Wikipedia: cascade 1058ms (31%), layout
+  2379ms (69%), total 3437ms. Both O(n²)-ish; ADR-059 (perf
+  cycle) uses this as Context.
+
+  Test count: 675 cases, 2586 assertions (+6 cases / +24
+  assertions).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

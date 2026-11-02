@@ -1,6 +1,6 @@
 # ADR-058: `top: 50%` + `transform: translateY(-50%)` (magnifier chain close)
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-02
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-033 (position), ADR-042 (absolute positioning), ADR-051 (viewport units), ADR-054 (transform:rotate + magnifier diagnostic), ADR-056 (background URLs), ADR-057 (parent_content_height)
@@ -289,3 +289,158 @@ ADR-058 is complete when:
 - [ ] Post-ADR-058 notes in ADR-054, 056, 057
 - [ ] README row + CHANGELOG
 - [ ] ADR-058 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/top-translate-y` across two commits
+(Commit 1 = two-layer top/translateY implementation,
+Commit 2 = perf split-timer infrastructure). Single PR #255
+merged at `222d58a`.
+
+### What shipped
+
+**`layout_box.hpp`:**
+- `float transform_translate_y = 0.0f` (px, resolved
+  post-height)
+
+**`layout.cpp`:**
+- `abs_ctx.parent_content_height = abs_ch` (1 line) --
+  the containing block's height feeds `%` resolution in
+  top/bottom offsets
+- `parse_off` split into `parse_off_h` (left/right, uses
+  `parse_length` against `parent_content_width`) and
+  `parse_off_v` (top/bottom, uses `parse_length_for_height`
+  against `parent_content_height`). All 4 call sites routed.
+  `bottom: %` works for free.
+- Transform extraction: `translateY(...)` raw value captured
+  alongside existing `rotate()` extraction. Raw survives at
+  function scope (declared BEFORE the `if (style)` block)
+  so post-height resolution can use it.
+- After `box.height` finalized: `transform_ty_raw` resolves
+  against own box height via `parse_length_for_height`
+  (temporarily overridden ctx). Store in
+  `box.transform_translate_y`.
+
+**`paint.cpp`:**
+- `did_rotate` -> `did_transform`. Activates on `rotate != 0
+  || translate_y != 0`.
+- Wrapper: `cairo_save`, translateY first (if set), rotate
+  second (if set). Preserves the save-iff-pop invariant.
+
+**`render_pipeline.cpp`:**
+- `PERF-CASCADE` / `PERF-LAYOUT` / `PERF-TOTAL` timing in
+  `relayout()`. Diagnostic-only; zero behavior change.
+  Foundation for ADR-059.
+
+**`test_layout.cpp`:**
+- 1 test flipped: `"translateY(-50%) leaves rotate field at
+  0"` -> `"translateY(-50%) sets translate_y, leaves rotate
+  at 0"` (100px box -> -50). Tagged `[adr-054][adr-058]`.
+- 6 new ADR-058 tests:
+  - `translateY(10px)` -> 10
+  - `translateY(50%)` on 100px box -> 50
+  - `rotate + translateY` sets both
+  - `absolute top:50%` resolves against containing block
+    height (42px -> +21)
+  - `absolute top:50% + translateY(-50%)` centers icon
+    (y=21, translate=-10, painted=11)
+  - `bottom:50%` resolves for free
+
+**`docs/adr058-top-translate-test.html`:**
+- 4-row fixture: control / top-only / translate-only / both.
+  Demonstrates the two-%-reference distinction visually.
+
+### Verified delta (production, screenshot 2026-11-02)
+
+**Wikipedia HTML article:**
+
+| Element | Before ADR-058 | After ADR-058 |
+|---|---|---|
+| Search magnifier | `y=7` (container top) | **`y=18` (centered)** |
+| Wikipedia logo | correct | correct |
+| Body / layout | correct | correct |
+
+**The 5-ADR magnifier chain closes with visible production
+proof:**
+
+| ADR | Contribution | Icon y |
+|---|---|---|
+| 054 | Diagnose `top: 50%` + `translateY(-50%)` | invisible |
+| 055 | `background:` color forms | invisible |
+| 056 | `background:` URL forms -- **renders** | 7 |
+| 057 | `parent_content_height` threading | 7 |
+| **058** | **`top: 50%` + `translateY(-50%)`** | **18 (centered)** |
+
+### The perf split-timer measurement
+
+**Release build, Wikipedia HTML article:**
+
+```
+PERF-CASCADE: 1057.9ms  PERF-LAYOUT: 2379.3ms  PERF-TOTAL: 3437.2ms
+```
+
+| Phase | Time | % |
+|---|---|---|
+| Cascade | 1058ms | 31% |
+| Layout | 2379ms | 69% |
+| **Total** | **3437ms** | 100% |
+
+**Debug build (for comparison):** 10,544ms total. Release
+speedup is ~3.1x -- expected for `-O0` -> `-O2`. **Not a
+build-flags-only problem; the underlying work is genuinely
+expensive.**
+
+Both halves are O(n²)-ish (selector matching has no
+indexing; layout does 48 `style->get()` calls per element
+with string keys). ADR-059 (perf cycle) uses this data as
+its Context.
+
+### Honest notes
+
+**Split-timer is part of this ADR's scope**, not a separate
+diagnostic branch. It lives in the same `render_pipeline.cpp`
+that ADR-058 already touched (Commit 1), and it's permanent
+measurement infrastructure that ADR-059 will rely on. Shipping
+it as ADR-058 Commit 2 keeps the ledger clean: the ADR that
+measured the performance problem is the same one that
+discovered it needed measuring.
+
+**Why the two-layer structure was required** (documented in
+spec's "critical distinction"):
+
+- `top: 50%` = `%` against **parent** content height
+  (`abs_ch`), resolved at layout time
+- `translateY(-50%)` = `%` against **own** box height,
+  resolved after `box.height` finalized
+
+Attempting one unified resolution would use the wrong
+reference for one of them. This is a genuine CSS-spec
+distinction, not an implementation choice.
+
+**Definition-body split-declaration discipline applied
+twice**: ADR-057 hit this (missing .cpp definitions after
+.hpp declaration updates). ADR-058 avoided it by explicitly
+patching both `paint.cpp` wrapper + restore lines in the
+same patch and verifying via `did_rotate` grep. Same
+discipline: when a symbol rename crosses declaration +
+definition, patch both together and grep-verify.
+
+### Test count
+
+- 669 -> 675 cases (+6 new, 1 flipped)
+- 2562 -> 2586 assertions (+24)
+- Zero existing test regressions
+
+### Deferred (documented)
+
+- `translateX()` / 2-arg `translate(x, y)` -- not needed
+  by any Wikipedia rule
+- Combined `rotate + translate` **source-order** semantics --
+  v1 applies translate-first regardless of source order.
+  Correct for the magnifier case; corner case deferred.
+- `bottom: %`, `left: %`, `right: %` -- bottom works for
+  free (same `parse_off_v` path as top); left/right use
+  width correctly via `parse_off_h`.
+- `translateY()` on non-absolute elements -- works via the
+  same transform extraction; no current consumer.
+

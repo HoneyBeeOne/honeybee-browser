@@ -440,3 +440,36 @@ Only with `translateY(-50%)` does it land at the correct
 
 **After ADR-058**: the magnifier will be perfectly
 centered. ADR-054's deferred chain reaches its end.
+
+
+## Post-ADR-058 note
+
+**The magnifier chain that ADR-054 diagnosed is now closed.**
+
+ADR-054 documented the search magnifier's correct position
+formula:
+  `y = container_top + (container_h * 0.5) - (icon_h * 0.5)`
+  `  = 7 + 21 - 10 = 18` (centered)
+
+Five ADRs contributed to making that formula work:
+
+| ADR | Contribution |
+|---|---|
+| **054** | Diagnosed formula; shipped `transform: rotate()` (unrelated but seeded the transform parser) |
+| 055 | `background:` color forms -- icon became fillable |
+| 056 | `background:` URL forms -- icon became visible at y=7 |
+| 057 | `parent_content_height` threading -- prerequisite for `top: 50%` |
+| 058 | `top: 50%` + `translateY(-50%)` -- **icon centered at y=18** |
+
+**The `transform: translateY()` support ADR-058 ships is
+the sibling of ADR-054's `transform: rotate()`.** Both go
+through the same transform extraction block and the same
+paint wrapper. ADR-054's wrapper gated on `did_rotate`;
+ADR-058 generalizes to `did_transform` (rotate OR translate).
+The nested save/restore discipline ADR-054 established is
+preserved.
+
+**ADR-054's "Deferred: translateY" section is now closed**
+by ADR-058. The deferral was correct when it was written
+(needed `parent_content_height`); the dependency has been
+satisfied.
