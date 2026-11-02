@@ -444,3 +444,43 @@ definition, patch both together and grep-verify.
 - `translateY()` on non-absolute elements -- works via the
   same transform extraction; no current consumer.
 
+
+
+## Post-ADR-059 note
+
+**The split-timer that ADR-058 shipped enabled ADR-059 to
+isolate and fix the cascade phase.**
+
+ADR-058 introduced `PERF-CASCADE` / `PERF-LAYOUT` /
+`PERF-TOTAL` in `relayout()`. The first measurement:
+
+```
+PERF-CASCADE: 1057.9ms  PERF-LAYOUT: 2379.3ms  PERF-TOTAL: 3437.2ms
+```
+
+31% cascade, 69% layout. **Two distinct problems, no single
+fix.** Without the split, we'd have wasted time optimizing
+the wrong half.
+
+ADR-059 targeted cascade with selector indexing:
+
+```
+PERF-CASCADE: ~190ms   (5.6x speedup, 3-run stable)
+```
+
+Cascade's share of render time: **31% -> 6-7%.** Layout is
+now 93% of remaining work.
+
+### The measurement methodology lesson
+
+Layout showed 3x variance across 3 runs (2415ms - 7156ms)
+for identical content in identical binary. **Split-timers
+alone aren't enough for multi-run-per-page measurements --
+you also need median-of-N sampling.** ADR-060 (layout perf)
+inherits this lesson.
+
+The split-timer also revealed the load-time warm-up
+behavior: the first `PERF-CASCADE` (blank page start) is
+~0.1ms, the second (partial render) ~0.1ms, the third
+(full Wikipedia) is the actual cost. **The largest of the
+three lines is the real measurement.**

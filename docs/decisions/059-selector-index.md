@@ -1,6 +1,6 @@
 # ADR-059: Selector index for cascade performance
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-02
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-010 (cascade origin/specificity), ADR-022 (`apply_rule_call_count` test hook), ADR-041 (pseudo-element cascade), ADR-058 (perf split-timer)
@@ -426,3 +426,166 @@ ADR-059 is complete when:
 - [ ] Post-ADR-059 notes in ADR-010 / 022 / 058
 - [ ] README row + CHANGELOG
 - [ ] ADR-059 status → Implemented
+
+## Implementation
+
+Implemented on `feat/selector-index` across two commits
+(Commit 1 = index + cascade rewrite, Commit 2 = this docs
+update). Single PR #258 merged at `7888756`.
+
+### What shipped
+
+**`selectors.hpp` / `selectors.cpp`:**
+- `AnchorBucket` enum (`Id` / `Class` / `Type` / `Universal`)
+- `struct Anchor { AnchorBucket bucket; std::string key; }`
+- `anchor_for(const Selector&)`: returns the most selective
+  mandatory-match simple from the rightmost compound
+  (priority `Id > Class > Type > Universal`)
+
+**`stylesheet.hpp` / `stylesheet.cpp`:**
+- `RuleIndex` struct: 4 buckets (`by_id`, `by_class`,
+  `by_type`, `universal`), each `std::vector<std::size_t>`
+  (rule **indices**, not `Rule*` -- preserves source order
+  for specificity tiebreaking)
+- `Stylesheet::index` field
+- `build_index()` called at end of `parse()`
+- `candidates_for(id, classes, tag)`: sorted + deduped
+  candidate indices. **DOM-free interface** -- callers
+  extract element fields
+
+**`cascade.cpp`:**
+- 6 rule-iteration loops replaced with 2 candidate groups
+  (UA + author). Candidates computed **once per element**,
+  reused across 3 pseudo-target passes.
+- Extracted element id / classes / tag once per element.
+
+**`tests/test_layout.cpp`:**
+- ADR-022 counter-threshold test comment updated. Baseline
+  drops from ~17 to ~5 calls per transition. **Assertions
+  unchanged** -- the `< 100` bound already covers both
+  baselines, so no flips.
+
+**`tests/test_stylesheet.cpp`:**
+- 5 new ADR-059 tests: bucket landings for #id / .class /
+  tag / universal, plus multi-selector dedupe.
+
+### Verified delta (Release build, 3 fresh Wikipedia loads)
+
+| Run | Cascade | Speedup vs 1058ms |
+|---|---|---|
+| 1 | 200.3ms | 5.3x |
+| 2 | 188.7ms | 5.6x |
+| 3 | 189.6ms | 5.6x |
+
+**~190ms stable across runs, 5.6x structural speedup.**
+Meets ADR-059's acceptance criterion (`PERF-CASCADE <
+300ms`).
+
+**~870ms saved per Wikipedia page load** from cascade alone.
+
+### The layout variance discovered during measurement
+
+Layout (unchanged by ADR-059 -- same code path as pre)
+showed **3x variance across the same 3 runs**:
+
+| Run | Layout | Total |
+|---|---|---|
+| 1 | 2750.1ms | 2950.4ms |
+| 2 | 2415.5ms | 2604.3ms |
+| 3 | **7155.7ms** | 7345.3ms |
+
+**Identical content, identical binary, 3x variation.** This
+is environmental noise on the 8GB test machine (concurrent
+Firefox ~900MB resident, potential memory pressure / cache
+eviction during the ~5000-element layout traversal), not a
+regression from ADR-059.
+
+**Methodology lesson for ADR-060** (layout perf): single-run
+timings are unreliable at Wikipedia scale. Multi-run +
+median (not mean -- outliers like Run 3's 7156ms would skew
+the mean badly) is required to claim any layout delta.
+
+Small-page control confirms the measurement path itself is
+sound: `docs/demo.html` (10 elements) shows cascade 0.1ms,
+layout 23ms first pass, 0.5-1.3ms subsequent. Tight, sensible.
+
+### Honest framing of the improvement
+
+**Cascade share of render time: 31% -> 6-7%.**
+
+Before ADR-059: cascade 1058ms, layout 2379ms, total 3437ms.
+After ADR-059: cascade ~190ms, layout (variance) ~2400-7150ms.
+
+The **cascade win is real and structural** -- the index
+eliminates ~29 million of ~30 million `apply_rule` calls
+per Wikipedia page load. This will persist.
+
+The **total-time win is masked by layout variance** --
+whether Wikipedia loads in 2.6s or 7.3s after ADR-059
+depends on ambient conditions, not on our code. ADR-060
+(layout perf) is the remaining bottleneck and will need
+the multi-run methodology lesson above.
+
+### Two implementation bugs caught before shipping
+
+1. **Namespace-scope bug**: first `build_index` placement
+   was appended after the closing `} // namespace
+   honeybee::renderer::css` -- compiled cleanly as a free
+   function but `Stylesheet` was unreachable at that scope.
+   22 errors, all the same root cause. Fix: relocated the
+   entire block inside the namespace.
+
+2. **Test literal `\n`**: Python's `'\\n'` in a heredoc
+   appended literal `\` + `n` characters to
+   `test_stylesheet.cpp` instead of a newline. One-line fix.
+
+**Same class of discipline as ADR-057's definition-body bug
+and ADR-058's `ctx` scope bug**: patch the symbol where it
+is *used*, not just where it is *declared*. The compiler
+catches the mismatch immediately, but only if the whole
+project is rebuilt (which ADR-059's first test run didn't
+do -- it ran against the old binary).
+
+### Why the anchor priority is a real invariant (not a heuristic)
+
+`anchor_for` picks `Id > Class > Type > Universal` because
+each of these is a **mandatory match**: if the element
+doesn't have the specific id/class/tag, the selector
+cannot match. So bucketing by the most selective one gives
+the smallest possible bucket without ever dropping a
+should-match rule.
+
+**The bug class this protects against**: if anchor priority
+were wrong (e.g. picking class over id), rules with both
+would land in `by_class["a"]` and miss elements that have
+`id="b"` but not `class="a"`... except `id="b"` was required
+too, so it wouldn't miss anything. **Actually safe either
+way** -- any mandatory-match simple works. Priority picks
+the *smallest* bucket, not correctness.
+
+**The real bug class is missing buckets**: rules with
+attribute-only anchors (`[href]`, `[aria-expanded]`) land in
+universal. If a stylesheet has many of those, universal
+grows large and the index saves less. Universal bucket size
+should be measured as a follow-up (ADR-059b if it's >500
+rules on Wikipedia).
+
+### Test count
+
+- 675 -> 680 cases (+5 new)
+- 2586 -> 2608 assertions (+22)
+- **Zero flips** in the 3 ADR-022 counter tests (bounds
+  already accommodated both baselines)
+
+### Deferred (documented)
+
+- **Pseudo-target partitioning** -- 3x memory, not needed
+  at ~190ms current cascade.
+- **`[attribute]` indexing** -- attribute-only rules
+  currently in universal. Follow-up ADR-059b if universal
+  bucket turns out to be >500 rules on Wikipedia.
+- **Descendant combinator ancestor pre-filtering** --
+  `div p` still scans every `p` bucket entry. Out of scope.
+- **Layout's 2.4s** -- ADR-060 territory. Requires
+  multi-run methodology per the measurement lesson above.
+

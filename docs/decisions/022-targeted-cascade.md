@@ -365,3 +365,38 @@ Expected outcome: wrapping-element hovers drop from ~900ms to ~20-50ms (essentia
 
 **Meanwhile**, users hovering links (99% of observed behavior) get 14-25ms latency, which is sub-perceptual. The 1% slow case is documented but not user-visible in normal browsing.
 
+
+
+## Post-ADR-059 note
+
+**ADR-059 reduced the "17 calls per transition" baseline that
+ADR-022's targeted-cascade test documented.**
+
+ADR-022's threshold test asserted `< 100` calls per hover
+transition, with a comment noting the baseline was 17 calls
+(one element x 17 UA rules). That baseline held because the
+cascade iterated every rule per element and filtered by
+selector match.
+
+ADR-059 indexed the cascade by rightmost-simple anchor. The
+same `<a>` element now queries only its candidate rules
+(~3-6: the `a` tag rules + universal) instead of all 17.
+**Baseline drops from 17 to ~5.**
+
+**The `< 100` threshold still passes both.** The test's
+assertions are unchanged; only the comment was updated to
+note the drop. ADR-022's original reasoning -- "catches 5x
+regressions like accidental double-cascade while remaining
+robust to legitimate UA-stylesheet growth" -- still holds
+comfortably.
+
+**The threshold's design choices remain correct**:
+- `< 100` is still 20x above the new ~5 baseline
+- Full-cascade reversion would still be ~1734 calls (well
+  over 100) -- caught at any threshold
+- Legitimate UA-sheet growth to 100 rules is still an
+  "overhaul that would come with its own ADR"
+
+ADR-059 didn't invalidate ADR-022's regression guard; it
+lowered the floor the guard sits above, without moving the
+ceiling.
