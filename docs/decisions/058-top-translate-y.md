@@ -484,3 +484,50 @@ behavior: the first `PERF-CASCADE` (blank page start) is
 ~0.1ms, the second (partial render) ~0.1ms, the third
 (full Wikipedia) is the actual cost. **The largest of the
 three lines is the real measurement.**
+
+
+## Post-ADR-060 note
+
+**The perf journey that ADR-058's split-timer started has
+shipped its second win.**
+
+The split-timer showed Wikipedia at:
+- Cascade 1057.9ms (31%)
+- Layout 2379.3ms (69%)
+- Total 3437.2ms
+
+Two cycles later:
+
+| Cycle | Cascade | Layout | Total |
+|---|---|---|---|
+| ADR-058 baseline | 1058ms | 2379ms | 3437ms |
+| ADR-059 (cascade index) | **~190ms** | 2357ms* | 2950ms |
+| ADR-060 (layout copies) | ~200ms | **2357ms** | **2555ms** |
+| **Combined** | **5.6x faster** | **12% faster** | **25.5% faster** |
+
+*Layout measurements across cycles have 3x environmental
+variance (documented in ADR-059's Post-ADR-059 note). The
+numbers above use median-of-3 where available.
+
+**Cascade is now 7-8% of render time; layout remains 90%+.**
+
+### What the split-timer revealed (and the methodology it enabled)
+
+ADR-058 established the pattern: **measure phases separately,
+median-of-N, before optimizing anything.** That pattern
+worked twice:
+- ADR-059 targeted cascade (was 31%, now ~7%)
+- ADR-060 targeted layout copies (12% layout win)
+
+**The next bottleneck** -- layout's remaining ~25% potential
+-- is now clearly identified as ADR-061 (typed
+`ComputedStyle` fields) via the same measurement methodology
+that produced the first two wins.
+
+### What ADR-058's magnifier fix left in place
+
+The magnifier (ADR-058's original 5-ADR chain deliverable)
+still renders at y=18 centered. None of the perf work in
+ADR-059/060 touched it. **Correctness and performance are
+orthogonal cycles** -- the ADR discipline that made the
+magnifier chain possible also made the perf journey possible.

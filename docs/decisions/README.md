@@ -62,7 +62,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 057 | [`parent_content_height` threading + `%` height/max-height](057-parent-content-height.md) | Threaded through 8 call sites; `%` height/min/max resolve (auto parent still skips per CSS spec); `<html>` uses `viewport_h`. 6 new tests. Closes ADR-039/053 `%` deferrals. Enables ADR-058. |
 | 058 | [`top: 50%` + `transform: translateY(-50%)`](058-top-translate-y.md) | `top: %` against containing block height; `translateY()` against own box height. Paint wrapper `did_transform`. **Production-verified 2026-11-02** (magnifier centered at y=18). Closes 5-ADR chain 054/055/056/057/058. Also ships perf split-timer. |
 | 059 | [Selector index for cascade performance](059-selector-index.md) | `RuleIndex` + `anchor_for` + `candidates_for`. **5.6× cascade speedup measured across 3 runs** (1058ms → ~190ms, Release, Wikipedia). Cascade share drops 31% → 6-7%. Revealed layout variance (3×) — ADR-060 methodology lesson. |
-| 060 | [Layout copy elimination](060-layout-copy-elimination.md) | `ComputedStyle::get_view()` (`string_view` return, transparent hash) + `fill_sides` inline `string_view` lookup. Targets the 25% `fill_sides` lambda and 9.5% allocation churn from ADR-060 profile. Read-path only. |
+| 060 | [Layout copy elimination](060-layout-copy-elimination.md) | `ComputedStyle::get_view()` (transparent hash, `string_view` return) + `fill_sides` inline lookup. **12.0% layout win, median-of-3 measured** (2678ms → 2357ms). Combined with ADR-059: **25.5% total Wikipedia perf win.** |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 

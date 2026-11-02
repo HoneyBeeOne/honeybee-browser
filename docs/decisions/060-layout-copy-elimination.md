@@ -1,6 +1,6 @@
 # ADR-060: Eliminate string-copy overhead in layout hot path
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-02
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-011 (block layout), ADR-013 (length units), ADR-058 (perf split-timer), ADR-059 (cascade index)
@@ -341,3 +341,145 @@ ADR-060 is complete when:
 - [ ] Post-ADR-060 notes in ADR-011 / 058
 - [ ] README row + CHANGELOG
 - [ ] ADR-060 status -> Implemented
+
+## Implementation
+
+Implemented on `feat/layout-copy-elimination` across two
+commits (Commit 1 = `get_view()` + `fill_sides` rewrite,
+Commit 2 = this docs update). Single PR #261 merged at
+`1f94bb4`.
+
+### What shipped
+
+**`cascade.hpp`:**
+- `StringHash` / `StringEq` with `is_transparent` --
+  heterogeneous lookup (string_view key without allocation)
+- `declarations` map type:
+  `unordered_map<string, CascadeValue, StringHash, StringEq>`
+- `ComputedStyle::get_view(string_view)` ->
+  `optional<string_view>` (read-only, no copy)
+
+**`cascade.cpp`:**
+- `get_view()` implementation (10 lines): direct `find` +
+  `string_view` into `CascadeValue::value`
+- `get()` unchanged -- existing callers keep working
+
+**`layout.cpp`:**
+- `fill_sides` inline lambda: direct `find` with `string_view`
+  key (no key allocation) + reference access to `.value` (no
+  value copy). Removes `optional<string>` wrapper overhead.
+- 3 call sites (margin / border / padding) inherit the fix
+  from the shared lambda.
+
+**`tests/test_stylesheet.cpp`:**
+- `#include "renderer/css/cascade.hpp"` added (ComputedStyle /
+  CascadeValue live there, not stylesheet.hpp)
+- 3 new tests: `get_view` return value, nullopt for missing,
+  `const char*` literal (no key alloc)
+
+### Verified delta (Release, median-of-3 Wikipedia)
+
+| Run | Layout |
+|---|---|
+| 1 | 2476.3ms |
+| 2 | 2328.2ms |
+| 3 | 2356.6ms |
+| **Median** | **2356.6ms** |
+
+**Pre-ADR-060 baseline median: 2678ms** (from ADR-059's
+baseline runs of 2678 / 2463 / 3249).
+
+**2356.6ms = 12.0% win, 321ms saved per Wikipedia page
+load.** Target was `<2420ms` (10% win); measured comfortably
+inside. Two of three post runs clustered at 2328-2356 --
+structural, not variance.
+
+Cascade unchanged at ~200ms as expected (no cascade code
+touched in ADR-060).
+
+### Session-wide perf progression
+
+| Stage | Total (Wikipedia) |
+|---|---|
+| ADR-058 baseline (before perf work) | 3437ms |
+| ADR-059 (cascade index, 5.6x cascade) | 2950ms |
+| **ADR-060 (this ADR, layout copies)** | **~2555ms** |
+| **Combined ADR-059 + 060** | **25.5% total win** |
+
+### Design decisions applied
+
+**`get_view()` is additive, not replacing `get()`** -- some
+callers need owned strings (`value_or` patterns). Additive
+keeps the blast radius small: only hot-path callers switch
+to `get_view()`. Future ADRs can migrate more sites
+incrementally.
+
+**Transparent hash is universal** -- every
+`get_view(string_view)` call site benefits without
+per-callsite static keys. The alternative (static const
+`std::string` keys in `fill_sides`) would have worked for
+one caller but not others.
+
+**Typed `ComputedStyle` fields (the bigger fix) deferred to
+ADR-061** -- ~200 lines, changes data model, touches cascade
+population. ADR-060's incremental win was shipped first to
+prove the methodology (median-of-3, `PERF-LAYOUT` measurement
+holding up as reliable).
+
+### What the fix does NOT eliminate (honest)
+
+- **`unordered_map::find` hash + compare** -- still happens
+  per lookup. This is the reason the win is 12% not 25%.
+- **`parse_length` string parsing** -- still happens per
+  property. Not in the top-10 profile, so its per-call cost
+  is genuinely small relative to the lookups.
+- **`get()` for callers that need owned strings** -- correct,
+  they need the copy.
+
+The remaining layout cost after ADR-060:
+
+| Contributor | Share |
+|---|---|
+| `unordered_map::find` hash/compare | ~10% |
+| `parse_length` (not in profile top-10) | small |
+| Recursive `layout_element` (block/flex/grid children) | ~12.79% |
+| `contains_word` (cascade-side) | 5.19% |
+| Allocation churn (still some, much reduced) | ~5% |
+| Library internals (GTK/glib/fontconfig) | ~10% |
+
+**ADR-061 candidate: typed `ComputedStyle` fields** to
+eliminate the remaining map lookup. ~25% potential,
+~200 lines, changes data model.
+
+### Two implementation bugs caught before shipping
+
+1. **Missing `#include "renderer/css/cascade.hpp"`** in the
+   test file -- `ComputedStyle` / `CascadeValue` live in
+   `cascade.hpp`, not `stylesheet.hpp` (which was the only
+   CSS header included). Caught immediately by the compiler.
+
+2. **Heredoc literal `\n`** -- same Python `'\\n'` bug as
+   ADR-059. Appended `\` + `n` characters to end of test file
+   instead of a newline. Fixed via strip + real newline.
+
+**The three-for-three pattern**: ADR-057 (definition body),
+ADR-058 (`ctx` scope), ADR-059 (namespace scope), ADR-060
+(include + literal newline). The compiler catches all of
+these immediately -- **but only if the whole project is
+rebuilt AND tests run against the rebuilt binary.**
+
+### Test count
+
+- 680 -> 683 cases (+3 new)
+- 2608 -> 2614 assertions (+6 new)
+- Zero existing test regressions
+
+### Deferred (documented)
+
+- **Typed `ComputedStyle` fields** -- ADR-061 (~25% potential)
+- **`contains_word` optimization** -- cascade-side, ADR-061/062
+- **`parse_length` fast path** -- not in top-10 profile
+- **`pthread_rwlock` (4.82%)** -- library internal (GTK/glib/
+  fontconfig), not actionable from our code
+- **`FcCharSetIsSubset` (1.49%)** -- fontconfig
+
