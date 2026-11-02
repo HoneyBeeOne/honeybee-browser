@@ -61,11 +61,12 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 056 | [CSS background: URL forms](056-background-url-forms.md) | 5 new `LayoutBox` fields mirroring mask; `paint_background_image` (Cairo pattern matrix, repeat); grammar parser for all 4 Wikipedia url() forms. **Production-verified 2026-11-01** (search icon + external link icons render on Wikipedia). 11/11 forms parse. |
 | 057 | [`parent_content_height` threading + `%` height/max-height](057-parent-content-height.md) | Threaded through 8 call sites; `%` height/min/max resolve (auto parent still skips per CSS spec); `<html>` uses `viewport_h`. 6 new tests. Closes ADR-039/053 `%` deferrals. Enables ADR-058. |
 | 058 | [`top: 50%` + `transform: translateY(-50%)`](058-top-translate-y.md) | `top: %` against containing block height; `translateY()` against own box height. Paint wrapper `did_transform`. **Production-verified 2026-11-02** (magnifier centered at y=18). Closes 5-ADR chain 054/055/056/057/058. Also ships perf split-timer. |
+| 059 | [Selector index for cascade performance](059-selector-index.md) | `RuleIndex` buckets rules by rightmost-simple anchor (ID > class > type > universal); cascade queries candidates instead of iterating all rules. Targets the 1058ms cascade measured in ADR-058. Correct-by-construction per CSS specificity. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
-If you are new: read **001 -> 006 -> 007 -> 008 through 058 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 059 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.
