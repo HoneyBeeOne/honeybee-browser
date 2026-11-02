@@ -618,6 +618,45 @@ Color parse_color(std::string_view s) {
         }
     }
 
+    // ADR-062: rgb() / rgba() support.
+    if (key.rfind("rgb(", 0) == 0 || key.rfind("rgba(", 0) == 0) {
+        const bool has_alpha = key.rfind("rgba(", 0) == 0;
+        const size_t prefix = has_alpha ? 5 : 4;
+        if (key.back() != ')') return Color::transparent();
+        std::string_view inner =
+            std::string_view(key).substr(prefix, key.size() - prefix - 1);
+        auto parts = split_commas(inner);
+        if (parts.size() < 3) return Color::transparent();
+
+        auto parse_channel = [](std::string_view t) -> float {
+            t = trim_ws(t);
+            if (t.empty()) return 0.0f;
+            const bool is_pct = t.back() == '%';
+            try {
+                const float v = std::stof(std::string(t));
+                if (is_pct) return std::clamp(v / 100.0f, 0.0f, 1.0f);
+                return std::clamp(v / 255.0f, 0.0f, 1.0f);
+            } catch (...) { return 0.0f; }
+        };
+        auto parse_alpha = [](std::string_view t) -> float {
+            t = trim_ws(t);
+            if (t.empty()) return 1.0f;
+            const bool is_pct = t.back() == '%';
+            try {
+                const float v = std::stof(std::string(t));
+                if (is_pct) return std::clamp(v / 100.0f, 0.0f, 1.0f);
+                return std::clamp(v, 0.0f, 1.0f);
+            } catch (...) { return 1.0f; }
+        };
+
+        const float r = parse_channel(parts[0]);
+        const float g = parse_channel(parts[1]);
+        const float b = parse_channel(parts[2]);
+        const float a = (has_alpha && parts.size() >= 4)
+                        ? parse_alpha(parts[3]) : 1.0f;
+        return {r, g, b, a};
+    }
+
     return Color::transparent();
 }
 

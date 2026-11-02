@@ -123,6 +123,51 @@ void paint_background_image(cairo_t* cr, const layout::LayoutBox& box,
     cairo_restore(cr);
 }
 
+// ADR-062: paint block background linear-gradient.
+// Computes gradient line endpoints from angle + half-diagonal
+// per CSS spec SS3.1.1: hl = (w*|cos| + h*|sin|)/2.
+void paint_background_gradient(cairo_t* cr,
+                               const layout::LayoutBox& box) {
+    if (!box.background_is_gradient) return;
+    if (box.background_gradient_stops.size() < 2) return;
+
+    // CSS linear-gradient angle theta convention:
+    //   0deg   = to top    (bottom -> top)
+    //   90deg  = to right  (left -> right)
+    //   180deg = to bottom (top -> bottom)   [default]
+    //   270deg = to left   (right -> left)
+    // Direction vector in screen coords (y down): (sin, -cos)
+    // Gradient line length per CSS Images 3 SS3.1.1:
+    //   L = |W * sin(theta)| + |H * cos(theta)|
+    const float cx = box.x + box.width * 0.5f;
+    const float cy = box.y + box.height * 0.5f;
+    const float rad = box.background_gradient_angle_deg
+                    * 0.017453292519943295f;
+    const float s = std::sin(rad);
+    const float c = std::cos(rad);
+    const float L = box.width * std::abs(s)
+                  + box.height * std::abs(c);
+    const float half = L * 0.5f;
+    const float dx = s;
+    const float dy = -c;
+    const float x0 = cx - dx * half;
+    const float y0 = cy - dy * half;
+    const float x1 = cx + dx * half;
+    const float y1 = cy + dy * half;
+
+    cairo_save(cr);
+    cairo_pattern_t* pat = cairo_pattern_create_linear(x0, y0, x1, y1);
+    for (const auto& stop : box.background_gradient_stops) {
+        cairo_pattern_add_color_stop_rgba(pat, stop.position,
+            stop.color.r, stop.color.g, stop.color.b, stop.color.a);
+    }
+    cairo_set_source(cr, pat);
+    cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+    cairo_fill(cr);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+}
+
 // ADR-047: draw mask-image over the already-drawn background.
 // Cairo path: set source to background_color, then cairo_mask
 // with the loaded surface pattern (scaled + positioned). The
@@ -361,6 +406,12 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
     // ADR-047: mask draws after background/border fill, before
     // background-image (which paints above the mask layer).
     paint_mask_image(cr, box, images);
+
+    // ADR-062: gradient background painted first (fill),
+    // then URL background on top.
+    if (box.background_is_gradient) {
+        paint_background_gradient(cr, box);
+    }
 
     // ADR-034: draw background-image if present.
     if (images && !box.background_image_url.empty()) {

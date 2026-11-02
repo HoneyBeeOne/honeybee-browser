@@ -1211,12 +1211,15 @@ TEST_CASE("background: url() forms now expand (ADR-056)",
     CHECK(decls[2].value == "repeat");
 }
 
-TEST_CASE("background: linear-gradient dropped entirely",
-          "[css][stylesheet][adr-055]") {
+TEST_CASE("background: linear-gradient preserved as background-image (ADR-062)",
+          "[css][stylesheet][adr-055][adr-062]") {
     auto sheet = honeybee::renderer::css::Stylesheet::parse(
         "body { background: linear-gradient(red, blue); }");
     REQUIRE(sheet.rules.size() == 1);
-    CHECK(sheet.rules[0].declarations.empty());
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    REQUIRE(sheet.rules[0].declarations[0].property == "background-image");
+    CHECK(sheet.rules[0].declarations[0].value ==
+          "linear-gradient(red, blue)");
 }
 
 TEST_CASE("background: multi-layer (comma) dropped entirely",
@@ -1398,3 +1401,45 @@ TEST_CASE("ComputedStyle::get_view: accepts const char* literal "
     REQUIRE(v.has_value());
     CHECK(*v == "auto");
 }
+
+// =============================================================
+// ADR-062: linear-gradient() preservation + structured layout
+// =============================================================
+
+TEST_CASE("background: linear-gradient with angle preserved",
+          "[css][stylesheet][adr-062]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: linear-gradient(45deg, red, blue); }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property == "background-image");
+    CHECK(sheet.rules[0].declarations[0].value ==
+          "linear-gradient(45deg, red, blue)");
+}
+
+TEST_CASE("background: linear-gradient with rgba() colors preserved",
+          "[css][stylesheet][adr-062]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: linear-gradient(rgba(255,255,255,0), white); }");
+    REQUIRE(sheet.rules.size() == 1);
+    REQUIRE(sheet.rules[0].declarations.size() == 1);
+    CHECK(sheet.rules[0].declarations[0].property == "background-image");
+}
+
+TEST_CASE("background: radial-gradient still dropped entirely",
+          "[css][stylesheet][adr-062]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: radial-gradient(circle, red, blue); }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+
+TEST_CASE("background: multi-layer with gradient dropped",
+          "[css][stylesheet][adr-062]") {
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body { background: linear-gradient(red, blue), "
+        "linear-gradient(green, yellow); }");
+    REQUIRE(sheet.rules.size() == 1);
+    CHECK(sheet.rules[0].declarations.empty());
+}
+

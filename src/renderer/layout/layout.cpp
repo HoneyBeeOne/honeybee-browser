@@ -20,6 +20,152 @@ namespace {
 
 constexpr float kDefaultFontSize = 16.0f;
 
+// ADR-062: local helpers for gradient parsing. Duplicated from
+// style_values.cpp's anonymous namespace (file-local there);
+// cheaper than restructuring the layering -- same pattern as
+// ADR-056's is_color_token duplication.
+namespace gradient_detail {
+
+std::string_view g_trim(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t'
+                          || s.front() == '\n' || s.front() == '\r')) {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t'
+                          || s.back() == '\n' || s.back() == '\r')) {
+        s.remove_suffix(1);
+    }
+    return s;
+}
+
+std::vector<std::string_view> g_split_commas(std::string_view inner) {
+    std::vector<std::string_view> out;
+    size_t start = 0;
+    int depth = 0;
+    for (size_t i = 0; i < inner.size(); ++i) {
+        if (inner[i] == '(') ++depth;
+        else if (inner[i] == ')') --depth;
+        else if (inner[i] == ',' && depth == 0) {
+            out.push_back(inner.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    out.push_back(inner.substr(start));
+    return out;
+}
+
+// Split on whitespace (used for "<color> [<position>]" stop parsing).
+std::vector<std::string_view> g_split_whitespace(std::string_view s) {
+    std::vector<std::string_view> out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'
+                                || s[i] == '\n' || s[i] == '\r')) {
+            ++i;
+        }
+        if (i >= s.size()) break;
+        const std::size_t start = i;
+        while (i < s.size() && s[i] != ' ' && s[i] != '\t'
+               && s[i] != '\n' && s[i] != '\r') {
+            ++i;
+        }
+        out.push_back(s.substr(start, i - start));
+    }
+    return out;
+}
+
+// Direction keyword -> CSS angle in degrees.
+float direction_to_deg(std::string_view dir) {
+    dir = g_trim(dir);
+    if (dir == "to bottom") return 180.0f;
+    if (dir == "to top")    return 0.0f;
+    if (dir == "to right")  return 90.0f;
+    if (dir == "to left")   return 270.0f;
+    if (dir == "to bottom right") return 135.0f;
+    if (dir == "to bottom left")  return 225.0f;
+    if (dir == "to top right")    return 45.0f;
+    if (dir == "to top left")     return 315.0f;
+    return -1.0f;  // not a direction
+}
+
+// Parse "<N>deg" or "<N>" as degrees. Returns false on failure.
+bool parse_angle_sv(std::string_view sv, float& out_deg) {
+    sv = g_trim(sv);
+    if (sv.empty()) return false;
+    std::string_view num = sv;
+    if (num.size() >= 3 && num.substr(num.size() - 3) == "deg") {
+        num = num.substr(0, num.size() - 3);
+    }
+    try {
+        out_deg = std::stof(std::string(num));
+        return true;
+    } catch (...) { return false; }
+}
+
+}  // namespace gradient_detail
+
+// ADR-062: parse "linear-gradient(...)" string into box fields.
+// Called from layout_element after background_image_url extraction.
+void parse_background_gradient(std::string_view raw, LayoutBox& box) {
+    const std::string_view prefix = "linear-gradient(";
+    if (raw.rfind(prefix, 0) != 0) return;
+    if (raw.back() != ')') return;
+
+    std::string_view inner =
+        raw.substr(prefix.size(), raw.size() - prefix.size() - 1);
+    auto tokens = gradient_detail::g_split_commas(inner);
+    if (tokens.size() < 2) return;
+
+    std::size_t first_stop = 0;
+    box.background_gradient_angle_deg = 180.0f;  // default
+
+    // First token: direction (Ndeg or "to <keyword>") OR first stop.
+    {
+        auto t0 = gradient_detail::g_trim(tokens[0]);
+        // "to " prefix
+        if (t0.rfind("to ", 0) == 0) {
+            const float deg = gradient_detail::direction_to_deg(t0);
+            if (deg >= 0.0f) {
+                box.background_gradient_angle_deg = deg;
+                first_stop = 1;
+            } else {
+                return;  // malformed direction
+            }
+        } else {
+            // Maybe Ndeg
+            float deg = 0.0f;
+            if (gradient_detail::parse_angle_sv(t0, deg)) {
+                // Only treat as angle if it ends with "deg" (avoid
+                // treating bare numbers as angles; CSS requires
+                // explicit deg).
+                if (t0.size() >= 3 &&
+                    t0.substr(t0.size() - 3) == "deg") {
+                    box.background_gradient_angle_deg = deg;
+                    first_stop = 1;
+                }
+            }
+        }
+    }
+
+    // Parse stops.
+    const std::size_t n = tokens.size() - first_stop;
+    if (n < 2) return;
+    box.background_gradient_stops.clear();
+    box.background_gradient_stops.reserve(n);
+    for (std::size_t i = first_stop; i < tokens.size(); ++i) {
+        auto stop_tokens = gradient_detail::g_split_whitespace(
+            gradient_detail::g_trim(tokens[i]));
+        if (stop_tokens.empty()) return;
+        // First token = color; optional second = position (ignored in v1).
+        Color c = parse_color(stop_tokens[0]);
+        const float pos = static_cast<float>(i - first_stop)
+                        / static_cast<float>(n - 1);
+        box.background_gradient_stops.push_back({c, pos});
+    }
+
+    box.background_is_gradient = true;
+}
+
 const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
                                  const dom::Element& el) {
     auto it = styles.find(&el);
@@ -336,6 +482,15 @@ LayoutBox layout_element(const dom::Element& el,
                     if (!url.empty() && (url.back() == '\'' || url.back() == '"')) url.pop_back();
                     box.background_image_url = url;
                 }
+            }
+        }
+    }
+
+    // ADR-062: parse linear-gradient into structured form.
+    if (style) {
+        if (auto bg = style->get("background-image")) {
+            if (bg->find("linear-gradient(") != std::string::npos) {
+                parse_background_gradient(*bg, box);
             }
         }
     }
