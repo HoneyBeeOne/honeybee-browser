@@ -618,6 +618,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 687 / 2627.
 
+- **Intrinsic width for auto-width floats** (ADR-066): float probe
+  re-laid-out at `<img>` child width instead of parent content width. Includes
+  HTML `width="..."` attribute fallback (Layer 1) and half-parent cap (Layer 2).
+
+  Fixes ADR-065 diagnostic finding: Wikipedia figure floats measured at 953.6px
+  (fills parent, no intrinsic width), collapsing following text to 22.4px
+  (1-3 words per line). Now figure space is ~220-250px, text ~756px readable.
+
+  Verification: production screenshots (2026-11-03) confirm readable text beside
+  History section figure, HTML5 logo, HTML category diagram. Tim Berners-Lee
+  JPEG still doesn't paint -- separate concern (ADR-067).
+
+  ADR-063's deferred visual verification now closed -- float layout produces
+  usable output at Wikipedia scale.
+
+  4 new tests: 2 initial (auto-width > 700px, explicit 600-720px), 2 layers
+  (HTML attr override, half-parent cap).
+
+  Test count: 687 -> 691 cases, 2627 -> 2641 assertions.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
