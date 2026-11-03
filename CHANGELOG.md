@@ -648,6 +648,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 691 / 2641.
 
+- **JPEG decode via gdk-pixbuf** (ADR-067): JPEG magic-byte branch (3 bytes `FF D8 FF`, covers JFIF / EXIF / raw) added between PNG and SVG dispatch. Decode via `gdk_pixbuf_new_from_stream` + manual RGBA->ARGB32 pixel copy with R<->B channel swap. Keeps `honeybee_lib` GTK-free (gdk-pixbuf is transitively linked via GTKMM4, but GDK4 is not — only the executable links GTK4).
+
+  Production-verified (fixture screenshot 2026-11-04): Tim Berners-Lee JPEG renders with correct colors (natural skin, blue tie), HTML5 logo PNG unchanged, Wikipedia wordmark SVG unchanged, 100px-scale JPEG correct size.
+
+  Closes the last visible Wikipedia gap: Tim photo now renders in History section alongside the already-readable text (ADR-066) and working scroll (ADR-068).
+
+  Layering finding: `gdk_cairo_surface_create_from_pixbuf` (GDK4) unavailable in `honeybee_lib` — manual pixel copy required to keep test binary GTK-free.
+
+  Stub incident (honest): a `// DIAG-067: temporarily disabled` + `return nullptr;` from ADR-068's crash isolation was left in the JPEG branch. Chased two phantom causes (missing loader, missing symbol) before `grep 'DIAG-067'` located it. **Lesson**: `grep` for diagnostic markers after every stash/branch-switch cycle.
+
+  Test count unchanged at 691 / 2641 (no new tests; fixture verification is the primary proof).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
