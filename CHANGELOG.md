@@ -638,6 +638,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count: 687 -> 691 cases, 2627 -> 2641 assertions.
 
+- **Force Cairo CPU renderer** (ADR-068): `setenv("GSK_RENDERER", "cairo", 0)` in `main.cpp` before GTK init. GTK4's GSK GPU renderer crashes on very large cairo surfaces (empirically >~25,000px tall) during GPU upload -- corrupted clip state in `_cairo_clip_intersect_clip`. HoneyBee paints the full ~30,000px Wikipedia article into a single tall DrawingArea (ADR-021 / ADR-064), triggering the bug.
+
+  Core dump backtrace showed zero HoneyBee frames from frame #11 onward -- pure GTK4/GSK internal. Cairo CPU renderer bypasses GPU texture upload and works cleanly for the same content.
+
+  Production-verified 2026-11-03: no crash on Wikipedia scroll (was segfault, 213 MB core), smooth scroll performance, no visual regressions. `overwrite=0` preserves user-set GSK_RENDERER for opt-in GPU testing.
+
+  Unblocks ADR-067 (JPEG verification needed a stable process).
+
+  Test count unchanged at 691 / 2641.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
