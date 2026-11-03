@@ -3919,3 +3919,143 @@ TEST_CASE("absolute: bottom:50% resolves for free (parse_off_v)",
     CHECK(std::abs(child->y - 1.0f) < 0.5f);
 }
 
+// =============================================================
+// ADR-066: intrinsic width for auto-width floats
+// =============================================================
+
+TEST_CASE("float: img child gives intrinsic width (ADR-066)",
+          "[layout][float][adr-066]") {
+    // Float div has no explicit width, contains one img (20x20).
+    // Without ADR-066, probe fills parent content (800), narrowing
+    // following paragraph to ~0.
+    // With ADR-066, probe re-lays-out at 20 (img width), narrowing
+    // paragraph to ~780.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='a.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 20.0f;
+        d.height = 20.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Readable width: paragraph narrowed by ~20 (img), so ~780
+    CHECK(ps[0]->width > 700.0f);
+    CHECK(ps[0]->width < 800.0f);
+}
+
+TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
+          "[layout][float][adr-066]") {
+    // Float div has explicit width:120px. ADR-066's auto-width
+    // check should skip re-layout. Behaviour identical to pre-ADR-066.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='a.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0;width:120px}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 20.0f;
+        d.height = 20.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Narrowed by ~120 (explicit width), so ~680
+    CHECK(ps[0]->width > 600.0f);
+    CHECK(ps[0]->width < 720.0f);
+}
+
+TEST_CASE("img: HTML width attribute overrides intrinsic (ADR-066 Layer 1)",
+          "[layout][img][adr-066]") {
+    // <img width="100"> with intrinsic dims 500x400. Without
+    // Layer 1, layout uses intrinsic 500. With Layer 1, HTML
+    // width attribute wins (presentational hint), yielding 100.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><img src='a.png' width='100'></body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 500.0f;
+        d.height = 400.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+    const auto imgs = find_all_boxes(root, "img");
+    REQUIRE(imgs.size() == 1);
+    // Width from HTML attr = 100, not intrinsic 500
+    CHECK(imgs[0]->width > 95.0f);
+    CHECK(imgs[0]->width < 105.0f);
+    // Height from aspect (100 * 400/500 = 80)
+    CHECK(imgs[0]->height > 75.0f);
+    CHECK(imgs[0]->height < 85.0f);
+}
+
+TEST_CASE("float: huge intrinsic img caps at half-parent (ADR-066 Layer 2)",
+          "[layout][float][adr-066]") {
+    // img with intrinsic dims 900x900 (bigger than viewport 800),
+    // no HTML width attribute. Probe lays out at 800 (clamped),
+    // img fills probe (800). Without Layer 2, walk's
+    // "img_w < probe_w - 1" check skips (800 vs 799), no re-layout,
+    // narrow_w = 0. With Layer 2, cap to half (400), re-layout at
+    // 400, narrow_w = 400.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='big.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 900.0f;
+        d.height = 900.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Cap at half (400), narrow_w = 800 - 400 = 400 (readable)
+    CHECK(ps[0]->width > 350.0f);
+    CHECK(ps[0]->width < 450.0f);
+}
+

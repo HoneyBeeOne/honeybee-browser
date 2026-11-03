@@ -1299,6 +1299,82 @@ LayoutBox layout_element(const dom::Element& el,
                                        own_font_size, root_font_size,
                                        viewport_w, viewport_h,
                                        own_dir, image_dims));
+
+                    // ADR-066: intrinsic width for auto-width floats.
+                    // A <figure> with display:table has no explicit
+                    // width and falls back to block layout (HoneyBee
+                    // has no table engine), so its probe fills parent
+                    // content_w (976px). Use the img child's intrinsic
+                    // width instead -- matches shrink-to-fit for the
+                    // common Wikipedia figure pattern. Re-layout at
+                    // img_w so figcaption re-wraps and float paints
+                    // at its real size.
+                    if (child_style) {
+                        const auto w_prop = child_style->get("width");
+                        const bool auto_w = !w_prop || *w_prop == "auto"
+                                          || w_prop->empty();
+                        if (auto_w) {
+                            float img_w = 0.0f;
+                            std::vector<const layout::LayoutNode*> wstack;
+                            wstack.push_back(probe.get());
+                            while (!wstack.empty() && img_w == 0.0f) {
+                                const auto* wn = wstack.back();
+                                wstack.pop_back();
+                                if (wn->kind == layout::LayoutKind::Box) {
+                                    const auto* wb = static_cast<
+                                        const layout::LayoutBox*>(wn);
+                                    if (wb->element &&
+                                        wb->element->tag() == "img" &&
+                                        wb->width > 0.0f) {
+                                        img_w = wb->width;
+                                        break;
+                                    }
+                                    for (const auto& wc : wb->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                } else if (wn->kind ==
+                                           layout::LayoutKind::Inline) {
+                                    const auto* wi = static_cast<
+                                        const layout::LayoutInline*>(wn);
+                                    for (const auto& wc : wi->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                } else if (wn->kind ==
+                                           layout::LayoutKind::InlineContext) {
+                                    const auto* wic = static_cast<
+                                        const layout::LayoutInlineContext*>(wn);
+                                    for (const auto& wc : wic->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                }
+                            }
+                            // ADR-066 Layer 2: cap at half-parent.
+                            // Safety net for huge intrinsic dims
+                            // without an HTML width attribute (e.g.
+                            // an SVG whose natural size fills the
+                            // parent). Without this, img_w == content_w
+                            // skips the re-layout check and text gets
+                            // narrowed to ~0.
+                            if (img_w > 0.0f) {
+                                const float half_w = content_w * 0.5f;
+                                if (half_w > 50.0f && img_w > half_w) {
+                                    img_w = half_w;
+                                }
+                            }
+                            if (img_w > 0.0f && img_w < content_w - 10.0f) {
+                                probe = std::make_unique<LayoutBox>(
+                                    layout_element(child_el, styles, measurer,
+                                                   content_x, cursor_y,
+                                                   img_w,
+                                                   own_content_height,
+                                                   own_font_size,
+                                                   root_font_size,
+                                                   viewport_w, viewport_h,
+                                                   own_dir, image_dims));
+                            }
+                        }
+                    }
+
                     if (float_dir == "right") {
                         // Shift right edge to content right edge.
                         const float target_right =
@@ -1975,6 +2051,32 @@ LayoutBox layout_element(const dom::Element& el,
                         h && !h->empty() && *h != "auto") {
                         const float p = parse_length(*h, ctx);
                         if (p > 0.0f) want_h = p;
+                    }
+                }
+                // ADR-066 Layer 1: HTML width/height attributes as
+                // presentational hints. Precedence: CSS width wins,
+                // HTML attr is fallback, intrinsic last. Wikipedia's
+                // <figure> photos use <img width="220"> with no CSS
+                // width -- ignored pre-Layer-1, so intrinsic dims
+                // (945px) collapsed following text to 22px.
+                if (want_w == 0.0f) {
+                    if (auto w_attr = el.get_attribute("width");
+                        !w_attr.empty() &&
+                        w_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(w_attr);
+                            if (v > 0.0f) want_w = v;
+                        } catch (...) {}
+                    }
+                }
+                if (want_h == 0.0f) {
+                    if (auto h_attr = el.get_attribute("height");
+                        !h_attr.empty() &&
+                        h_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(h_attr);
+                            if (v > 0.0f) want_h = v;
+                        } catch (...) {}
                     }
                 }
                 if (want_w > 0.0f && want_h > 0.0f) {
