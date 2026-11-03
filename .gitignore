@@ -83,3 +83,8 @@ compile_commands.json
 .vscode/
 .idea/
 *.swp
+
+# Crash core dumps from gdb backtrace debugging
+core
+core.*
+*.core
