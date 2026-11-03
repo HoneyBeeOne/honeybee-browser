@@ -597,6 +597,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1 test flipped, 4 new tests. Test count: 687 cases, 2627
   assertions (+4 cases / +13 assertions).
 
+- **Scroll height regression fix** (ADR-064): `RenderPipeline::layout_height()`
+  rewritten to walk the layout tree for the deepest Box's `y + height` instead
+  of `layout_root_.height`. ADR-057's `html { height: 100% }` clamp was setting
+  `<html>`'s box to viewport height (678px on Wikipedia) so `sync_drawing_area_size`
+  set the DrawingArea to 678px despite 30,000+px of content -- ScrolledWindow saw
+  no overflow, no scrollbar appeared.
+
+  Fix: iterative Box-tree walk finds true content bottom. Verified via
+  instrumented `SYNC-SIZE` fprintf (`layout_height=678` before, `~30000` after)
+  plus production screenshots (scrollbar visible, wheel scroll works, bottom
+  reachable).
+
+  Regression intro: ADR-057 (`parent_content_height` + `html { height: 100% }`).
+  Regression detector: user report mid-session. Fix effort: 3 compiler
+  iterations, 25 lines of code.
+
+  Unblocks ADR-063's deferred visual verification (float layout assessment on
+  real Wikipedia content) -- see ADR-065 for the narrowing diagnostic.
+
+  Test count unchanged at 687 / 2627.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
