@@ -1,6 +1,6 @@
 # ADR-066: Intrinsic width for auto-width floats
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-11-03
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-030 (float layout), ADR-036 (clear), ADR-061 (layout perf diagnostic), ADR-063 (float whitelist), ADR-064 (scroll fix), ADR-065 (diagnostic)
@@ -211,3 +211,94 @@ variance on Wikipedia.
 - [ ] `PERF-LAYOUT` unchanged (< 100ms delta)
 - [ ] README row + CHANGELOG
 - [ ] ADR-066 status → Implemented
+
+## Implementation
+
+Implemented on `feat/float-intrinsic` at 2026-11-03. Two
+commits (`795d397`, `b9201d9`). Single PR #269 merged at
+`fefac72`.
+
+### What shipped
+
+**Initial commit (`795d397`)** — ADR-066 core walk:
+
+Auto-width float detection + probe walk for `<img>` child +
+re-layout at `img_w`. Verified via fixture and 2 unit tests
+(auto-width > 700px, explicit-width control 600-720px).
+
+**Second commit (`b9201d9`)** — production debug result:
+
+Diagnostic on Wikipedia revealed Tim Berners-Lee photo had
+`img_w=945.6` (intrinsic dims of JPEG), not 220 (HTML width
+attribute). Fixes:
+
+- **Layer 1**: HTML `<img width="...">` attribute fallback in
+  img layout branch. Precedence: CSS `width:` > HTML attr >
+  intrinsic dims. Matches browser presentational-hint behavior.
+- **Layer 2**: Half-parent cap on float re-layout. Safety
+  for huge intrinsic dims (SVG natural size, missing attr).
+- **Walk relaxation**: removed `img_w < probe_w - 1` filter
+  that blocked Layer 2 from firing on full-width imgs.
+- **Removed** `ADR-066-DIAG` diagnostic fprintf (goal achieved).
+
+### Verified delta (production screenshots 2026-11-03)
+
+User screenshots of Wikipedia HTML article (3 sections):
+
+| Section | Figure space | Text readability |
+|---|---|---|
+| History (Tim Berners-Lee) | ~220px | Full paragraphs, 15-20 words/line |
+| HTML5 logo | ~250px | Full paragraphs |
+| HTML elements diagram | ~250px | Full paragraphs |
+
+**Before ADR-066**: figure floats 953.6px wide → text 22.4px
+→ unreadable (1-3 words per line).
+
+**After ADR-066**: figure floats 220-250px → text ~756px →
+readable full paragraphs.
+
+### What this closes
+
+- **ADR-063's deferred visual verification.** With float layout
+  enabled and figure widths now intrinsic-sized, the float
+  approximation produces usable output at Wikipedia scale.
+- **ADR-065 diagnostic finding closed.** The 22.4px narrowing
+  measured on figure floats is now ~756px.
+
+### Separate issues (not ADR-066 scope)
+
+**1. Tim Berners-Lee JPEG does not render.** SVG images (HTML5
+logo, HTML category diagram) render correctly; JPEG photo from
+`upload.wikimedia.org` fails to paint. Format or URL specific.
+**ADR-067 territory** (raster image rendering).
+
+**2. Caption overlap.** Figure captions sit at the figure's
+bottom edge; body text beside the figure reaches the same
+y-level, brief visual collision. Block-narrowing limitation
+(ADR-030's deferred ADR-032 per-line reflow). **Deferred.**
+
+**3. Minor link overlap.** Pre-existing small inline-run
+collision. Not ADR-066-caused.
+
+### Test count
+
+- 687 -> 691 cases (+4)
+- 2627 -> 2641 assertions (+14)
+- Zero regressions on pre-existing tests
+
+### Design decisions applied
+
+**Re-layout vs use-for-narrowing-only:** re-layout shrinks
+the figure box so it paints at intrinsic size (not full
+width). Prevents narrowed text from overlapping the visible
+figure's left region. Only using img_w for narrowing would
+leave a full-width empty band.
+
+**CSS > HTML attr > intrinsic precedence:** matches browser
+behavior for `<img width="...">` presentational hints.
+
+**Half-parent cap:** conservative safety net. Any img wider
+than half the parent is almost certainly an unwrapped SVG or
+size-detection bug, not a real intentional float width.
+Capping guarantees readable text beside it.
+
