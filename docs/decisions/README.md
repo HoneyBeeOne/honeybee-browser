@@ -69,11 +69,13 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 064 | [Scroll height regression](064-scroll-height-regression.md) | `layout_height()` walks tree for deepest Box `y+height` (was: `layout_root_.height`, ADR-057-clamped to viewport). **Production-verified 2026-11-03** (scrollbar restored, scroll works on Wikipedia). Extra relayout on load. |
 | 066 | [Intrinsic width for auto-width floats](066-float-intrinsic-width.md) | Re-layout auto-width floats at `<img>` child width, plus HTML `width=` attr fallback (Layer 1) + half-parent cap (Layer 2). **Production-verified 2026-11-03** (text beside figures readable at ~756px vs 22.4px before). Enables ADR-063 float layout. |
 | 068 | [Force Cairo CPU renderer (GTK4 GSK GPU crash)](068-gsk-gpu-crash-workaround.md) | `setenv("GSK_RENDERER", "cairo", 0)` in `main.cpp`. GTK4 GSK GPU renderer crashes on ~30,000px cairo surfaces (ADR-064 architecture); core dump shows zero HoneyBee frames. Cairo CPU works. **Production-verified 2026-11-03** (no crash, smooth scroll, no visual regressions). Unblocks ADR-067. |
+| 067 | [JPEG decode via gdk-pixbuf](067-jpeg-decode.md) | JPEG magic-byte branch using gdk-pixbuf + manual RGBA->ARGB32 pixel copy (channel swap keeps `honeybee_lib` GTK-free). **Production-verified 2026-11-04** (fixture: 4 rows all correct, colors natural, scale works). Closes the last visible Wikipedia gap. |
 
 **Note:** ADR-005 exists only on the archived `feat/html-renderer` branch. It documented the GTK-based renderer that ADR-006 reverted.
 
 ## Reading order
 
 If you are new: read **001 -> 006 -> 007 -> 008 through 068 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
+If you are new: read **001 -> 006 -> 007 -> 008 through 067 in order**. That is the entire arc from "vendor a parser" to "render a page with CSS."
 
 Skip 003 and 004 on a first pass. They record decisions that later ADRs superseded. Their value is historical context, not current guidance.

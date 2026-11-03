@@ -7,6 +7,7 @@
 
 // ADR-034: SVG decode + data URL handling.
 #include <librsvg/rsvg.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include <cstdio>
 #include <cstring>
@@ -462,6 +463,66 @@ cairo_surface_t* RenderPipeline::get_image_surface(
             return CAIRO_STATUS_SUCCESS;
         };
         surf = cairo_image_surface_create_from_png_stream(cb, &ctx);
+        if (surf && cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+            cairo_surface_destroy(surf);
+            surf = nullptr;
+        }
+    }
+    // ADR-067: JPEG magic FF D8 FF (JFIF, EXIF, raw -- three
+    // bytes covers all variants; fourth byte is marker type).
+    // Decoded via gdk-pixbuf, which is transitively linked via
+    // GTKMM4 (pkg_check_modules at CMakeLists.txt:47).
+    else if (bytes.size() >= 3 &&
+             static_cast<unsigned char>(bytes[0]) == 0xFF &&
+             static_cast<unsigned char>(bytes[1]) == 0xD8 &&
+             static_cast<unsigned char>(bytes[2]) == 0xFF) {
+        GInputStream* stream = g_memory_input_stream_new_from_data(
+            bytes.data(), static_cast<gssize>(bytes.size()), nullptr);
+        GError* err = nullptr;
+        GdkPixbuf* pixbuf = gdk_pixbuf_new_from_stream(stream, nullptr, &err);
+        g_object_unref(stream);
+        if (err) { g_error_free(err); return nullptr; }
+        if (!pixbuf) return nullptr;
+
+        // ADR-067: gdk_cairo_surface_create_from_pixbuf lives in
+        // gdk4 (via GTK4), which honeybee_lib does not link --
+        // only the browser executable does. Manual pixel copy keeps
+        // the render library GTK-free (test binary builds without GTK).
+        //
+        // Force RGBA (JPEG has no alpha; gdk returns RGB).
+        GdkPixbuf* rgba = nullptr;
+        if (gdk_pixbuf_get_has_alpha(pixbuf)) {
+            rgba = GDK_PIXBUF(g_object_ref(pixbuf));
+            g_object_unref(pixbuf);
+        } else {
+            rgba = gdk_pixbuf_add_alpha(pixbuf, FALSE, 0, 0, 0);
+            g_object_unref(pixbuf);
+            if (!rgba) return nullptr;
+        }
+
+        const int w = gdk_pixbuf_get_width(rgba);
+        const int h = gdk_pixbuf_get_height(rgba);
+        const int src_stride = gdk_pixbuf_get_rowstride(rgba);
+        const guchar* src_px = gdk_pixbuf_get_pixels(rgba);
+
+        surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        if (!surf) { g_object_unref(rgba); return nullptr; }
+
+        unsigned char* dst_px = cairo_image_surface_get_data(surf);
+        const int dst_stride = cairo_image_surface_get_stride(surf);
+        for (int y = 0; y < h; ++y) {
+            const guchar* s = src_px + y * src_stride;
+            unsigned char* d = dst_px + y * dst_stride;
+            for (int x = 0; x < w; ++x) {
+                // GDK RGBA (R G B A bytes) -> Cairo ARGB32 LE (B G R A)
+                d[x*4 + 0] = s[x*4 + 2];
+                d[x*4 + 1] = s[x*4 + 1];
+                d[x*4 + 2] = s[x*4 + 0];
+                d[x*4 + 3] = s[x*4 + 3];
+            }
+        }
+        cairo_surface_mark_dirty(surf);
+        g_object_unref(rgba);
         if (surf && cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
             cairo_surface_destroy(surf);
             surf = nullptr;
