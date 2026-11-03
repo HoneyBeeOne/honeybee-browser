@@ -3919,3 +3919,76 @@ TEST_CASE("absolute: bottom:50% resolves for free (parse_off_v)",
     CHECK(std::abs(child->y - 1.0f) < 0.5f);
 }
 
+// =============================================================
+// ADR-066: intrinsic width for auto-width floats
+// =============================================================
+
+TEST_CASE("float: img child gives intrinsic width (ADR-066)",
+          "[layout][float][adr-066]") {
+    // Float div has no explicit width, contains one img (20x20).
+    // Without ADR-066, probe fills parent content (800), narrowing
+    // following paragraph to ~0.
+    // With ADR-066, probe re-lays-out at 20 (img width), narrowing
+    // paragraph to ~780.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='a.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 20.0f;
+        d.height = 20.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Readable width: paragraph narrowed by ~20 (img), so ~780
+    CHECK(ps[0]->width > 700.0f);
+    CHECK(ps[0]->width < 800.0f);
+}
+
+TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
+          "[layout][float][adr-066]") {
+    // Float div has explicit width:120px. ADR-066's auto-width
+    // check should skip re-layout. Behaviour identical to pre-ADR-066.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='a.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0;width:120px}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 20.0f;
+        d.height = 20.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Narrowed by ~120 (explicit width), so ~680
+    CHECK(ps[0]->width > 600.0f);
+    CHECK(ps[0]->width < 720.0f);
+}
+

@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <title>ADR-066: float intrinsic width</title>
+  <style>
+    body { margin: 20px; font-family: sans-serif; font-size: 14px;
+           color: #333; }
+    .container { width: 720px; padding: 12px; margin-bottom: 20px;
+                 background-color: #f0f0f0; border: 1px solid #ccc; }
+    .figure-float { float: right; margin: 0; padding: 0; }
+    .figure-float img { display: block; }
+    .figure-float p { margin: 0; }
+    .caption { font-size: 12px; color: #555; margin-top: 4px; }
+    .label { margin-top: 20px; margin-bottom: 6px; color: #666; }
+
+    /* Row 1: no explicit width, should trigger re-layout */
+    .auto-width { /* intentionally no width */ }
+
+    /* Row 2: explicit width, should NOT re-layout (control) */
+    .fixed-width { width: 120px; }
+  </style>
+</head>
+<body>
+  <div class="label">Row 1: float:right + img (no explicit width). Text beside should be ~600px wide (auto re-layout at 100px img).</div>
+  <div class="container">
+    <div class="figure-float auto-width">
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='120'><rect width='100' height='120' fill='%23d35400'/></svg>">
+      <p class="caption">Orange 100x120</p>
+    </div>
+    <p>This paragraph should be readable, not narrowed to 1-3 words per line. The floated figure above has no explicit width, so the intrinsic-width fix measures the img (100px) and narrows this paragraph to approximately 720-100-12 = 608px. If ADR-066 fails, this paragraph collapses to a single-word-per-line column and the orange figure fills the entire 720px row.</p>
+  </div>
+
+  <div class="label">Row 2 (control): float:right + img + explicit width:120px. Should behave same as row 1 (readable text).</div>
+  <div class="container">
+    <div class="figure-float fixed-width">
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='120'><rect width='100' height='120' fill='%232980b9'/></svg>">
+      <p class="caption">Blue 100x120</p>
+    </div>
+    <p>This paragraph should also be readable. The floated div has explicit width:120px, so the existing ADR-030 path applies without re-layout. ADR-066 does not touch this case. If ADR-066 has regressed the explicit-width path, this paragraph would collapse like row 1's broken state before the fix.</p>
+  </div>
+</body>
+</html>
