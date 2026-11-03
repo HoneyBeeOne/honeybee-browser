@@ -3992,3 +3992,70 @@ TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
     CHECK(ps[0]->width < 720.0f);
 }
 
+TEST_CASE("img: HTML width attribute overrides intrinsic (ADR-066 Layer 1)",
+          "[layout][img][adr-066]") {
+    // <img width="100"> with intrinsic dims 500x400. Without
+    // Layer 1, layout uses intrinsic 500. With Layer 1, HTML
+    // width attribute wins (presentational hint), yielding 100.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><img src='a.png' width='100'></body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 500.0f;
+        d.height = 400.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+    const auto imgs = find_all_boxes(root, "img");
+    REQUIRE(imgs.size() == 1);
+    // Width from HTML attr = 100, not intrinsic 500
+    CHECK(imgs[0]->width > 95.0f);
+    CHECK(imgs[0]->width < 105.0f);
+    // Height from aspect (100 * 400/500 = 80)
+    CHECK(imgs[0]->height > 75.0f);
+    CHECK(imgs[0]->height < 85.0f);
+}
+
+TEST_CASE("float: huge intrinsic img caps at half-parent (ADR-066 Layer 2)",
+          "[layout][float][adr-066]") {
+    // img with intrinsic dims 900x900 (bigger than viewport 800),
+    // no HTML width attribute. Probe lays out at 800 (clamped),
+    // img fills probe (800). Without Layer 2, walk's
+    // "img_w < probe_w - 1" check skips (800 vs 799), no re-layout,
+    // narrow_w = 0. With Layer 2, cap to half (400), re-layout at
+    // 400, narrow_w = 400.
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='f'><img src='big.png'></div>"
+        "<p class='p'>some text here</p>"
+        "</body></html>");
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        "body,html{margin:0;padding:0}"
+        " .f{float:right;margin:0;padding:0}"
+        " .p{margin:0;padding:0}");
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 800.0f);
+    auto fake_imgs = [](const std::string&) {
+        honeybee::renderer::layout::ImageDim d;
+        d.valid = true;
+        d.width = 900.0f;
+        d.height = 900.0f;
+        return d;
+    };
+    auto root = honeybee::renderer::layout::layout(
+        *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+    const auto ps = find_all_boxes(root, "p");
+    REQUIRE(ps.size() == 1);
+    // Cap at half (400), narrow_w = 800 - 400 = 400 (readable)
+    CHECK(ps[0]->width > 350.0f);
+    CHECK(ps[0]->width < 450.0f);
+}
+

@@ -1325,8 +1325,7 @@ LayoutBox layout_element(const dom::Element& el,
                                         const layout::LayoutBox*>(wn);
                                     if (wb->element &&
                                         wb->element->tag() == "img" &&
-                                        wb->width > 0.0f &&
-                                        wb->width < probe->width - 1.0f) {
+                                        wb->width > 0.0f) {
                                         img_w = wb->width;
                                         break;
                                     }
@@ -1347,6 +1346,19 @@ LayoutBox layout_element(const dom::Element& el,
                                     for (const auto& wc : wic->children) {
                                         wstack.push_back(wc.get());
                                     }
+                                }
+                            }
+                            // ADR-066 Layer 2: cap at half-parent.
+                            // Safety net for huge intrinsic dims
+                            // without an HTML width attribute (e.g.
+                            // an SVG whose natural size fills the
+                            // parent). Without this, img_w == content_w
+                            // skips the re-layout check and text gets
+                            // narrowed to ~0.
+                            if (img_w > 0.0f) {
+                                const float half_w = content_w * 0.5f;
+                                if (half_w > 50.0f && img_w > half_w) {
+                                    img_w = half_w;
                                 }
                             }
                             if (img_w > 0.0f && img_w < content_w - 10.0f) {
@@ -2039,6 +2051,32 @@ LayoutBox layout_element(const dom::Element& el,
                         h && !h->empty() && *h != "auto") {
                         const float p = parse_length(*h, ctx);
                         if (p > 0.0f) want_h = p;
+                    }
+                }
+                // ADR-066 Layer 1: HTML width/height attributes as
+                // presentational hints. Precedence: CSS width wins,
+                // HTML attr is fallback, intrinsic last. Wikipedia's
+                // <figure> photos use <img width="220"> with no CSS
+                // width -- ignored pre-Layer-1, so intrinsic dims
+                // (945px) collapsed following text to 22px.
+                if (want_w == 0.0f) {
+                    if (auto w_attr = el.get_attribute("width");
+                        !w_attr.empty() &&
+                        w_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(w_attr);
+                            if (v > 0.0f) want_w = v;
+                        } catch (...) {}
+                    }
+                }
+                if (want_h == 0.0f) {
+                    if (auto h_attr = el.get_attribute("height");
+                        !h_attr.empty() &&
+                        h_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(h_attr);
+                            if (v > 0.0f) want_h = v;
+                        } catch (...) {}
                     }
                 }
                 if (want_w > 0.0f && want_h > 0.0f) {
