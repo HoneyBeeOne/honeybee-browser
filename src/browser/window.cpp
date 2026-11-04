@@ -135,7 +135,6 @@ HoneyBeeWindow::HoneyBeeWindow()
     // وهذا يضمن وجود الإصدار في مكان واحد فقط.
     // ---------------------------------------------------------
 
-
     // ---------------------------------------------------------
     // الخطوة السادسة: إعداد شريط الحالة
     //
@@ -181,7 +180,12 @@ HoneyBeeWindow::HoneyBeeWindow()
     // Pointer coordinates remain in layout space: GDK
     // translates via the widget hierarchy, so hit-test and
     // hover from ADR-018/019/020 need no changes.
-    m_scroll_window.set_child(m_drawing_area);
+    // ADR-069: spacer-tetris. DrawingArea stays viewport-sized;
+    // spacers above/below provide the scrollable content height.
+    m_content_box.append(m_top_spacer);
+    m_content_box.append(m_drawing_area);
+    m_content_box.append(m_bottom_spacer);
+    m_scroll_window.set_child(m_content_box);
     m_scroll_window.set_policy(Gtk::PolicyType::NEVER,
                                Gtk::PolicyType::AUTOMATIC);
     // ADR-021: non-overlay scrollbar takes real space on the
@@ -191,6 +195,20 @@ HoneyBeeWindow::HoneyBeeWindow()
     m_scroll_window.set_overlay_scrolling(false);
     m_scroll_window.set_vexpand(true);
 
+    // ADR-069: listen to ScrolledWindow's vadjustment.
+    // value_changed fires on every scroll position change; the
+    // handler updates m_scroll_y, resizes the tetris so the
+    // DrawingArea stays anchored to the viewport, and queues
+    // a repaint at the new content offset.
+    m_vadjustment = m_scroll_window.get_vadjustment();
+
+    if (m_vadjustment) {
+        m_vadjustment->signal_value_changed().connect([this]() {
+            m_scroll_y = m_vadjustment->get_value();
+            sync_drawing_area_size();
+            m_drawing_area.queue_draw();
+        });
+    }
     m_root_box.append(m_scroll_window);
 
     m_root_box.append(m_status_bar);
@@ -198,7 +216,9 @@ HoneyBeeWindow::HoneyBeeWindow()
     // نُعيّن الحاوية الرئيسية كالابن الوحيد للنافذة.
     // View area setup: draw callback and welcome page.
     m_drawing_area.set_hexpand(true);
-    m_drawing_area.set_vexpand(true);
+    // ADR-069: vexpand must be false -- DrawingArea's height is
+    // exactly viewport_h via size_request, set by tetris logic.
+    m_drawing_area.set_vexpand(false);
     m_drawing_area.set_draw_func(
         [this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
             on_draw(cr, w, h);
@@ -224,7 +244,6 @@ HoneyBeeWindow::HoneyBeeWindow()
             if (n_press == 1) on_link_clicked(x, y);
         });
     m_drawing_area.add_controller(m_click_controller);
-
 
     const std::string welcome =
         "<html><head><title>HoneyBee Browser</title>"
@@ -588,17 +607,41 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
     cr->set_source_rgb(1.0, 1.0, 1.0);
     cr->paint();
 
-    // Paint the layout tree.
-    m_pipeline.paint(cr->cobj());
+    // ADR-069: translate by -scroll_y so layout y=scroll_y maps
+    // to DrawingArea y=0. Pass visible range so paint() culls
+    // off-screen subtrees (avoids walking the full 30,000px tree
+    // every frame).
+    cr->save();
+    cr->translate(0.0, -m_scroll_y);
+    const float visible_top = static_cast<float>(m_scroll_y);
+    const float visible_bottom =
+        static_cast<float>(m_scroll_y + viewport_h);
+    m_pipeline.paint(cr->cobj(), visible_top, visible_bottom);
+    cr->restore();
 }
 
 void HoneyBeeWindow::sync_drawing_area_size() {
     if (!m_pipeline.has_page()) return;
-    if (m_last_width <= 0) return;
+    // ADR-069: use ScrolledWindow height (always allocated) as
+    // the viewport anchor. m_last_width would be -1 until the
+    // first on_draw, but sync must run from render_html to give
+    // DrawingArea nonzero height so on_draw can fire at all.
+    const int viewport_h = m_scroll_window.get_height();
+    if (viewport_h <= 0) return;
     const float h = m_pipeline.layout_height();
     if (h <= 0.0f) return;
     const int h_px = static_cast<int>(std::ceil(h));
-    m_drawing_area.set_size_request(-1, h_px);
+
+    // ADR-069: spacer-tetris. sum = top + viewport + bottom
+    // = h_px (content height). DrawingArea always occupies the
+    // visible slice at scroll_y in box coords.
+    const int scroll_y_px = static_cast<int>(m_scroll_y);
+    const int drawing_area_h = std::min(viewport_h, h_px);
+    const int bottom_h =
+        std::max(0, h_px - scroll_y_px - drawing_area_h);
+    m_top_spacer.set_size_request(-1, scroll_y_px);
+    m_drawing_area.set_size_request(-1, drawing_area_h);
+    m_bottom_spacer.set_size_request(-1, bottom_h);
 }
 
 // =============================================================
@@ -614,6 +657,9 @@ void HoneyBeeWindow::sync_drawing_area_size() {
 // =============================================================
 
 void HoneyBeeWindow::on_mouse_motion(double x, double y) {
+    // ADR-069: DrawingArea is viewport-sized; add scroll offset
+    // to convert viewport y to layout y.
+    y = y + m_scroll_y;
     if (!m_pipeline.has_page()) return;
 
     const auto* el = m_pipeline.hit_test(
@@ -650,6 +696,8 @@ void HoneyBeeWindow::on_mouse_leave() {
 // =============================================================
 
 void HoneyBeeWindow::on_link_clicked(double x, double y) {
+    // ADR-069: same as on_mouse_motion -- viewport-relative y.
+    y = y + m_scroll_y;
     if (!m_pipeline.has_page()) return;
 
     const auto* el = m_pipeline.hit_test(

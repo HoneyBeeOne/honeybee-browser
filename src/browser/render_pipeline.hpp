@@ -56,7 +56,13 @@ public:
                   float viewport_height = 0.0f);  // ADR-052
 
     // Paint the current layout tree via Pango.
-    void paint(cairo_t* cr) const;
+    //
+    // ADR-069: visible_top / visible_bottom enable viewport
+    // culling. Defaults disable culling -- existing callers
+    // (and tests) keep full-tree behavior.
+    void paint(cairo_t* cr,
+               float visible_top = -1e30f,
+               float visible_bottom = 1e30f) const;
 
     // The document's <title>, or empty if no page is loaded.
     std::string title() const;

@@ -587,14 +587,17 @@ cairo_surface_t* RenderPipeline::get_image_surface(
     return surf;
 }
 
-void RenderPipeline::paint(cairo_t* cr) const {
+void RenderPipeline::paint(cairo_t* cr,
+                           float visible_top,
+                           float visible_bottom) const {
     renderer::paint::ImageProvider images;
     images.get_surface = [this](const std::string& url) {
         return get_image_surface(url);
     };
     images.base_url = state_.base_url;
     renderer::paint::paint(
-        cr, layout_root_, &draw_line_with_pango, &images);
+        cr, layout_root_, &draw_line_with_pango, &images,
+        visible_top, visible_bottom);
 }
 
 std::string RenderPipeline::title() const {

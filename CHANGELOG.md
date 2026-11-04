@@ -660,6 +660,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 691 / 2641 (no new tests; fixture verification is the primary proof).
 
+- **Viewport-clipped paint architecture** (ADR-069): DrawingArea is always viewport-sized (never ~30,000px). ScrolledWindow's child is now a VBox with [top_spacer(scroll_y), DrawingArea(viewport_h), bottom_spacer(content - scroll_y - viewport_h)]. On scroll adjustment change, spacers resize and DrawingArea repaints with cr->translate(0, -scroll_y) + visible range passed to paint.
+
+  **Culling lesson** (the actual learning): first attempt skipped Box children whose layout y-bound was off-screen -- but a Box's y/height does NOT bound its descendants (absolute positioning, floats, overflow:visible). Wikipedia's infobox disappeared mid-scroll because visible children lived inside an off-screen-at-y-bound ancestor. **Fix:** leaf nodes (Text / InlineContext) are culled at the parent's dispatch; Box nodes are always recursed and gate only their own paint ops on box_on_screen.
+
+  **Production-verified 2026-11-04**: Wikipedia renders correctly with culling (content visible at all scroll positions), scroll smooth, no crash, all image formats render, hover/click work. **GSK_RENDERER=gl also works now** -- the architectural payoff: ADR-068's Cairo workaround bypassed the crash, ADR-069 eliminates its root cause. ADR-068's setenv("GSK_RENDERER", "cairo", 0) retained as defense-in-depth.
+
+  **Diagnostic chain**: iteration 1 = culling bug; iteration 2 = fprintf proved tetris math correct (top+draw+bot=h_px at every tick); iteration 3 = HONEYBEE_NO_CULL=1 confirmed culling was the culprit.
+
+  Test count unchanged at 691 / 2641.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

@@ -131,6 +131,26 @@ private:
     // scrollbar.
     Gtk::ScrolledWindow m_scroll_window;
 
+    // ADR-069: viewport-clipped paint architecture.
+    // ScrolledWindow's child is m_content_box, which stacks:
+    //   [m_top_spacer    (height = m_scroll_y)]
+    //   [m_drawing_area  (height = viewport height)]
+    //   [m_bottom_spacer (height = content_h - scroll_y - viewport_h)]
+    // DrawingArea is always viewport-sized so GSK never sees a
+    // >25,000px surface (the trigger for ADR-068's GSK GPU crash).
+    // ScrolledWindow still provides scrollbar, wheel, keyboard.
+    Gtk::Box m_content_box{Gtk::Orientation::VERTICAL};
+    Gtk::Box m_top_spacer{Gtk::Orientation::VERTICAL};
+    Gtk::Box m_bottom_spacer{Gtk::Orientation::VERTICAL};
+
+    // ADR-069: ScrolledWindow's vertical adjustment; drives
+    // m_scroll_y and repaints on scroll.
+    Glib::RefPtr<Gtk::Adjustment> m_vadjustment;
+
+    // ADR-069: current scroll position in layout (CSS) pixels.
+    // Sources from m_vadjustment->get_value() on every change.
+    double m_scroll_y = 0.0;
+
     // شريط الحالة: تخطيط أفقي.
     // يحتوي على رسالة الحالة ورقم الإصدار.
     Gtk::Box m_status_bar;
