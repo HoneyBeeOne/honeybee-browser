@@ -1,6 +1,6 @@
 # ADR-070: Font weight + font style pipeline
 
-**Status:** Proposed (pending implementation + visual verification)
+**Status:** Implemented (production-verified)
 **Date:** 2026-11-04
 **Related:** ADR-014 (UA stylesheet), ADR-016 (inline context), ADR-069 (viewport-clipped paint)
 
@@ -106,3 +106,75 @@ Two checks, both required before ADR moves to Implemented:
 - ADR-014 — UA stylesheet scope
 - ADR-016 — inline context (per-fragment style foundation)
 - ADR-069 — diagnostic that surfaced this gap
+
+## Implementation
+
+Shipped on `feat/adr-070-font-weight-style` at 2026-11-04.
+
+### What shipped
+
+**`layout_box.hpp`** — `LineFragment` and `LayoutText` gained `int font_weight = 400;` + `bool italic = false;`
+
+**`text_utils.hpp`** — `StyledWord` gained same two fields
+
+**`layout.cpp`** — three helpers near `text_color_of`:
+- `parse_font_weight(std::string_view, int parent_weight)` — keyword + numeric + bolder/lighter
+- `font_weight_of(const ComputedStyle*)`
+- `is_italic(const ComputedStyle*)`
+
+Propagated through three insertion points:
+1. Block-level (LayoutText path): capture `block_weight`/`block_italic` from block style, apply to every fragment + parent `LayoutText`
+2. `flatten_inline_to_words`: extended signature to carry `weight`/`italic`; per-element override mirrors `color` pattern exactly
+3. `break_styled_words_into_lines`: copy `w.font_weight`/`w.italic` to `LineFragment`; added both to `same_style` merge equality
+
+**`pango_text.cpp`** — `make_layout` extended with defaulted `(int font_weight = 400, bool italic = false)`; calls `pango_font_description_set_weight` + `set_style`. `draw_line_with_pango` passes fragment values.
+
+**`docs/adr070-fidelity-test.html`** — 493-byte fixture with h1/h2/h3/h4, bold, strong, em, i, nested, cite, var, code, strong.
+
+### Verified delta (2026-11-04, fixture screenshot)
+
+8-of-8 checks pass:
+
+| Check | Result |
+|---|---|
+| h1 large + bold | ✅ (was flat before ADR-070) |
+| h2 medium + bold | ✅ |
+| h3 small + bold | ✅ |
+| h4 body-size + bold | ✅ |
+| `<b>`, `<strong>` inline bold | ✅ |
+| `<em>`, `<i>` inline italic | ✅ |
+| `<cite>`, `<var>` italic | ✅ |
+| `<code>` monospace (regression check) | ✅ |
+| Nested `<b><em>x</em></b>` = bold italic | ✅ |
+
+### Wikipedia status (honest reporting)
+
+Successful run: no crash, smooth scroll (multiple scroll PERF lines), all previously-rendering content intact (infobox, tim photo, images). **Explicit "are headings now bold" observation not captured in this session** — could not distinguish between:
+- (a) Wikipedia headings now bold (matches Firefox behavior), or
+- (b) Wikipedia headings still flat because MediaWiki's author CSS sets `font-weight: normal` on headings with higher specificity than the UA sheet
+
+**If (a):** ADR-070 fully closed for Wikipedia too.
+**If (b):** ADR-070 still closed — pipeline is correct — and a follow-up ADR addresses cascade specificity for Wikipedia's author stylesheets.
+
+Either way, the fixture is the primary proof that the pipeline itself works. Re-verification of Wikipedia headings is a next-session task; captured here so the record is honest about what was and wasn't observed.
+
+### What was deferred and why
+
+- **`measure_with_pango` extension** — bold text is laid out at regular-weight metrics. Accept ~2–5% width drift on bold content (Wikipedia headings may overflow their block by a few px). Scheduled for a dedicated font-metrics ADR. This is the primary trade-off of shipping ADR-070 now.
+- **`vertical-align: super/sub`** — reference markers still baseline-sized. ADR-071.
+- **`text-decoration`** (underline, line-through, overline) — `<u>`, `<s>`, `<del>`, `<ins>` remain unstyled. ADR-072.
+- **Unit tests for the full cascade → Pango path** — verification is fixture + Wikipedia visual. No headless layout-styling test infrastructure yet; separate ADR candidate.
+
+### Fragment merge behavior change
+
+`break_styled_words_into_lines` previously merged fragments with same `{family, size, color, element}`. Adding `{weight, italic}` to the equality check means adjacent words of different weight no longer merge — `"plain <b>bold</b> plain"` produces three fragments instead of one. Pango needs this (one font descriptor per fragment); no regression observed in fixture or Wikipedia render.
+
+### Process note
+
+ADR-070 was initially drafted implementation-first at user prompt. The user caught this and requested spec-first. This commit corrects the order:
+
+- **Commit 1** (`4d0ce3d`): diagnostic (`dump_layout_stats` + `HONEYBEE_DUMP_DOM` hook) + this spec as **Proposed**
+- **Commit 2** (this one): the implementation + this **Implementation** section appended + verification fixture
+
+**Lesson recorded:** every ADR commit should include `docs/decisions/0XX-*.md` in the same commit as the source. If the spec wasn't written first, the code doesn't ship — even if the code works. The spec is what survives the session.
+

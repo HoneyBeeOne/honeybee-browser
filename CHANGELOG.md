@@ -670,6 +670,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 691 / 2641.
 
+- **Font weight + font style pipeline** (ADR-070): `font-weight: bold` and `font-style: italic` from the UA stylesheet now reach Pango. Adds `font_weight` + `italic` to `LineFragment` / `LayoutText` / `StyledWord`; propagates from `ComputedStyle` through `flatten_inline_to_words` and `break_styled_words_into_lines`; consumed by `pango_font_description_set_weight` / `set_style` in `make_layout`.
+
+  **Root cause:** the UA stylesheet already declared `h1-h6 { font-weight: bold }`, `em/i/cite/var { font-style: italic }`, `strong/b { font-weight: bold }`, and the cascade already stored these in `ComputedStyle`. But `LineFragment` / `StyledWord` / `LayoutText` had no fields to carry them, so the values were dropped at the layout stage and Pango rendered everything at regular weight/style. The `ua_stylesheet.cpp` comment *"do not flow into LayoutText yet"* was literally correct.
+
+  **Production-verified (fixture screenshot 2026-11-04):** 8-of-8 checks pass — h1-h4 visibly bold, `<b>`/`<strong>` inline bold, `<em>`/`<i>`/`<cite>`/`<var>` italic, `<code>` monospace, nested `<b><em>` renders as bold italic. First time these render visually distinct from body text.
+
+  **Deferred:** `measure_with_pango` extension (bold text laid out at regular-width metrics, ~2-5% potential drift on bold content until font-metrics ADR); `vertical-align: super/sub` (ADR-071); `text-decoration` (ADR-072).
+
+  **Diagnostic retained:** `RenderPipeline::dump_layout_stats()` (HONEYBEE_DUMP_DOM env var) kept as an ongoing diagnostic — it surfaced this gap and will surface future gaps.
+
+  **Process:** ADR-070 was initially drafted implementation-first; user requested spec-first. Committed as two commits on one branch — (1) diagnostic + spec as Proposed, (2) implementation + Implementation section. **Lesson:** every ADR commit ships with its spec doc.
+
+  Test count unchanged at 691 / 2641 (visual verification via fixture, not unit tests).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

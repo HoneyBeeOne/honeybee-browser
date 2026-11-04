@@ -1,3 +1,4 @@
+#include <string_view>
 #include "renderer/layout/layout.hpp"
 #include "renderer/layout/grid_layout.hpp"
 
@@ -220,6 +221,41 @@ Color text_color_of(const css::ComputedStyle* style) {
     return v ? parse_color(*v) : Color::black();
 }
 
+// ADR-070: parse font-weight keyword or numeric value.
+// "bolder"/"lighter" are relative to parent_weight.
+int parse_font_weight(std::string_view v, int parent_weight) {
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t'))
+        v.remove_prefix(1);
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t'))
+        v.remove_suffix(1);
+    if (v.empty()) return parent_weight;
+    if (v == "normal") return 400;
+    if (v == "bold") return 700;
+    if (v == "bolder") return std::min(900, parent_weight + 100);
+    if (v == "lighter") return std::max(100, parent_weight - 100);
+    int n = 0;
+    for (char c : v) {
+        if (c < '0' || c > '9') break;
+        n = n * 10 + (c - '0');
+    }
+    if (n >= 100 && n <= 900) return n;
+    return parent_weight;
+}
+
+int font_weight_of(const css::ComputedStyle* style) {
+    if (!style) return 400;
+    const auto v = style->get("font-weight");
+    if (!v) return 400;
+    return parse_font_weight(*v, 400);
+}
+
+bool is_italic(const css::ComputedStyle* style) {
+    if (!style) return false;
+    const auto v = style->get("font-style");
+    if (!v) return false;
+    return *v == "italic" || *v == "oblique";
+}
+
 void flatten_inline_text(const dom::Node& node, std::string& out) {
     if (node.type() == dom::NodeType::Text) {
         const auto& tn = static_cast<const dom::TextNode&>(node);
@@ -247,6 +283,8 @@ void flatten_inline_to_words(
     const css::ComputedStyleMap& styles,
     const std::string& family,
     float size,
+    int weight,
+    bool italic,
     const Color& default_color,
     bool& prev_had_space,
     std::vector<StyledWord>& out,
@@ -269,6 +307,8 @@ void flatten_inline_to_words(
             w.text = std::string(data.substr(start, i - start));
             w.font_family = family;
             w.font_size = size;
+            w.font_weight = weight;
+            w.italic = italic;
             w.color = default_color;
             w.preceded_by_space =
                 !out.empty() && (prev_had_space || pending_ws);
@@ -298,15 +338,26 @@ void flatten_inline_to_words(
         }
 
         Color color = default_color;
+        int child_weight = weight;
+        bool child_italic = italic;
         if (it != styles.end()) {
             const auto cv = it->second.get("color");
             if (cv) {
                 const Color c = parse_color(*cv);
                 if (c.a > 0.0f) color = c;
             }
+            // ADR-070: element-level weight/italic override. Same pattern
+            // as color -- element style overrides inherited.
+            if (auto wv = it->second.get("font-weight"); wv) {
+                child_weight = parse_font_weight(*wv, weight);
+            }
+            if (auto sv = it->second.get("font-style"); sv) {
+                child_italic = (*sv == "italic" || *sv == "oblique");
+            }
         }
         for (const auto& child : el.children()) {
-            flatten_inline_to_words(*child, styles, family, size, color,
+            flatten_inline_to_words(*child, styles, family, size,
+                                    child_weight, child_italic, color,
                                     prev_had_space, out, &el);
         }
     }
@@ -936,6 +987,10 @@ LayoutBox layout_element(const dom::Element& el,
 
         const std::string family = font_family_of(style);
         const Color tc = text_color_of(style);
+        // ADR-070: block-level weight/italic apply to every fragment
+        // in the LayoutText path (uniform-style run).
+        const int block_weight = font_weight_of(style);
+        const bool block_italic = is_italic(style);
 
         // Determine whether any inline element (as opposed to only
         // text nodes) is present in the run.
@@ -967,6 +1022,8 @@ LayoutBox layout_element(const dom::Element& el,
             for (auto& f : fragments) {
                 f.font_family = family;
                 f.font_size = own_font_size;
+                f.font_weight = block_weight;
+                f.italic = block_italic;
                 f.color = tc;
                 f.x = rtl ? content_x + content_w - f.width : content_x;
                 f.y += cursor_y;
@@ -983,6 +1040,8 @@ LayoutBox layout_element(const dom::Element& el,
             lt->text = std::move(collapsed);
             lt->font_family = family;
             lt->font_size = own_font_size;
+            lt->font_weight = block_weight;
+            lt->italic = block_italic;
             lt->color = tc;
             lt->rtl = rtl;
             apply_inline_bg_pp(fragments, styles, own_font_size,
@@ -999,6 +1058,7 @@ LayoutBox layout_element(const dom::Element& el,
         bool prev_had_space = false;
         for (const auto* n : inline_run) {
             flatten_inline_to_words(*n, styles, family, own_font_size,
+                                    block_weight, block_italic,
                                     tc, prev_had_space, words, &el);
         }
         inline_run.clear();
