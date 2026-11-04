@@ -39,7 +39,14 @@ struct ImageProvider {
     std::string base_url;
 };
 
+// ADR-069: viewport-clipped paint. When visible_top/visible_bottom
+// are provided, paint_children() culls subtrees whose layout box
+// lies entirely outside [visible_top, visible_bottom] (plus a
+// conservative margin for transforms/shadows). Defaults disable
+// culling -- existing callers keep full-tree behavior.
 void paint(cairo_t* cr, const layout::LayoutNode& root,
-           LineDrawer drawer, const ImageProvider* images);
+           LineDrawer drawer, const ImageProvider* images,
+           float visible_top = -1e30f,
+           float visible_bottom = 1e30f);
 
 } // namespace honeybee::renderer::paint

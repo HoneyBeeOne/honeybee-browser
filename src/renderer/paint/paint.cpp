@@ -238,7 +238,9 @@ void paint_children(
     cairo_t* cr,
     const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
     const LineDrawer& drawer,
-    const ImageProvider* images);
+    const ImageProvider* images,
+    float visible_top,
+    float visible_bottom);
 
 // ADR-044: trace a rounded-rect path. Radii in TL, TR, BR, BL
 // order. Each is clamped to min(w/2, h/2) -- Wikipedia's 2px on
@@ -286,13 +288,24 @@ void rounded_rect_path(cairo_t* cr, float x, float y,
 
 void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                const LineDrawer& drawer,
-               const ImageProvider* images) {
+               const ImageProvider* images,
+               float visible_top,
+               float visible_bottom) {
     // ADR-032: paint-authoritative culling. Skip the entire
     // subtree if visibility:hidden or opacity:0. Set on
     // LayoutBox::visible by layout_element. Handles both root
     // and child invocations since they all route through
     // paint_box().
     if (!box.visible) return;
+
+    // ADR-069: box-level paint gate. If box is entirely off-screen,
+    // skip its own paint ops (background, border, shadow, mask,
+    // image) but STILL recurse into paint_children — descendants
+    // may overflow visible.
+    constexpr float CULL_MARGIN_BOX = 128.0f;
+    const bool box_on_screen =
+        (box.y + box.height >= visible_top - CULL_MARGIN_BOX) &&
+        (box.y <= visible_bottom + CULL_MARGIN_BOX);
 
     // ADR-054: rotate transform.
     // ADR-058: translateY transform. Wrap the entire paint_box
@@ -323,6 +336,7 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
         did_transform = true;
     }
 
+    if (box_on_screen) {
     // ADR-043: draw box-shadow before background (CSS z-order:
     // shadow renders behind the element's own background/border).
     // Only non-inset, non-blurred shadows render in v1; inset
@@ -426,6 +440,8 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
         }
     }
 
+    } // ADR-069: end box_on_screen paint gate
+
     // ADR-039: clip children to content bounds when
     // overflow: hidden. Save / clip / paint / restore.
     if (box.clip_children) {
@@ -439,7 +455,8 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                         ch > 0.0f ? ch : 0.0f);
         cairo_clip(cr);
     }
-    paint_children(cr, box.children, drawer, images);
+    paint_children(cr, box.children, drawer, images,
+                   visible_top, visible_bottom);
     if (box.clip_children) cairo_restore(cr);
 
     // ADR-054: pop the rotate save if it was pushed above.
@@ -500,16 +517,30 @@ void paint_children(
     cairo_t* cr,
     const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
     const LineDrawer& drawer,
-    const ImageProvider* images) {
+    const ImageProvider* images,
+    float visible_top,
+    float visible_bottom) {
+    // ADR-069: cull margin for visual overflow beyond layout box
+    // (translateY transform, box-shadow, rotate bounding box).
+    constexpr float CULL_MARGIN = 128.0f;
     for (const auto& child : children) {
         if (!child) continue;
         switch (child->kind) {
             case layout::LayoutKind::Box:
+                // ADR-069 fix: NEVER cull a Box at the parent level.
+                // Descendants of an off-screen Box may still be on-screen
+                // (absolute positioning, floated figures, overflow:visible).
+                // paint_box() gates its own paint ops internally, but always
+                // recurses to find visible descendants.
                 paint_box(
                     cr, static_cast<const layout::LayoutBox&>(*child),
-                    drawer, images);
+                    drawer, images, visible_top, visible_bottom);
                 break;
             case layout::LayoutKind::Text: {
+                // ADR-069: leaf node — safe to cull off-screen text.
+                if (child->y + child->height
+                        < visible_top - CULL_MARGIN) break;
+                if (child->y > visible_bottom + CULL_MARGIN) break;
                 const auto& lt =
                     static_cast<const layout::LayoutText&>(*child);
                 // ADR-045: draw inline backgrounds first, then
@@ -521,6 +552,10 @@ void paint_children(
                 break;
             }
             case layout::LayoutKind::InlineContext: {
+                // ADR-069: leaf node — safe to cull off-screen text.
+                if (child->y + child->height
+                        < visible_top - CULL_MARGIN) break;
+                if (child->y > visible_bottom + CULL_MARGIN) break;
                 const auto& ctx =
                     static_cast<const layout::LayoutInlineContext&>(*child);
                 // ADR-045: draw inline backgrounds first, then
@@ -546,14 +581,16 @@ void paint(cairo_t* cr, const layout::LayoutNode& root,
 }
 
 void paint(cairo_t* cr, const layout::LayoutNode& root,
-           LineDrawer drawer, const ImageProvider* images) {
+           LineDrawer drawer, const ImageProvider* images,
+           float visible_top, float visible_bottom) {
     if (cr == nullptr || !drawer) return;
     HB_LOG(Paint, Debug, "paint: root kind=%d",
            static_cast<int>(root.kind));
     switch (root.kind) {
         case layout::LayoutKind::Box:
             paint_box(
-                cr, static_cast<const layout::LayoutBox&>(root), drawer, images);
+                cr, static_cast<const layout::LayoutBox&>(root), drawer, images,
+                visible_top, visible_bottom);
             break;
         case layout::LayoutKind::Text: {
             const auto& lt =
