@@ -220,6 +220,10 @@ struct LineFragment {
     std::string text;
     std::string font_family;
     float font_size = 16.0f;
+    // ADR-070: font weight + style. Numeric weight per CSS (400 = normal,
+    // 700 = bold). Consumed by Pango draw path via set_weight/set_style.
+    int font_weight = 400;
+    bool italic = false;
     Color color = Color::black();
 
     // ADR-045: inline-element background-image. Populated during
@@ -245,6 +249,9 @@ struct LayoutText final : LayoutNode {
     std::string text;
     std::string font_family;
     float font_size = 16.0f;
+    // ADR-070: carry block-level weight/italic into the LayoutText record.
+    int font_weight = 400;
+    bool italic = false;
     Color color = Color::black();
     std::vector<LineFragment> lines;
     bool rtl = false;

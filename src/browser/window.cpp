@@ -11,6 +11,7 @@
 // =============================================================
 
 // استيراد إعلان الصنف نفسه.
+#include <cstdlib>
 #include "window.hpp"
 
 #include <cmath>
@@ -494,6 +495,11 @@ void HoneyBeeWindow::render_html(const std::string& html) {
         set_title(title + " — HoneyBee");
     }
     m_drawing_area.queue_draw();
+
+    // ADR-070 diagnostic: dump layout tree stats when env var is set.
+    if (std::getenv("HONEYBEE_DUMP_DOM") != nullptr) {
+        m_pipeline.dump_layout_stats("render_html");
+    }
 }
 
 // =============================================================
@@ -516,6 +522,10 @@ void HoneyBeeWindow::render_with_preparsed_doc(
         set_title(title + " — HoneyBee");
     }
     m_drawing_area.queue_draw();
+
+    if (std::getenv("HONEYBEE_DUMP_DOM") != nullptr) {
+        m_pipeline.dump_layout_stats("render_with_preparsed_doc");
+    }
 }
 
 // =============================================================
