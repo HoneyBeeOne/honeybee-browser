@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace layout = honeybee::renderer::layout;
@@ -252,3 +253,97 @@ TEST_CASE("paint: LayoutInlineContext lines are painted",
     CHECK(is_blue(pixel_at(c.surface, 15, 35)));  // f2
     CHECK(is_white(pixel_at(c.surface, 15, 28))); // gap between f1 (ends y=26) and f2 (starts y=30)
 }
+
+// =============================================================
+// ADR-072: Regression tests for ADR-071 fixes.
+//
+// ADR-071 changed paint_children to only cull leaf nodes
+// (Text, InlineContext). Box children are always recursed, because
+// a Box's y+height does NOT bound its descendants (absolute
+// positioning, overflow, floats). These tests fail if that rule
+// is reverted.
+// =============================================================
+
+TEST_CASE("ADR-071: Box parent is not culled by its own height",
+          "[paint][adr071]") {
+    // Reproduction of the Wikipedia bug: <body> is clamped to the
+    // viewport height (641px) but contains <div> with height 30440.
+    // Text at y=1500 lives inside.
+    //
+    // Before ADR-071: paint_children(root=[body]) checked
+    //   body.y + body.height = 641 < visible_top - 128 = 1372
+    //   → TRUE → cull body → text never reached.
+    //
+    // After ADR-071: body is Box → not culled → recurse into body
+    //   → <div> is Box → not culled → recurse
+    //   → text at y=1500 is in visible range → drawer fires.
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 641.0f;
+
+    auto body = std::make_unique<layout::LayoutBox>();
+    body->width = 200.0f;
+    body->height = 641.0f;      // clamped to viewport
+    body->y = 0.0f;
+
+    auto content = std::make_unique<layout::LayoutBox>();
+    content->width = 200.0f;
+    content->height = 30000.0f;  // real content much taller
+    content->y = 0.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->y = 1500.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 10.0f, .y = 1500.0f,
+        .width = 20.0f, .height = 16.0f,
+        .text = "INSIDE",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    content->children.push_back(std::move(lt));
+    body->children.push_back(std::move(content));
+    root.children.push_back(std::move(body));
+
+    int draws = 0;
+    auto drawer = [&](cairo_t*, const layout::LineFragment&) { ++draws; };
+    paint::paint(c.cr, root, drawer, nullptr,
+                 1500.0f,   // visible_top (past body's height)
+                 2141.0f);  // visible_bottom
+
+    // If Box culling were restored, draws would be 0 (body culled).
+    CHECK(draws == 1);
+}
+
+TEST_CASE("ADR-071: Text leaf is still culled when off-screen",
+          "[paint][adr071]") {
+    // Guards the perf property: culling was NOT removed entirely.
+    // A Text node far outside the visible range must be skipped.
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 200.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->y = 50000.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 10.0f, .y = 50000.0f,
+        .width = 20.0f, .height = 16.0f,
+        .text = "OFFSCREEN",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    root.children.push_back(std::move(lt));
+
+    int draws = 0;
+    auto drawer = [&](cairo_t*, const layout::LineFragment&) { ++draws; };
+    paint::paint(c.cr, root, drawer, nullptr,
+                 5000.0f,   // visible_top
+                 5641.0f);  // visible_bottom
+
+    // Text at y=50000 is way off-screen → culled → drawer not called.
+    CHECK(draws == 0);
+}
+

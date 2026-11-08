@@ -678,6 +678,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Production-verified 2026-11-08:** History, Markup, and HTML5 headings are visible. Scrolling is completely smooth with no blank pages.
 
+- **ADR-071 regression tests** (ADR-072): Added 3 unit tests that fail if the ADR-071 fixes are reverted. Without these, future refactors of `layout_block_children` or `paint_children` could silently reintroduce the Wikipedia headings-invisible and blank-page-on-scroll bugs.
+
+  Tests:
+  - `test_layout.cpp`: inline `<h2>` with `display:inline` becomes `InlineContext`, not a `LayoutBox` at `y=0` (guards the inline-routing fix).
+  - `test_paint.cpp`: `Box` parent with `height=641px` containing descendants at `y=1500px` is not culled by its own height (guards the leaf-only culling rule; reproduces the `<body>`=641 / content=30440 Wikipedia case).
+  - `test_paint.cpp`: `Text` leaf far outside visible range is still culled (guards the perf property — if a future refactor disables culling entirely, this test fails).
+
+  Suite: 691 → 694 test cases, 2641 → 2646 assertions. All green.
+
+  **Documented gap:** these tests catch structural regressions, not visual ones. Wikipedia-scale visual fidelity remains a manual verification step per ADR.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
