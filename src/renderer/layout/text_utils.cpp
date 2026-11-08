@@ -221,8 +221,6 @@ std::vector<StyledLine> break_styled_words_into_lines(
         const bool same_style = last &&
             last->font_family == w.font_family &&
             last->font_size == w.font_size &&
-            last->font_weight == w.font_weight &&
-            last->italic == w.italic &&
             last->color == w.color &&
             last->element == w.element;
 
@@ -255,8 +253,6 @@ std::vector<StyledLine> break_styled_words_into_lines(
             f.x = cursor_x;
             f.font_family = w.font_family;
             f.font_size = w.font_size;
-            f.font_weight = w.font_weight;
-            f.italic = w.italic;
             f.color = w.color;
             f.height = wh;
             f.element = w.element;

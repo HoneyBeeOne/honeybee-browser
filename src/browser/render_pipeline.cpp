@@ -1,5 +1,4 @@
 #include "render_pipeline.hpp"
-#include <map>
 #include <vector>
 #include <algorithm>
 #include <chrono>
@@ -604,66 +603,6 @@ void RenderPipeline::paint(cairo_t* cr,
 std::string RenderPipeline::title() const {
     return doc_ ? doc_->title() : std::string{};
 }
-
-void RenderPipeline::dump_layout_stats(const char* phase) const {
-    if (!doc_) {
-        std::fprintf(stderr, "DUMP-DOM: no document loaded\n");
-        return;
-    }
-    std::map<std::string, int> tags;
-    std::map<int, int> kinds;
-    int total_nodes = 0;
-
-    std::function<void(const renderer::layout::LayoutNode&, int)> walk =
-        [&](const renderer::layout::LayoutNode& node, int depth) {
-        total_nodes++;
-        kinds[static_cast<int>(node.kind)]++;
-
-        if (node.kind != renderer::layout::LayoutKind::Box) {
-            return;  // Text / Inline / InlineContext: leaf, no children
-        }
-
-        const auto& box =
-            static_cast<const renderer::layout::LayoutBox&>(node);
-        std::string tag =
-            box.element ? std::string(box.element->tag()) : "<null>";
-        tags[tag]++;
-
-        // Print top of tree only (depth <= 3) to keep output readable.
-        if (depth <= 3) {
-            std::fprintf(stderr,
-                "DUMP-DOM: %*s%s y=%.0f h=%.0f w=%.0f\n",
-                depth * 2, "", tag.c_str(),
-                box.y, box.height, box.width);
-        }
-        for (const auto& child : box.children) {
-            if (child) walk(*child, depth + 1);
-        }
-    };
-    walk(layout_root_, 0);
-
-    std::fprintf(stderr, "\n=== DUMP-DOM [%s] TAG COUNTS ===\n", phase);
-    std::vector<std::pair<int, std::string>> sorted(tags.size());
-    int i = 0;
-    for (const auto& [tag, count] : tags) {
-        sorted[i++] = {count, tag};
-    }
-    std::sort(sorted.begin(), sorted.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-    for (const auto& [count, tag] : sorted) {
-        std::fprintf(stderr, "  %6d  <%s>\n", count, tag.c_str());
-    }
-
-    std::fprintf(stderr, "\n=== DUMP-DOM [%s] KIND COUNTS ===\n", phase);
-    const char* kind_names[] = {"Box", "Text", "Inline", "InlineContext"};
-    for (const auto& [k, count] : kinds) {
-        if (k >= 0 && k <= 3) {
-            std::fprintf(stderr, "  %6d  %s\n", count, kind_names[k]);
-        }
-    }
-    std::fprintf(stderr, "  %6d  TOTAL\n", total_nodes);
-}
-
 
 
 float RenderPipeline::layout_height() const {

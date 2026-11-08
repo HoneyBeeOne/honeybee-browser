@@ -39,9 +39,6 @@ struct StyledWord {
     std::string text;
     std::string font_family;
     float font_size = 16.0f;
-    // ADR-070: per-word weight/italic, set from element's ComputedStyle.
-    int font_weight = 400;
-    bool italic = false;
     Color color = Color::black();
     bool preceded_by_space = false;
 

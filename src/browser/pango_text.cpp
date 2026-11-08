@@ -14,9 +14,7 @@ namespace {
 PangoLayout* make_layout(cairo_t* cr,
                          std::string_view text,
                          std::string_view font_family,
-                         float font_size,
-                         int font_weight = 400,
-                         bool italic = false) {
+                         float font_size) {
     PangoLayout* layout = pango_cairo_create_layout(cr);
 
     std::string family_str = font_family.empty()
@@ -26,11 +24,6 @@ PangoLayout* make_layout(cairo_t* cr,
     pango_font_description_set_family(desc, family_str.c_str());
     pango_font_description_set_absolute_size(
         desc, static_cast<double>(font_size) * PANGO_SCALE);
-    // ADR-070: PangoWeight enum values match CSS numeric weights.
-    pango_font_description_set_weight(
-        desc, static_cast<PangoWeight>(font_weight));
-    pango_font_description_set_style(
-        desc, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
     pango_layout_set_font_description(layout, desc);
     pango_layout_set_text(layout, text.data(),
                           static_cast<int>(text.size()));
@@ -66,8 +59,7 @@ void draw_line_with_pango(
     if (cr == nullptr || frag.text.empty()) return;
 
     PangoLayout* layout =
-        make_layout(cr, frag.text, frag.font_family, frag.font_size,
-                    frag.font_weight, frag.italic);
+        make_layout(cr, frag.text, frag.font_family, frag.font_size);
     cairo_set_source_rgba(
         cr, frag.color.r, frag.color.g, frag.color.b, frag.color.a);
     cairo_move_to(cr, frag.x, frag.y);

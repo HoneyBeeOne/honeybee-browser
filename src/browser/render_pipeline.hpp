@@ -67,12 +67,6 @@ public:
     // The document's <title>, or empty if no page is loaded.
     std::string title() const;
 
-    // ADR-070 diagnostic: dump layout tree stats to stderr.
-    // Counts Box nodes by Element::tag(); counts all nodes by kind.
-    // `phase` labels the output so render_html vs render_with_preparsed_doc
-    // can be distinguished. Called when HONEYBEE_DUMP_DOM=1 is set.
-    void dump_layout_stats(const char* phase = "render") const;
-
     // True if a page has been rendered.
     bool has_page() const { return doc_ != nullptr; }
 
