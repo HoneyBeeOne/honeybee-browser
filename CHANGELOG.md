@@ -670,6 +670,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 691 / 2641.
 
+- **Inline Routing & Culling Regression Fix** (ADR-071): Fixed Wikipedia section headings disappearing and blank-page-on-scroll.
+  - **Inline Routing:** `layout_block_children` now routes `display: inline` children to `inline_run`. `flush_inline_run()` is called at the end of the loop to catch trailing inline elements (like `<h2>`).
+  - **Culling:** Restored ADR-069 rule that *only leaf nodes* (Text/InlineContext) are culled. `Box` nodes are always recursed. This fixes `<body>` (clamped to 641px) being culled when scrolling to `y=1045px`, which dropped the entire 30440px article body.
+  - **Viewport Guard:** `on_draw` skips layout if `viewport_h == 0` to prevent initial collapse.
+  - **Async Logging:** Upgraded ADR-046 logging to a background thread (non-blocking). Added `LayoutDetail` and `PaintDetail` categories. Hooked `log_shutdown()` into `main.cpp`.
+
+  **Production-verified 2026-11-08:** History, Markup, and HTML5 headings are visible. Scrolling is completely smooth with no blank pages.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

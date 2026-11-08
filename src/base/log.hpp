@@ -20,13 +20,15 @@
 namespace honeybee {
 
 enum class LogCategory : std::uint8_t {
-    Pipeline,   // main app, GTK lifecycle, load sequencing
-    Css,        // stylesheet parsing, rule extraction
-    Cascade,    // matching, specificity, computed styles
-    Layout,     // block / grid / flex / inline formatting
-    Paint,      // box paint, images, clips
-    Fetch,      // HTTP requests, CSS + image fetches
-    Event,      // click, wheel, hover, keyboard
+    Pipeline,     // main app, GTK lifecycle, load sequencing
+    Css,          // stylesheet parsing, rule extraction
+    Cascade,      // matching, specificity, computed styles
+    Layout,       // block / grid / flex / inline formatting
+    Paint,        // box paint, images, clips
+    Fetch,        // HTTP requests, CSS + image fetches
+    Event,        // click, wheel, hover, keyboard
+    LayoutDetail, // Highly detailed layout tree traces
+    PaintDetail,  // Highly detailed paint fragment traces
 };
 
 enum class LogLevel : std::uint8_t {
@@ -41,6 +43,7 @@ enum class LogLevel : std::uint8_t {
 // from main() before any workers start. On any parse failure,
 // logging is disabled (safe default).
 void log_init() noexcept;
+void log_shutdown() noexcept;
 
 // Programmatic config (for tests). Bypasses env vars entirely.
 // category_mask: bitmask, bit N = LogCategory with value N.

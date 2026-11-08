@@ -267,6 +267,7 @@ void flatten_inline_to_words(
             while (i < data.size() && !is_ws_byte(data[i])) ++i;
             StyledWord w;
             w.text = std::string(data.substr(start, i - start));
+            HB_LOG(LayoutDetail, Trace, "flatten_inline_to_words: word='%.20s'", w.text.c_str());
             w.font_family = family;
             w.font_size = size;
             w.color = default_color;
@@ -309,6 +310,7 @@ void flatten_inline_to_words(
             flatten_inline_to_words(*child, styles, family, size, color,
                                     prev_had_space, out, &el);
         }
+
     }
 }
 
@@ -459,6 +461,15 @@ LayoutBox layout_element(const dom::Element& el,
                          float viewport_h,   // ADR-051
                          Direction parent_dir,
                          ImageDimLookup image_dims) {
+    {
+        const css::ComputedStyle* s = nullptr;
+        auto it = styles.find(&el);
+        if (it != styles.end()) s = &it->second;
+        std::string disp = s ? s->get("display").value_or("default") : "none";
+        HB_LOG(LayoutDetail, Trace, "layout_element: enter <%s> id='%s' class='%s' display='%s'",
+               el.tag().c_str(), el.get_attribute("id").c_str(), el.get_attribute("class").c_str(), disp.c_str());
+    }
+
     LayoutBox box;
     box.element = &el;
 
@@ -933,6 +944,8 @@ LayoutBox layout_element(const dom::Element& el,
 
     auto flush_inline_run = [&]() {
         if (inline_run.empty()) return;
+        HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes", inline_run.size());
+        HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes in run", inline_run.size());
 
         const std::string family = font_family_of(style);
         const Color tc = text_color_of(style);
@@ -1185,6 +1198,7 @@ LayoutBox layout_element(const dom::Element& el,
 
         ctx->width = max_line_w;
         ctx->height = total_h;
+        HB_LOG(LayoutDetail, Trace, "InlineContext created: %zu lines, height=%.1f", ctx->lines.size(), ctx->height);
         cursor_y += total_h;
         box.children.push_back(std::move(ctx));
     };
@@ -1216,7 +1230,23 @@ LayoutBox layout_element(const dom::Element& el,
             if (child->type() == dom::NodeType::Element) {
                 const auto& child_el = static_cast<const dom::Element&>(*child);
                 const css::ComputedStyle* child_style = lookup(styles, child_el);
-                if (display_of(child_style) == Display::None) continue;
+                if (display_of(child_style) == Display::None) {
+                    HB_LOG(Layout, Trace, "SKIP <%s> class='%s' (display:none)",
+                           child_el.tag().c_str(), child_el.get_attribute("class").c_str());
+                    continue;
+                }
+                
+                // Permanent diagnostic for heading issues (ADR-071 candidate)
+                if (child_el.tag() == "h2" || child_el.tag() == "h3" ||
+                    child_el.get_attribute("class").find("mw-heading") != std::string::npos) {
+                    std::string disp = child_style ? child_style->get("display").value_or("default") : "none";
+                    std::string col = child_style ? child_style->get("color").value_or("default") : "none";
+                    std::string fsize = child_style ? child_style->get("font-size").value_or("default") : "none";
+                    std::string el_id = child_el.get_attribute("id");
+                    std::string el_cls = child_el.get_attribute("class");
+                    HB_LOG(Layout, Trace, "LAYOUT <%s> id='%s' class='%s' display='%s' color='%s' font-size='%s'",
+                           child_el.tag().c_str(), el_id.c_str(), el_cls.c_str(), disp.c_str(), col.c_str(), fsize.c_str());
+                }
 
                 // ADR-042: absolute child of a containing block
                 // is out-of-flow; collect for post-positioning.
@@ -2238,6 +2268,7 @@ LayoutBox layout_element(const dom::Element& el,
             parse_length_for_height(transform_ty_raw, ty_ctx);
     }
 
+        HB_LOG(LayoutDetail, Trace, "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f", el.tag().c_str(), el.get_attribute("id").c_str(), box.x, box.y, box.width, box.height);
     return box;
 }
 

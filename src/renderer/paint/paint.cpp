@@ -291,6 +291,10 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
                const ImageProvider* images,
                float visible_top,
                float visible_bottom) {
+    HB_LOG(Paint, Trace, "paint_box: <%s> y=%.1f h=%.1f",
+           box.element ? box.element->tag().c_str() : "null",
+           box.y, box.height);
+
     // ADR-032: paint-authoritative culling. Skip the entire
     // subtree if visibility:hidden or opacity:0. Set on
     // LayoutBox::visible by layout_element. Handles both root
@@ -520,31 +524,46 @@ void paint_children(
     const ImageProvider* images,
     float visible_top,
     float visible_bottom) {
-    // ADR-069: cull margin for visual overflow beyond layout box
-    // (translateY transform, box-shadow, rotate bounding box).
+    
     constexpr float CULL_MARGIN = 128.0f;
+    // ADR-071: if viewport_h is 0 (initial unallocated frame),
+    // disable culling so we paint the whole tree.
+    const bool disable_cull = (visible_bottom <= 0.0f) || (visible_top >= visible_bottom);
+    
     for (const auto& child : children) {
         if (!child) continue;
+        
+        HB_LOG(PaintDetail, Trace, "paint_children: kind=%d y=%.1f h=%.1f",
+               static_cast<int>(child->kind), child->y, child->height);
+
+        if (!disable_cull) {
+            // ADR-069 fix: NEVER cull a Box at the parent level.
+            // A Box's y/height does NOT bound its descendants (absolute
+            // positioning, floated figures, overflow:visible). Skipping an
+            // off-screen Box skips everything inside it — including visible
+            // descendants. We only cull leaf nodes (Text, InlineContext).
+            if (child->kind == layout::LayoutKind::Text ||
+                child->kind == layout::LayoutKind::InlineContext) {
+                if (child->y + child->height < visible_top - CULL_MARGIN) {
+                    HB_LOG(PaintDetail, Trace, "  -> CULLED Text/Inline (above)");
+                    continue;
+                }
+                if (child->y > visible_bottom + CULL_MARGIN) {
+                    HB_LOG(PaintDetail, Trace, "  -> CULLED Text/Inline (below)");
+                    continue;
+                }
+            }
+        }
+        
         switch (child->kind) {
             case layout::LayoutKind::Box:
-                // ADR-069 fix: NEVER cull a Box at the parent level.
-                // Descendants of an off-screen Box may still be on-screen
-                // (absolute positioning, floated figures, overflow:visible).
-                // paint_box() gates its own paint ops internally, but always
-                // recurses to find visible descendants.
                 paint_box(
                     cr, static_cast<const layout::LayoutBox&>(*child),
                     drawer, images, visible_top, visible_bottom);
                 break;
             case layout::LayoutKind::Text: {
-                // ADR-069: leaf node — safe to cull off-screen text.
-                if (child->y + child->height
-                        < visible_top - CULL_MARGIN) break;
-                if (child->y > visible_bottom + CULL_MARGIN) break;
                 const auto& lt =
                     static_cast<const layout::LayoutText&>(*child);
-                // ADR-045: draw inline backgrounds first, then
-                // glyphs (correct z-order).
                 for (const auto& frag : lt.lines) {
                     paint_inline_image(cr, frag, images);
                 }
@@ -552,14 +571,13 @@ void paint_children(
                 break;
             }
             case layout::LayoutKind::InlineContext: {
-                // ADR-069: leaf node — safe to cull off-screen text.
-                if (child->y + child->height
-                        < visible_top - CULL_MARGIN) break;
-                if (child->y > visible_bottom + CULL_MARGIN) break;
                 const auto& ctx =
                     static_cast<const layout::LayoutInlineContext&>(*child);
-                // ADR-045: draw inline backgrounds first, then
-                // glyphs (correct z-order).
+                HB_LOG(PaintDetail, Trace, "  -> painting InlineContext y=%.1f h=%.1f lines=%zu", ctx.y, ctx.height, ctx.lines.size());
+                for (const auto& line : ctx.lines) {
+                    HB_LOG(Paint, Trace, "     LINE y=%.1f text='%.60s' w=%.1f h=%.1f size=%.1f",
+                           line.y, line.text.c_str(), line.width, line.height, line.font_size);
+                }
                 for (const auto& frag : ctx.lines) {
                     paint_inline_image(cr, frag, images);
                 }
@@ -567,11 +585,11 @@ void paint_children(
                 break;
             }
             case layout::LayoutKind::Inline:
-                // Structural, not painted directly.
                 break;
         }
     }
 }
+
 
 } // namespace
 
@@ -584,6 +602,7 @@ void paint(cairo_t* cr, const layout::LayoutNode& root,
            LineDrawer drawer, const ImageProvider* images,
            float visible_top, float visible_bottom) {
     if (cr == nullptr || !drawer) return;
+    HB_LOG(Paint, Trace, "PAINT START: visible_top=%.1f visible_bottom=%.1f", visible_top, visible_bottom);
     HB_LOG(Paint, Debug, "paint: root kind=%d",
            static_cast<int>(root.kind));
     switch (root.kind) {

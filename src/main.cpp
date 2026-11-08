@@ -30,5 +30,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Starting GTK 4 application...\n";
 
     auto app = HoneyBeeApp();
-    return app.run(argc, argv);
+    int ret = app.run(argc, argv);
+    honeybee::log_shutdown();
+    return ret;
 }

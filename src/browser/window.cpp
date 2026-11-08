@@ -11,6 +11,8 @@
 // =============================================================
 
 // استيراد إعلان الصنف نفسه.
+#include <cstdlib>
+#include "base/log.hpp"
 #include "window.hpp"
 
 #include <cmath>
@@ -205,6 +207,7 @@ HoneyBeeWindow::HoneyBeeWindow()
     if (m_vadjustment) {
         m_vadjustment->signal_value_changed().connect([this]() {
             m_scroll_y = m_vadjustment->get_value();
+            HB_LOG(Paint, Trace, "SCROLL: m_scroll_y=%.2f", m_scroll_y);
             sync_drawing_area_size();
             m_drawing_area.queue_draw();
         });
@@ -494,6 +497,7 @@ void HoneyBeeWindow::render_html(const std::string& html) {
         set_title(title + " — HoneyBee");
     }
     m_drawing_area.queue_draw();
+
 }
 
 // =============================================================
@@ -516,6 +520,7 @@ void HoneyBeeWindow::render_with_preparsed_doc(
         set_title(title + " — HoneyBee");
     }
     m_drawing_area.queue_draw();
+
 }
 
 // =============================================================
@@ -595,6 +600,14 @@ void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
     // (which is content height). Relayout on EITHER width or
     // height change.
     const int viewport_h = m_scroll_window.get_height();
+    
+    // ADR-071: If viewport is not yet allocated, skip layout and drawing.
+    // Waiting for the first valid allocation prevents the layout tree from
+    // collapsing to 0-height, which would break culling during scroll.
+    if (width <= 0 || viewport_h <= 0) {
+        return;
+    }
+
     if (width != m_last_width || viewport_h != m_last_height) {
         m_last_width = width;
         m_last_height = viewport_h;
@@ -627,7 +640,9 @@ void HoneyBeeWindow::sync_drawing_area_size() {
     // first on_draw, but sync must run from render_html to give
     // DrawingArea nonzero height so on_draw can fire at all.
     const int viewport_h = m_scroll_window.get_height();
+    HB_LOG(Layout, Trace, "sync: viewport_h=%d scroll_y=%.2f", viewport_h, m_scroll_y);
     if (viewport_h <= 0) return;
+
     const float h = m_pipeline.layout_height();
     if (h <= 0.0f) return;
     const int h_px = static_cast<int>(std::ceil(h));
