@@ -1,4 +1,5 @@
 #include "pango_text.hpp"
+#include "base/log.hpp"
 
 #include <pango/pangocairo.h>
 
@@ -57,6 +58,15 @@ void draw_line_with_pango(
     cairo_t* cr,
     const renderer::layout::LineFragment& frag) {
     if (cr == nullptr || frag.text.empty()) return;
+
+    HB_LOG(Paint, Trace, "  FRAG: text='%.30s' x=%.1f y=%.1f w=%.1f h=%.1f color=(%.2f,%.2f,%.2f,%.2f)",
+           frag.text.c_str(), frag.x, frag.y, frag.width, frag.height,
+           frag.color.r, frag.color.g, frag.color.b, frag.color.a);
+
+    HB_LOG(Paint, Trace, "PAINT frag: x=%.1f y=%.1f w=%.1f h=%.1f size=%.1f color=(%.2f,%.2f,%.2f,%.2f) text='%.40s'",
+           frag.x, frag.y, frag.width, frag.height, frag.font_size,
+           frag.color.r, frag.color.g, frag.color.b, frag.color.a,
+           frag.text.c_str());
 
     PangoLayout* layout =
         make_layout(cr, frag.text, frag.font_family, frag.font_size);
