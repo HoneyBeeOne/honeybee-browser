@@ -17,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -4057,5 +4058,52 @@ TEST_CASE("float: huge intrinsic img caps at half-parent (ADR-066 Layer 2)",
     // Cap at half (400), narrow_w = 800 - 400 = 400 (readable)
     CHECK(ps[0]->width > 350.0f);
     CHECK(ps[0]->width < 450.0f);
+}
+
+// =============================================================
+// ADR-072: Regression tests for ADR-071 fixes.
+//
+// ADR-071 fixed inline-routing (h2 with display:inline becoming
+// InlineContext instead of a y=0 Box) and culling (containers
+// never culled by their own height). These tests fail if either
+// fix is reverted.
+// =============================================================
+
+TEST_CASE("ADR-071: inline h2 becomes InlineContext, not Box",
+          "[layout][adr071]") {
+    // Bare <h2> with display:inline, no styling.
+    // Before ADR-071: layout_block_children treated this as a block,
+    // creating LayoutBox for h2 with y=0. Its text fragments then had
+    // y=0 and were culled as off-screen during scroll.
+    // After ADR-071: h2 is routed to parent's inline_run, producing
+    // an InlineContext containing the text.
+    auto t = run("<div><h2>HEADING_TEXT</h2></div>",
+                 "h2 { display: inline }");
+
+    // 1. h2 must NOT be a LayoutBox (it was routed to inline)
+    auto h2_boxes = find_all_boxes(t.root, "h2");
+    CHECK(h2_boxes.size() == 0);
+
+    // 2. The text must live in some InlineContext
+    bool found_text = false;
+    std::function<void(const layout::LayoutBox&)> walk =
+        [&](const layout::LayoutBox& box) {
+        for (const auto& child : box.children) {
+            if (child->kind == layout::LayoutKind::InlineContext) {
+                const auto& ctx = static_cast<
+                    const layout::LayoutInlineContext&>(*child);
+                for (const auto& line : ctx.lines) {
+                    if (line.text.find("HEADING_TEXT")
+                        != std::string::npos) {
+                        found_text = true;
+                    }
+                }
+            } else if (child->kind == layout::LayoutKind::Box) {
+                walk(static_cast<const layout::LayoutBox&>(*child));
+            }
+        }
+    };
+    walk(t.root);
+    CHECK(found_text);
 }
 
