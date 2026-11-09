@@ -689,6 +689,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Documented gap:** these tests catch structural regressions, not visual ones. Wikipedia-scale visual fidelity remains a manual verification step per ADR.
 
+- **Permanent diagnostic tracing** (ADR-073): `HB_LOG` traces are now permanent infrastructure — never removed, only re-classified or reformatted. Guard pattern established: expensive argument construction (std::string, get_attribute, c_str on temporary) wrapped in explicit `log_enabled()` check, so traces are genuinely zero-cost when disabled.
+
+  13 permanent trace points across 4 files:
+  - LayoutDetail: `layout_element enter/EXIT`, `block_children child`, `InlineContext created`
+  - PaintDetail: `paint_children`, `CULLED Text/Inline`, `painting InlineContext`
+  - Paint: `LINE`, `FRAG`, `SCROLL`, `PAINT START`
+  - Layout: `on_draw`, `sync`
+
+  Two-tier category scheme: normal (`Layout`, `Paint`, etc.) for coarse-grained debug; detail (`LayoutDetail`, `PaintDetail`) for per-element granularity. Enable via `HONEYBEE_LOG=layout,paint` or `HONEYBEE_LOG=layout_detail,paint_detail HONEYBEE_LOG_LEVEL=trace`.
+
+  **Diagnostic-only iteration ends.** Future bug hunts use existing traces instead of adding new ones.
+
+  **Also discovers (but defers):** Wikipedia `<h2>History` is placed at `y=2210` (default) instead of `y≈500`. Root cause is `float: right` infobox not being wrapped by intro paragraphs — a `layout_block_children` bug in ADR-031 float handling. Deferred to ADR-074.
+
+  Test count unchanged at 694 / 2646 (traces are guarded, no behavior change).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

@@ -1198,7 +1198,14 @@ LayoutBox layout_element(const dom::Element& el,
 
         ctx->width = max_line_w;
         ctx->height = total_h;
-        HB_LOG(LayoutDetail, Trace, "InlineContext created: %zu lines, height=%.1f", ctx->lines.size(), ctx->height);
+        if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+            std::string first_text = ctx->lines.empty() ? ""
+                : ctx->lines[0].text.substr(0, 40);
+            HB_LOG(LayoutDetail, Trace,
+                "InlineContext created: y=%.1f h=%.1f lines=%zu text='%s'",
+                ctx->y, ctx->height, ctx->lines.size(),
+                first_text.c_str());
+        }
         cursor_y += total_h;
         box.children.push_back(std::move(ctx));
     };
@@ -2268,7 +2275,12 @@ LayoutBox layout_element(const dom::Element& el,
             parse_length_for_height(transform_ty_raw, ty_ctx);
     }
 
-        HB_LOG(LayoutDetail, Trace, "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f", el.tag().c_str(), el.get_attribute("id").c_str(), box.x, box.y, box.width, box.height);
+    if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+        HB_LOG(LayoutDetail, Trace,
+            "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f",
+            el.tag().c_str(), el.get_attribute("id").c_str(),
+            box.x, box.y, box.width, box.height);
+    }
     return box;
 }
 
