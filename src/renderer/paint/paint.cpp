@@ -573,7 +573,13 @@ void paint_children(
             case layout::LayoutKind::InlineContext: {
                 const auto& ctx =
                     static_cast<const layout::LayoutInlineContext&>(*child);
-                HB_LOG(PaintDetail, Trace, "  -> painting InlineContext y=%.1f h=%.1f lines=%zu", ctx.y, ctx.height, ctx.lines.size());
+                if (log_enabled(LogCategory::PaintDetail, LogLevel::Trace)) {
+                    std::string first_text = ctx.lines.empty() ? ""
+                        : ctx.lines[0].text.substr(0, 40);
+                    HB_LOG(PaintDetail, Trace,
+                        "  -> painting InlineContext y=%.1f h=%.1f text='%s'",
+                        ctx.y, ctx.height, first_text.c_str());
+                }
                 for (const auto& line : ctx.lines) {
                     HB_LOG(Paint, Trace, "     LINE y=%.1f text='%.60s' w=%.1f h=%.1f size=%.1f",
                            line.y, line.text.c_str(), line.width, line.height, line.font_size);
