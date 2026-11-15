@@ -576,18 +576,27 @@ TEST_CASE("media: print query drops its rules",
     CHECK(s.rules.empty());
 }
 
-TEST_CASE("media: prefers-color-scheme query drops its rules",
-          "[css][stylesheet][adr-027]") {
+TEST_CASE("media: prefers-color-scheme query keeps rules with feature flag",
+          "[css][stylesheet][adr-027][adr077]") {
+    // ADR-077: prefers-* now parses with a feature flag. Rule is
+    // present; q_light_matches = false (query asked for dark, we're
+    // light) so cascade rejects it — but the rule itself is kept.
     const auto s = Stylesheet::parse(
         "@media (prefers-color-scheme: dark) { a { color: red } }");
-    CHECK(s.rules.empty());
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    CHECK(s.rules[0].media->q_light_matches.has_value());
+    CHECK(s.rules[0].media->q_light_matches.value() == false);
 }
 
-TEST_CASE("media: prefers-reduced-motion query drops its rules",
-          "[css][stylesheet][adr-027]") {
+TEST_CASE("media: prefers-reduced-motion query keeps rules with feature flag",
+          "[css][stylesheet][adr-027][adr077]") {
     const auto s = Stylesheet::parse(
         "@media (prefers-reduced-motion: reduce) { a { color: red } }");
-    CHECK(s.rules.empty());
+    REQUIRE(s.rules.size() == 1);
+    REQUIRE(s.rules[0].media.has_value());
+    CHECK(s.rules[0].media->q_no_reduced_motion_matches.has_value());
+    CHECK(s.rules[0].media->q_no_reduced_motion_matches.value() == false);
 }
 
 TEST_CASE("media: mixed-unit calc drops its rules",

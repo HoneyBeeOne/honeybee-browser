@@ -578,3 +578,43 @@ TEST_CASE("cascade: display: grid reaches ComputedStyle",
     REQUIRE(div);
     CHECK(styles.at(div).get("display").value_or("") == "grid");
 }
+
+// =============================================================
+// ADR-077: media feature queries.
+// Environment: desktop (hover-capable, fine pointer, light mode,
+// no reduced motion, no high contrast).
+// =============================================================
+
+TEST_CASE("media feature: hover:hover matches desktop", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(hover: hover)", ".x { color: red }", 800.0f) == "red");
+}
+
+TEST_CASE("media feature: hover:none rejected on desktop", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(hover: none)", ".x { color: red }", 800.0f) != "red");
+}
+
+TEST_CASE("media feature: pointer:fine matches desktop", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(pointer: fine)", ".x { color: red }", 800.0f) == "red");
+}
+
+TEST_CASE("media feature: pointer:coarse rejected on desktop", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(pointer: coarse)", ".x { color: red }", 800.0f) != "red");
+}
+
+TEST_CASE("media feature: prefers-color-scheme:light matches", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(prefers-color-scheme: light)", ".x { color: red }", 800.0f) == "red");
+}
+
+TEST_CASE("media feature: prefers-color-scheme:dark rejected", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(prefers-color-scheme: dark)", ".x { color: red }", 800.0f) != "red");
+}
+
+TEST_CASE("media feature: prefers-reduced-motion:no-preference matches", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(prefers-reduced-motion: no-preference)", ".x { color: red }", 800.0f) == "red");
+}
+
+TEST_CASE("media feature: combined with min-width", "[cascade][media][adr077]") {
+    CHECK(rule_color_under_media("(min-width: 640px) and (hover: hover)", ".x { color: red }", 800.0f) == "red");
+    CHECK(rule_color_under_media("(min-width: 640px) and (hover: none)", ".x { color: red }", 800.0f) != "red");
+}
+
