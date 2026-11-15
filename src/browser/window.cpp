@@ -12,6 +12,7 @@
 
 // استيراد إعلان الصنف نفسه.
 #include <cstdlib>
+#include <algorithm>
 #include "base/log.hpp"
 #include "window.hpp"
 
@@ -639,13 +640,20 @@ void HoneyBeeWindow::sync_drawing_area_size() {
     // the viewport anchor. m_last_width would be -1 until the
     // first on_draw, but sync must run from render_html to give
     // DrawingArea nonzero height so on_draw can fire at all.
+    // ADR-073 (extended): h_px is a const getter -- safe to call
+    // before early returns so the trace always shows the numbers
+    // that would have been used, even when we bail.
     const int viewport_h = m_scroll_window.get_height();
-    HB_LOG(Layout, Trace, "sync: viewport_h=%d scroll_y=%.2f", viewport_h, m_scroll_y);
-    if (viewport_h <= 0) return;
-
     const float h = m_pipeline.layout_height();
-    if (h <= 0.0f) return;
     const int h_px = static_cast<int>(std::ceil(h));
+    const int t_top  = static_cast<int>(m_scroll_y);
+    const int t_draw = std::min(viewport_h, h_px);
+    const int t_bot  = std::max(0, h_px - t_top - t_draw);
+    HB_LOG(Layout, Trace,
+        "sync: viewport_h=%d h_px=%d scroll_y=%.2f tetris=(%d,%d,%d)",
+        viewport_h, h_px, m_scroll_y, t_top, t_draw, t_bot);
+    if (viewport_h <= 0) return;
+    if (h <= 0.0f) return;
 
     // ADR-069: spacer-tetris. sum = top + viewport + bottom
     // = h_px (content height). DrawingArea always occupies the
