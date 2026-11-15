@@ -1,6 +1,6 @@
 # ADR-075: Vector 2022 mobile menu layout at narrow viewport
 
-**Status:** Proposed (diagnosed, implementation deferred)
+**Status:** Proposed (hypothesis disproven — see Correction section). Superseded by ADR-076.
 **Date:** 2026-11-16
 **Related:** ADR-031 (float layout), ADR-074 (float positioning), ADR-073 (permanent tracing)
 
@@ -95,3 +95,37 @@ Both zero-cost when `HONEYBEE_LOG` is unset. Existing `FLOAT` and `NARROW` trace
 - ADR-073 — permanent tracing policy
 - ADR-071 — inline routing + culling fixes (same class of coordinate-space bug — potential parallel here)
 - Wikipedia Vector 2022 CSS: uses `:where()`, `:is()`, CSS custom properties, media queries for responsive mode
+
+## Correction (same day, post-CSS-analysis)
+
+The primary hypothesis above — *"cascade isn't applying Vector 2022's `position: sticky`"* — is **disproven** by reading Wikipedia's actual stylesheets.
+
+### Evidence
+
+Fetched the two `load.php?modules=...&only=styles&skin=vector-2022` stylesheets (220 KB combined) and extracted feature counts:
+
+| Feature | Count | Where used |
+|---|---|---|
+| `position: sticky` | **2** | Both `.vector-sticky-pinned-container` (TOC sidebar) |
+| `var(--)` | 569 | Everywhere — colors, spacing, breakpoints |
+| `@media` | 91 | Multiple forms: `@media all and (min-width:640px)`, `@media screen and (max-width:639px)`, `@media print`, `@media (prefers-reduced-motion:reduce)` |
+| `@supports` | 75 | Gates like `@supports (text-decoration:underline dotted)` |
+| `:where(` | 16 | Low-specificity wrappers |
+| `:has(` | 8 | Parent-selector rules |
+
+**None** of the elements in our trace (`mw-navigation`, `p-navigation`, `vector-main-menu`) have `position: sticky` declared. They're static per CSS. Our cascade correctly reports `pos=static`. The sticky-as-out-of-flow theory was wrong.
+
+### What the trace actually shows
+
+The layout anomalies (`p-navigation` at `x=16, w=0`, `vector-main-menu` at `x=16, w=0`, `mw-navigation` with `h=0`) are consistent with **mobile-only elements being laid out at desktop width**. They should have `display: none` at 984px content width but don't.
+
+### The real cascade gaps
+
+See ADR-076 (Proposed) for the actual measured gap between our cascade and Wikipedia's requirements: `@media` prefixed forms (`all and`, `screen and`, `prefers-*`), `var()` without fallback, `@supports`, `:where()`.
+
+### What this ADR still provides
+
+The permanent `pos=` and `ABS_PUSH` traces added here **directly enabled** the disproving of the sticky hypothesis. Per ADR-073 policy, they remain in place. The trace infrastructure was correct; only the interpretation was wrong. That's how diagnostic work is supposed to behave — hypothesis → measurement → correction → revised hypothesis.
+
+The diagnosis in this ADR was wrong; the diagnostic tooling is correct and permanent. Do not revert the tooling.
+
