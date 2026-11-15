@@ -734,6 +734,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   No production code change in this commit. Test count unchanged at 694 / 2646.
 
+- **Media feature queries** (ADR-077): Extends `MediaQuery` with feature-query support. Environment fixed (desktop, light mode). Rules apply only when queried feature value matches our environment.
+
+  Features: `hover`, `pointer`, `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`.
+
+  **Real fix:** `@media (prefers-color-scheme: light) { ... }` rules now apply. Previously dropped entirely (prefers- prefix on the fast-reject list). Pages with `body { color: white } @media (prefers-color-scheme: light) { body { color: black } }` rendered white; now correctly black.
+
+  Combined queries work: `@media screen and (hover: hover)`, `@media (min-width: 640px) and (hover: hover)`.
+
+  NOT in scope: orientation, aspect-ratio, resolution, print (all correctly rejected).
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

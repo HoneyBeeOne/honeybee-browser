@@ -49,6 +49,15 @@ bool media_matches(const std::optional<MediaQuery>& mq, float vw) {
     if (!mq) return true;  // top-level rule, no condition
     if (mq->min_width_px && vw < *mq->min_width_px) return false;
     if (mq->max_width_px && vw > *mq->max_width_px) return false;
+    // ADR-077: feature queries. Environment: desktop (hover,
+    // fine pointer, light mode, no reduced motion, no high
+    // contrast). Rule rejected if query asked for a value we
+    // don't match.
+    if (mq->q_hover_matches              && !*mq->q_hover_matches)              return false;
+    if (mq->q_pointer_matches            && !*mq->q_pointer_matches)            return false;
+    if (mq->q_light_matches              && !*mq->q_light_matches)              return false;
+    if (mq->q_no_reduced_motion_matches  && !*mq->q_no_reduced_motion_matches)  return false;
+    if (mq->q_no_high_contrast_matches   && !*mq->q_no_high_contrast_matches)   return false;
     return true;
 }
 

@@ -1,4 +1,5 @@
 #include "renderer/css/stylesheet.hpp"
+#include "base/log.hpp"
 
 #include <string>
 #include <cctype>
@@ -1079,6 +1080,11 @@ std::optional<float> parse_length_px(std::string_view text) {
 // resolution, hover, pointer, range syntax, mixed-unit calc,
 // unsupported keywords -- returns false.
 bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
+    const bool trace_on = log_enabled(LogCategory::Css, LogLevel::Trace);
+    if (trace_on) {
+        HB_LOG(Css, Trace, "MEDIA prelude=%.120s",
+               std::string(prelude).c_str());
+    }
     std::string lower;
     lower.reserve(prelude.size());
     for (char c : prelude) {
@@ -1087,12 +1093,22 @@ bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
     }
 
     // Whole-string unsupported keyword check (fast rejection).
+    // ADR-077: prefers-*, hover, pointer now handled by the
+    // feature-query parser below. Still unsupported: print
+    // (screen-only render), aspect-ratio, orientation,
+    // resolution (deferred), range syntax (">", "<").
     static const char* kUnsupported[] = {
-        "print", "prefers-", "aspect-ratio", "orientation",
-        "resolution", "hover", "pointer", ">", "<",
+        "print", "aspect-ratio", "orientation",
+        "resolution", ">", "<",
     };
     for (const char* kw : kUnsupported) {
-        if (lower.find(kw) != std::string::npos) return false;
+        if (lower.find(kw) != std::string::npos) {
+            if (trace_on) {
+                HB_LOG(Css, Trace, "MEDIA REJECTED kw='%s' prelude=%.120s",
+                       kw, std::string(prelude).c_str());
+            }
+            return false;
+        }
     }
 
     std::size_t i = 0;
@@ -1127,7 +1143,40 @@ bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
                 const auto px = parse_length_px(cond.substr(10));
                 if (!px) return false;
                 out.max_width_px = *px;
-            } else {
+            }
+            // ADR-077: feature queries. Environment is fixed
+            // (desktop, light mode, no reduced motion).
+            else if (cond.rfind("hover:", 0) == 0) {
+                const std::string val = trim(cond.substr(6));
+                if (val == "hover")      out.q_hover_matches = true;
+                else if (val == "none")  out.q_hover_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("pointer:", 0) == 0) {
+                const std::string val = trim(cond.substr(8));
+                if (val == "fine")        out.q_pointer_matches = true;
+                else if (val == "coarse") out.q_pointer_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-color-scheme:", 0) == 0) {
+                const std::string val = trim(cond.substr(21));
+                if (val == "light")      out.q_light_matches = true;
+                else if (val == "dark")  out.q_light_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-reduced-motion:", 0) == 0) {
+                const std::string val = trim(cond.substr(23));
+                if (val == "no-preference") out.q_no_reduced_motion_matches = true;
+                else if (val == "reduce")   out.q_no_reduced_motion_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-contrast:", 0) == 0) {
+                const std::string val = trim(cond.substr(17));
+                if (val == "no-preference")                out.q_no_high_contrast_matches = true;
+                else if (val == "more" || val == "less")   out.q_no_high_contrast_matches = false;
+                else return false;
+            }
+            else {
                 return false;
             }
             i = close + 1;
@@ -1145,6 +1194,12 @@ bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
         } else {
             return false;
         }
+    }
+    if (trace_on) {
+        HB_LOG(Css, Trace, "MEDIA ACCEPTED min_w=%.1f max_w=%.1f prelude=%.120s",
+               out.min_width_px.value_or(-1.0f),
+               out.max_width_px.value_or(-1.0f),
+               std::string(prelude).c_str());
     }
     return true;
 }

@@ -44,6 +44,19 @@ struct MediaQuery {
     // Maximum viewport width in CSS pixels (from max-width
     // or an "and" combination). Empty = no upper bound.
     std::optional<float> max_width_px;
+
+    // ADR-077: feature queries. Environment is fixed (desktop,
+    // screen, light mode, no reduced motion, no high contrast,
+    // fine pointer, hover capable). For each feature, store
+    // whether the queried value MATCHES our environment.
+    // nullopt = no query on this feature (unconstrained).
+    // true    = query matches environment (rule applies).
+    // false   = query doesn't match (rule rejected at cascade).
+    std::optional<bool> q_hover_matches;              // hover:hover → true; hover:none → false
+    std::optional<bool> q_pointer_matches;            // pointer:fine → true; pointer:coarse → false
+    std::optional<bool> q_light_matches;              // prefers-color-scheme:light → true; dark → false
+    std::optional<bool> q_no_reduced_motion_matches;  // prefers-reduced-motion:no-preference → true; reduce → false
+    std::optional<bool> q_no_high_contrast_matches;   // prefers-contrast:no-preference → true; more/less → false
 };
 
 struct Rule {
