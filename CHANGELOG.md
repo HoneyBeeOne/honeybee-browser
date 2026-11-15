@@ -717,6 +717,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 694 / 2646.
 
+- **ADR-075 correction + ADR-076 proposed** (2026-11-16): Direct CSS analysis of Wikipedia's 220 KB Vector 2022 stylesheets **disproved** ADR-075's "missing sticky support" hypothesis. Only 2 `position: sticky` declarations exist in the entire stylesheet, both on `.vector-sticky-pinned-container` (TOC sidebar). Header elements are correctly `pos=static`. ADR-075 marked "hypothesis disproven — superseded by ADR-076".
+
+  ADR-076 (Proposed) documents the real measured cascade gaps:
+
+  | Feature | Count | Priority |
+  |---|---|---|
+  | `var(--)` | 569 | 076-B (medium) |
+  | `@media` prefixed forms (`all and`, `screen and`, `prefers-*`) | 91 | **076-A (first, highest impact)** |
+  | `@supports` | 75 | 076-C (small) |
+  | `:where(` / `:has(` | 16 + 8 | 076-D (last) |
+
+  Next session: verify whether `@media all and (min-width:640px)` parses correctly. If not, that single fix may resolve most of the mobile-menu-at-desktop-width anomaly. Multi-session cascade completion overall.
+
+  **Diagnostic lesson recorded:** traces added per ADR-073 policy (permanent, guarded) enabled both hypotheses and disprovals. The trace infrastructure was correct; only one interpretation was wrong. That's the intended pattern — measure, hypothesize, verify, correct.
+
+  No production code change in this commit. Test count unchanged at 694 / 2646.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
