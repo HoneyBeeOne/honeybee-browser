@@ -711,6 +711,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 694 / 2646.
 
+- **ADR-075 diagnosis: Vector 2022 mobile menu layout** (Proposed, no fix): Permanent `pos=` and `ABS_PUSH` trace extensions reveal the Wikipedia History-too-low issue is rooted in Vector 2022 cascade + layout coordination at narrow viewports (984px), not just float positioning. Key findings: (A) Cascade applies `pos=static` where Vector 2022 CSS declares `position: sticky` — likely unsupported `:where()`/`:is()`/CSS variable selectors; (B) Menu children get invalid geometry (`x=16, w=0` for children of parent at `x=24`); (C) Menu elements laid out 12+ times each (one per dropdown ABS_PUSH). Next session: Firefox DevTools vs HoneyBee computed-style comparison on 6 header elements.
+
+  Permanent traces extended: `pos=<static/relative/absolute/fixed/sticky>` appended to every `layout_element: EXIT`, plus new `ABS_PUSH <tag> id='...' class='...'` trace. Both guarded, zero cost when `HONEYBEE_LOG` unset.
+
+  Test count unchanged at 694 / 2646.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

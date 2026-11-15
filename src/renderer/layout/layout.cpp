@@ -1260,6 +1260,14 @@ LayoutBox layout_element(const dom::Element& el,
                 if (box.is_containing_block && child_style) {
                     if (auto p = child_style->get("position");
                         p && *p == "absolute") {
+                        if (log_enabled(LogCategory::LayoutDetail,
+                                        LogLevel::Trace)) {
+                            HB_LOG(LayoutDetail, Trace,
+                                "ABS_PUSH <%s> id='%s' class='%s'",
+                                child_el.tag().c_str(),
+                                child_el.get_attribute("id").c_str(),
+                                child_el.get_attribute("class").c_str());
+                        }
                         pending_absolutes.push_back(&child_el);
                         continue;
                     }
@@ -2304,10 +2312,18 @@ LayoutBox layout_element(const dom::Element& el,
     }
 
     if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+        const char* pos_str = "static";
+        switch (box.position) {
+            case Position::Static:   pos_str = "static";   break;
+            case Position::Relative: pos_str = "relative"; break;
+            case Position::Absolute: pos_str = "absolute"; break;
+            case Position::Fixed:    pos_str = "fixed";    break;
+            case Position::Sticky:   pos_str = "sticky";   break;
+        }
         HB_LOG(LayoutDetail, Trace,
-            "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f",
+            "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f pos=%s",
             el.tag().c_str(), el.get_attribute("id").c_str(),
-            box.x, box.y, box.width, box.height);
+            box.x, box.y, box.width, box.height, pos_str);
     }
     return box;
 }
