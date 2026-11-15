@@ -705,6 +705,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Test count unchanged at 694 / 2646 (traces are guarded, no behavior change).
 
+- **ADR-074 diagnosis: float positioning at narrow viewport** (Proposed, no fix yet): ADR-073 trace extension revealed the Wikipedia `<h2>History` misplacement is **two separate bugs**, not one. (A) `.infobox` float placed 532px too low at narrow width (`y=799` vs `y=267`), because content before it in DOM order occupies more space at narrow viewport. (B) Block-narrowing (ADR-031 approximation) over-stretches intro paragraphs by ~565px because it narrows whole blocks, not lines (deferred line-wrap from ADR-032). Fixing either alone leaves History 400–1700px off Firefox. Split into ADR-074 (A) and ADR-075 (B) for next sessions.
+
+  Added permanent `FLOAT` and `NARROW` traces to `layout.cpp` (LayoutDetail category, guarded). Zero cost when `HONEYBEE_LOG` unset.
+
+  Test count unchanged at 694 / 2646.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

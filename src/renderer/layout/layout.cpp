@@ -1434,6 +1434,21 @@ LayoutBox layout_element(const dom::Element& el,
                     if (fbox_bottom > float_bottom) {
                         float_bottom = fbox_bottom;
                     }
+                    // ADR-073 (extended): permanent float-layout trace.
+                    // Shows where the float was placed, how wide/tall,
+                    // and what the cumulative float_bottom becomes.
+                    // Used to diagnose block-narrowing vs line-wrap
+                    // divergences from Firefox.
+                    if (log_enabled(LogCategory::LayoutDetail,
+                                    LogLevel::Trace)) {
+                        HB_LOG(LayoutDetail, Trace,
+                            "FLOAT <%s> class='%s' dir=%s y=%.1f h=%.1f "
+                            "bottom=%.1f left_w=%.1f right_w=%.1f",
+                            child_el.tag().c_str(),
+                            child_el.get_attribute("class").c_str(),
+                            float_dir.c_str(), probe->y, probe->height,
+                            float_bottom, float_left_w, float_right_w);
+                    }
                     box.children.push_back(std::move(probe));
                     continue;
                 }
@@ -1484,6 +1499,19 @@ LayoutBox layout_element(const dom::Element& el,
                 const float start_y = cursor_y + child_margin_top;
                 float narrow_x = content_x;
                 float narrow_w = content_w;
+                // ADR-073 (extended): trace the block-narrowing decision.
+                if (log_enabled(LogCategory::LayoutDetail,
+                                LogLevel::Trace)) {
+                    HB_LOG(LayoutDetail, Trace,
+                        "NARROW <%s> start_y=%.1f float_bottom=%.1f "
+                        "narrowed=%d w=%.1f->%.1f",
+                        child_el.tag().c_str(), start_y, float_bottom,
+                        (start_y < float_bottom) ? 1 : 0,
+                        content_w,
+                        (start_y < float_bottom)
+                            ? content_w - float_left_w - float_right_w
+                            : content_w);
+                }
                 if (start_y < float_bottom) {
                     narrow_x = content_x + float_left_w;
                     narrow_w = content_w - float_left_w - float_right_w;
