@@ -212,6 +212,17 @@ struct LayoutBox final : LayoutNode {
 // One rendered line of a text node (ADR-015). Style fields
 // added in ADR-016 so fragments derived from an <em> or a
 // <span style="color:red"> carry their own font and color.
+// ADR-079: float context for line-by-line wrapping.
+// Carries the RIGHT-side float width and absolute bottom-y from
+// ancestors. Line-wrap reduces available width only on lines that
+// overlap [.., bottom). Left-floats remain block-narrowed (deferred).
+struct FloatContext {
+    float right_w = 0.0f;   // width reserved on right side
+    float bottom  = 0.0f;   // absolute y where floats end (0 = no floats)
+
+    bool active() const { return right_w > 0.0f && bottom > 0.0f; }
+};
+
 struct LineFragment {
     float x = 0.0f;
     float y = 0.0f;

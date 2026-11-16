@@ -125,7 +125,9 @@ std::vector<LineFragment> break_into_lines(
     std::string_view font_family,
     float font_size,
     float max_width,
-    const TextMeasurer& measurer) {
+    const TextMeasurer& measurer,
+    const layout::FloatContext& float_ctx,
+    float start_y_absolute) {
 
     std::vector<LineFragment> lines;
     if (collapsed_text.empty()) return lines;
@@ -150,11 +152,23 @@ std::vector<LineFragment> break_into_lines(
     float current_width = 0.0f;
     float current_y = 0.0f;
 
+    // ADR-079: per-line available width. Only narrows when the line
+    // overlaps the float's vertical extent (line's top is above
+    // float_ctx.bottom in absolute coords).
+    auto available_width = [&](float y_rel) -> float {
+        if (!float_ctx.active()) return max_width;
+        const float y_abs = start_y_absolute + y_rel;
+        if (y_abs >= float_ctx.bottom) return max_width;
+        const float narrowed = max_width - float_ctx.right_w;
+        return narrowed > 0.0f ? narrowed : max_width;
+    };
+
     for (const auto& w : words) {
         const float ww = measurer(w, font_family, font_size).first;
         const float sep = current_text.empty() ? 0.0f : space_w;
+        const float avail_w = available_width(current_y);
 
-        if (current_width + sep + ww <= max_width) {
+        if (current_width + sep + ww <= avail_w) {
             if (!current_text.empty()) current_text += ' ';
             current_text += w;
             current_width += sep + ww;
@@ -188,13 +202,29 @@ std::vector<LineFragment> break_into_lines(
 std::vector<StyledLine> break_styled_words_into_lines(
     const std::vector<StyledWord>& words,
     float max_width,
-    const TextMeasurer& measurer) {
+    const TextMeasurer& measurer,
+    const layout::FloatContext& float_ctx,
+    float start_y_absolute) {
 
     std::vector<StyledLine> lines;
     if (words.empty()) return lines;
 
     StyledLine current;
     float cursor_x = 0.0f;
+    // ADR-079: track line y so we can evaluate per-line available
+    // width based on float overlap.
+    float current_y = 0.0f;
+    float line_h = 0.0f;
+
+    // ADR-079: per-line available width. Narrows on lines whose
+    // top is above float_ctx.bottom (in absolute coords).
+    auto available_width = [&](float y_rel) -> float {
+        if (!float_ctx.active()) return max_width;
+        const float y_abs = start_y_absolute + y_rel;
+        if (y_abs >= float_ctx.bottom) return max_width;
+        const float narrowed = max_width - float_ctx.right_w;
+        return narrowed > 0.0f ? narrowed : max_width;
+    };
 
     for (const auto& w : words) {
         const float ww = measurer(w.text, w.font_family, w.font_size).first;
@@ -205,13 +235,16 @@ std::vector<StyledLine> break_styled_words_into_lines(
             sep = measurer(" ", w.font_family, w.font_size).first;
         }
 
-        if (!current.fragments.empty() && cursor_x + sep + ww > max_width) {
+        const float avail_w = available_width(current_y);
+        if (!current.fragments.empty() && cursor_x + sep + ww > avail_w) {
             // Wrap: flush current line, start new
             current.width = cursor_x;
             lines.push_back(std::move(current));
             current = StyledLine{};
             cursor_x = 0.0f;
             sep = 0.0f;
+            current_y += line_h;
+            line_h = 0.0f;
         }
 
         // Try to merge with the last fragment on this line.
@@ -260,6 +293,7 @@ std::vector<StyledLine> break_styled_words_into_lines(
         }
 
         cursor_x += sep + ww;
+        if (wh > line_h) line_h = wh;
         if (wh > current.height) current.height = wh;
     }
 
