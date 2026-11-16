@@ -618,3 +618,73 @@ TEST_CASE("media feature: combined with min-width", "[cascade][media][adr077]") 
     CHECK(rule_color_under_media("(min-width: 640px) and (hover: none)", ".x { color: red }", 800.0f) != "red");
 }
 
+// =============================================================
+// ADR-080 investigation: body.ns-0 descendant chain.
+// Wikipedia hides article-content sidebars via:
+//   body.ns-0 .mw-parser-output .sidebar { display:none!important }
+// This rule has !important + higher specificity than the base
+// .mw-parser-output .sidebar { display:table }.
+// If our cascade doesn't apply it, sidebar renders and pushes
+// History ~1400px too low.
+// =============================================================
+
+TEST_CASE("cascade: body.ns-0 .mw-parser-output .sidebar matches 3-level descendant",
+          "[cascade][adr080]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body class='ns-0'>"
+        "<div class='mw-parser-output'>"
+        "<table class='sidebar nomobile'><tr><td>x</td></tr></table>"
+        "</div>"
+        "</body></html>");
+    REQUIRE(doc != nullptr);
+
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        ".mw-parser-output .sidebar { display: table }"
+        "body.ns-0 .mw-parser-output .sidebar { display: none !important }");
+
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 984.0f);
+
+    // Find the sidebar table
+    const auto* table = doc->find_element("table");
+    REQUIRE(table != nullptr);
+
+    auto it = styles.find(table);
+    REQUIRE(it != styles.end());
+
+    auto display = it->second.get("display");
+    REQUIRE(display.has_value());
+    CHECK(*display == "none");   // rule MUST apply
+}
+
+TEST_CASE("cascade: body.ns-0 without article namespace doesn't match",
+          "[cascade][adr080]") {
+    // Control: body without ns-0 class → rule must not match
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body>"
+        "<div class='mw-parser-output'>"
+        "<table class='sidebar nomobile'><tr><td>x</td></tr></table>"
+        "</div>"
+        "</body></html>");
+    REQUIRE(doc != nullptr);
+
+    auto sheet = honeybee::renderer::css::Stylesheet::parse(
+        ".mw-parser-output .sidebar { display: table }"
+        "body.ns-0 .mw-parser-output .sidebar { display: none !important }");
+
+    auto styles = honeybee::renderer::css::cascade(
+        honeybee::renderer::css::ua_stylesheet(), sheet, *doc,
+        honeybee::renderer::css::RenderState{}, 984.0f);
+
+    const auto* table = doc->find_element("table");
+    REQUIRE(table != nullptr);
+
+    auto it = styles.find(table);
+    REQUIRE(it != styles.end());
+
+    auto display = it->second.get("display");
+    REQUIRE(display.has_value());
+    CHECK(*display == "table");   // base rule wins (ns-0 doesn't match)
+}
+
