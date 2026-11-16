@@ -744,6 +744,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   NOT in scope: orientation, aspect-ratio, resolution, print (all correctly rejected).
 
+- **Media-scoped var() extraction** (ADR-078): Moves custom-property extraction from inline top-level loop to a post-pass over `result.rules`. Covers two previously-skipped cases:
+
+  - Multi-selector rules containing `:root` (e.g. `:root, .skin-invert, .notheme { --color-base: red }`)
+  - Rules inside `@media` blocks (e.g. `@media screen { :root { --color-base: red } }`)
+
+  Skips width-constrained `@media` rules (deferred to cascade-time resolution — parse doesn't know viewport). Includes non-matching feature queries check (skips `@media (prefers-color-scheme: dark)` since our env is light; includes `:light`).
+
+  **Fix rate on Wikipedia:** 5 of 6 previously-failing custom properties now resolve — `--color-base`, `--color-visited`, `--color-destructive`, `--border-color-interactive`, `--font-size-medium`. Impact: link colors, visited states, borders, font sizes.
+
+  Also adds `--*` to `is_inherited` (CSS Variables spec correctness; doesn't affect parse-time resolution but matters for future cascade-time work).
+
+  Tests: 702 → 707 (+5), 2661 → 2676 +N (+N). All green.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

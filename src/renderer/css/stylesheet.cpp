@@ -1480,33 +1480,57 @@ Stylesheet Stylesheet::parse(std::string_view text) {
         Rule rule;
         rule.selectors = std::move(*selectors);
         split_declarations(block, rule.declarations);
-        // ADR-026: extract custom-property declarations from
-        // :root-only rules into the stylesheet's variable map.
-        //
-        // Conservative trigger: exactly one selector, exactly one
-        // simple, that simple is PseudoRoot. This covers the
-        // canonical `:root { --x: val }` case. Multi-selector
-        // rules like `:root, .foo { --x: val }` are NOT extracted
-        // (their variable scoping is more complex than :root-only;
-        // deferred until custom-property inheritance is a v1
-        // feature).
-        if (rule.selectors.selectors.size() == 1) {
-            const auto& sel = rule.selectors.selectors[0];
+        result.rules.push_back(std::move(rule));
+    }
+
+    // ADR-078: extract custom properties from ALL rules (post-pass).
+    // Supersedes the ADR-026 inline extractor which only handled
+    // single-selector `:root { ... }` at top-level. This pass covers:
+    // - Multi-selector rules containing :root (`:root, .foo { ... }`)
+    // - Rules inside @media blocks (parse_media_block adds to
+    //   result.rules but doesn't extract vars)
+    // - Rules inside @supports blocks (parse_supports_block)
+    //
+    // Only collect from rules that would apply under our environment
+    // at any width. Width-constrained @media rules are deferred —
+    // parse time doesn't know the viewport, so collecting their vars
+    // would give wrong values at other widths.
+    //
+    // Feature-constrained @media rules: use the resolved q_* flags
+    // (from ADR-077) to decide. `prefers-color-scheme: dark` skipped
+    // (our env is light), `prefers-color-scheme: light` collected.
+    for (const auto& rule : result.rules) {
+        bool has_root_selector = false;
+        for (const auto& sel : rule.selectors.selectors) {
             if (sel.parts.size() == 1 &&
                 sel.parts[0].compound.simples.size() == 1 &&
                 sel.parts[0].compound.simples[0].kind ==
                     SimpleKind::PseudoRoot) {
-                for (const auto& decl : rule.declarations) {
-                    if (decl.property.size() >= 2 &&
-                        decl.property[0] == '-' &&
-                        decl.property[1] == '-') {
-                        result.variables[decl.property] = decl.value;
-                    }
-                }
+                has_root_selector = true;
+                break;
             }
         }
+        if (!has_root_selector) continue;
 
-        result.rules.push_back(std::move(rule));
+        if (rule.media.has_value()) {
+            const auto& mq = *rule.media;
+            if (mq.min_width_px || mq.max_width_px) continue;
+            if (mq.q_hover_matches && !*mq.q_hover_matches) continue;
+            if (mq.q_pointer_matches && !*mq.q_pointer_matches) continue;
+            if (mq.q_light_matches && !*mq.q_light_matches) continue;
+            if (mq.q_no_reduced_motion_matches &&
+                !*mq.q_no_reduced_motion_matches) continue;
+            if (mq.q_no_high_contrast_matches &&
+                !*mq.q_no_high_contrast_matches) continue;
+        }
+
+        for (const auto& decl : rule.declarations) {
+            if (decl.property.size() >= 2 &&
+                decl.property[0] == '-' &&
+                decl.property[1] == '-') {
+                result.variables[decl.property] = decl.value;
+            }
+        }
     }
 
     // ADR-026: resolve var() in all declarations using the
