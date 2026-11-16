@@ -460,8 +460,7 @@ LayoutBox layout_element(const dom::Element& el,
                          float viewport_w,   // ADR-051
                          float viewport_h,   // ADR-051
                          Direction parent_dir,
-                         ImageDimLookup image_dims,
-                         const FloatContext& parent_float_ctx = {}) {   // ADR-079
+                         ImageDimLookup image_dims) {
     {
         const css::ComputedStyle* s = nullptr;
         auto it = styles.find(&el);
@@ -943,7 +942,7 @@ LayoutBox layout_element(const dom::Element& el,
     // one LayoutText produces the same visual output.
     std::vector<const dom::Node*> inline_run;
 
-    auto flush_inline_run = [&](const FloatContext& inline_float_ctx) {
+    auto flush_inline_run = [&]() {
         if (inline_run.empty()) return;
         HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes", inline_run.size());
         HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes in run", inline_run.size());
@@ -973,8 +972,7 @@ LayoutBox layout_element(const dom::Element& el,
 
             const bool rtl = (own_dir == Direction::Rtl);
             auto fragments = break_into_lines(
-                collapsed, family, own_font_size, content_w, measurer,
-                inline_float_ctx, cursor_y);  // ADR-079 float-aware
+                collapsed, family, own_font_size, content_w, measurer);
             if (fragments.empty()) return;
 
             float max_line_w = 0.0f;
@@ -1027,8 +1025,7 @@ LayoutBox layout_element(const dom::Element& el,
         const bool rtl = (own_dir == Direction::Rtl);
 
         auto styled_lines =
-            break_styled_words_into_lines(words, content_w, measurer,
-                                          inline_float_ctx, cursor_y);  // ADR-079
+            break_styled_words_into_lines(words, content_w, measurer);
         if (styled_lines.empty()) return;
 
         auto ctx = std::make_unique<LayoutInlineContext>();
@@ -1236,18 +1233,6 @@ LayoutBox layout_element(const dom::Element& el,
         float float_right_w = 0.0f;
         float float_bottom = 0.0f;
 
-        // ADR-079: construct FloatContext for inline runs based on
-        // accumulated floats. Only right-float uses line-wrap; left-
-        // float keeps block-narrowing (deferred).
-        auto make_inline_float_ctx = [&]() -> FloatContext {
-            FloatContext fctx;
-            if (float_left_w == 0.0f && float_right_w > 0.0f && float_bottom > 0.0f) {
-                fctx.right_w = float_right_w;
-                fctx.bottom = float_bottom;
-            }
-            return fctx;
-        };
-
         for (const auto& child : el.children()) {
             if (child->type() == dom::NodeType::Element) {
                 const auto& child_el = static_cast<const dom::Element&>(*child);
@@ -1305,7 +1290,7 @@ LayoutBox layout_element(const dom::Element& el,
                 if (child_style) {
                     if (auto p = child_style->get("position");
                         p && *p == "fixed") {
-                        flush_inline_run(make_inline_float_ctx());
+                        flush_inline_run();
                         auto fixed_box = std::make_unique<LayoutBox>(
                             layout_element(child_el, styles, measurer,
                                            0.0f, 0.0f, content_w,
@@ -1336,7 +1321,7 @@ LayoutBox layout_element(const dom::Element& el,
                 // Float: right|left. Layout at edge, don't advance
                 // cursor_y, track vertical extent for follow-ups.
                 if (float_dir == "left" || float_dir == "right") {
-                    flush_inline_run(make_inline_float_ctx());
+                    flush_inline_run();
                     // ADR-036: clear on a float forces it below prior
                     // same-direction (or both-direction) floats.
                     std::string clear_dir = "none";
@@ -1480,7 +1465,7 @@ LayoutBox layout_element(const dom::Element& el,
                     inline_run.push_back(child.get());
                     continue;
                 }
-                flush_inline_run(make_inline_float_ctx());
+                flush_inline_run();
 
                 // ADR-036: clear on a non-float block forces it
                 // below any active float of the same (or both)
@@ -1536,30 +1521,9 @@ LayoutBox layout_element(const dom::Element& el,
                             : content_w);
                 }
                 if (start_y < float_bottom) {
-                    // ADR-079: for right-float only (no left-float),
-                    // do NOT narrow the block width — the inline
-                    // content inside will line-wrap around the float.
-                    // Left-float keeps the old block-narrowing (deferred).
-                    if (float_left_w > 0.0f) {
-                        narrow_x = content_x + float_left_w;
-                        narrow_w = content_w - float_left_w - float_right_w;
-                    }
-                    // right-float only: narrow_x/narrow_w stay full width;
-                    // child layout_element gets float_ctx for line-wrap.
+                    narrow_x = content_x + float_left_w;
+                    narrow_w = content_w - float_left_w - float_right_w;
                     if (narrow_w < 0.0f) narrow_w = 0.0f;
-                }
-
-                // ADR-079: build child_float_ctx for the child's own line-wrap.
-                // Only applies when right-float is active AND this child
-                // starts within the float's vertical extent (start_y is
-                // computed earlier for the block-narrow decision).
-                FloatContext child_float_ctx;
-                if (float_left_w == 0.0f &&
-                    float_right_w > 0.0f &&
-                    float_bottom > 0.0f &&
-                    start_y < float_bottom) {
-                    child_float_ctx.right_w = float_right_w;
-                    child_float_ctx.bottom = float_bottom;
                 }
 
                 auto child_box = std::make_unique<LayoutBox>(
@@ -1567,15 +1531,14 @@ LayoutBox layout_element(const dom::Element& el,
                                    narrow_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims,
-                                   child_float_ctx));
+                                   own_dir, image_dims));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
             } else if (child->type() == dom::NodeType::Text) {
                 inline_run.push_back(child.get());
             }
         }
-        flush_inline_run(make_inline_float_ctx());
+        flush_inline_run();
     };
 
     // ADR-029: flex layout dispatch. Single-line flex: row | column,

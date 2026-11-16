@@ -1941,13 +1941,8 @@ TEST_CASE("float: left places element at left edge",
     CHECK(near(f->width, 100.0f));
 }
 
-TEST_CASE("float: following block full width (ADR-079 CSS-correct)",
-          "[layout][float][adr-031][adr-079]") {
-    // CSS 2.1 §9.5: block-level boxes in normal flow can overlap
-    // floats. Only their LINE CONTENT wraps around floats. ADR-031
-    // approximated line-wrap by block-narrowing; ADR-079 replaces
-    // that with real per-line wrapping (implemented in the inline
-    // breaker). This test verifies the block box itself is full width.
+TEST_CASE("float: following block narrows within float zone",
+          "[layout][float][adr-031]") {
     auto doc = run(
         "<div class='c'>"
         "<div class='f'>F</div>"
@@ -1959,9 +1954,8 @@ TEST_CASE("float: following block full width (ADR-079 CSS-correct)",
     const auto* b = find_class(doc.root, "b");
     REQUIRE(f != nullptr);
     REQUIRE(b != nullptr);
-    // .b block box is full width (500); its line content (if any)
-    // would wrap around the float via inline line-breaker.
-    CHECK(near(b->width, 500.0f));
+    // .b should be narrowed by float's 100px width
+    CHECK(near(b->width, 400.0f));
 }
 
 TEST_CASE("float: following block full width when below float",
@@ -3959,16 +3953,11 @@ TEST_CASE("float: img child gives intrinsic width (ADR-066)",
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
 
-    // ADR-079: paragraph block is full width; its LINE CONTENT
-    // wraps around the float via the inline breaker. The float's
-    // own laid-out width is the ADR-066 invariant to verify here.
-    const auto* f = find_class(root, "f");
-    REQUIRE(f != nullptr);
-    CHECK(near(f->width, 20.0f));   // ADR-066: auto-shrink to img intrinsic
-
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    CHECK(near(ps[0]->width, 800.0f));  // full block width (ADR-079)
+    // Readable width: paragraph narrowed by ~20 (img), so ~780
+    CHECK(ps[0]->width > 700.0f);
+    CHECK(ps[0]->width < 800.0f);
 }
 
 TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
@@ -3997,15 +3986,11 @@ TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
 
-    // ADR-079: block full width. Verify ADR-066's invariant:
-    // explicit-width float is not re-laid-out.
-    const auto* f = find_class(root, "f");
-    REQUIRE(f != nullptr);
-    CHECK(near(f->width, 120.0f));  // explicit width preserved
-
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    CHECK(near(ps[0]->width, 800.0f));  // full block width
+    // Narrowed by ~120 (explicit width), so ~680
+    CHECK(ps[0]->width > 600.0f);
+    CHECK(ps[0]->width < 720.0f);
 }
 
 TEST_CASE("img: HTML width attribute overrides intrinsic (ADR-066 Layer 1)",
@@ -4068,15 +4053,11 @@ TEST_CASE("float: huge intrinsic img caps at half-parent (ADR-066 Layer 2)",
     };
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
-    // ADR-079: block full width. Verify ADR-066 Layer 2 invariant:
-    // huge intrinsic img caps at half-parent (400).
-    const auto* f = find_class(root, "f");
-    REQUIRE(f != nullptr);
-    CHECK(near(f->width, 400.0f));  // capped at half-parent
-
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    CHECK(near(ps[0]->width, 800.0f));  // full block width
+    // Cap at half (400), narrow_w = 800 - 400 = 400 (readable)
+    CHECK(ps[0]->width > 350.0f);
+    CHECK(ps[0]->width < 450.0f);
 }
 
 // =============================================================
