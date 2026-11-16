@@ -446,6 +446,32 @@ void paint_box(cairo_t* cr, const layout::LayoutBox& box,
 
     } // ADR-069: end box_on_screen paint gate
 
+    // ADR-080: list marker. Drawn in the padding-left area of the
+    // parent ul/ol (40px from UA), positioned at first line's vertical
+    // center. Only renders when list_style_type was captured by
+    // layout_element for a display:list-item box.
+    if (box_on_screen && !box.list_style_type.empty()) {
+        const float marker_x = box.x - 20.0f;
+        const float marker_y = box.y + 10.0f;
+        const float r = 3.0f;
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0.125, 0.129, 0.133, 1.0);  // #202122
+        if (box.list_style_type == "disc") {
+            cairo_arc(cr, marker_x, marker_y, r, 0.0, 2.0 * M_PI);
+            cairo_fill(cr);
+        } else if (box.list_style_type == "circle") {
+            cairo_arc(cr, marker_x, marker_y, r, 0.0, 2.0 * M_PI);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+        } else if (box.list_style_type == "square") {
+            cairo_rectangle(cr, marker_x - r, marker_y - r,
+                            r * 2.0, r * 2.0);
+            cairo_fill(cr);
+        }
+        // "none", "decimal", etc.: deferred
+        cairo_restore(cr);
+    }
+
     // ADR-039: clip children to content bounds when
     // overflow: hidden. Save / clip / paint / restore.
     if (box.clip_children) {

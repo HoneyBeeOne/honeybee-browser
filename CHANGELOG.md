@@ -765,6 +765,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Scope: ~300-400 lines, 1-2 sessions. Medium risk (touches inline context + float interaction). Tests: new cases for float wrap behavior + regression checks on existing tests.
 
+- **List markers** (ADR-080): Every `<li>` on every page now renders a visible bullet (disc/circle/square). Fixes the 1,559 list items on Wikipedia's HTML article that were rendering as plain indented text.
+
+  Changes:
+  - `Display::ListItem` in the enum, `display: list-item` parsing in `display_of`
+  - `list_style_type` field on `LayoutBox` (empty = not a list item)
+  - Cascade whitelist + `is_inherited` for `list-style-type` (inherits from ul/ol to li per CSS spec)
+  - UA rules: `ul { list-style-type: disc }`, `ol { list-style-type: decimal }`, `li { display: list-item }`
+  - Paint: `disc` (filled circle, r=3), `circle` (stroke), `square` (fill) at `(box.x-20, box.y+10)`
+  - Marker color: `#202122` (Wikipedia body)
+
+  **Deferred:** ordered-list ordinal markers (`1.`, `2.`, `3.`), roman/alphabetic/custom counter styles, `::marker` pseudo-element styling, `list-style-position: inside`.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

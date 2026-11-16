@@ -892,6 +892,18 @@ LayoutBox layout_element(const dom::Element& el,
     box.x = x_before_margin + box.margin[3];
     box.y = y_before_margin + box.margin[0];
 
+    // ADR-080: capture list-style-type only for elements whose own
+    // display is list-item (so <ul> itself doesn't get a marker,
+    // only <li>). The value comes via CSS inheritance from the
+    // parent ul/ol rule (is_inherited handles that in cascade.cpp).
+    if (style) {
+        if (auto d = style->get("display"); d && *d == "list-item") {
+            if (auto lst = style->get("list-style-type"); lst) {
+                box.list_style_type = *lst;
+            }
+        }
+    }
+
     float content_x = box.x + box.border[3] + box.padding[3];
     float content_y = box.y + box.border[0] + box.padding[0];
 
@@ -2370,6 +2382,7 @@ Display display_of(const css::ComputedStyle* style) {
     if (*v == "grid") return Display::Grid;       // ADR-028
     if (*v == "flex") return Display::Flex;       // ADR-029
     if (*v == "inline-flex") return Display::InlineFlex;  // ADR-029
+    if (*v == "list-item") return Display::ListItem;      // ADR-080
     return Display::Block;
 }
 

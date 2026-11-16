@@ -1549,3 +1549,32 @@ TEST_CASE("ADR-078: prefers-color-scheme:light :root is collected",
     CHECK(found_color);
 }
 
+// =============================================================
+// ADR-080: list-style-type
+// =============================================================
+
+TEST_CASE("ADR-080: list-style-type cascades and is inherited",
+          "[stylesheet][adr080]") {
+    auto s = Stylesheet::parse(
+        "ul { list-style-type: disc } "
+        ".x { list-style-type: square }");
+    // Two rules, first has list-style-type: disc, second square
+    REQUIRE(s.rules.size() == 2);
+    // Rule 0 — ul
+    bool found_disc = false;
+    for (const auto& d : s.rules[0].declarations) {
+        if (d.property == "list-style-type" && d.value == "disc") {
+            found_disc = true;
+        }
+    }
+    CHECK(found_disc);
+    // Rule 1 — .x
+    bool found_square = false;
+    for (const auto& d : s.rules[1].declarations) {
+        if (d.property == "list-style-type" && d.value == "square") {
+            found_square = true;
+        }
+    }
+    CHECK(found_square);
+}
+

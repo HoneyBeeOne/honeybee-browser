@@ -29,6 +29,36 @@ const css::Rule* find_rule_by_tag(const css::Stylesheet& s,
     return nullptr;
 }
 
+// ADR-080: some tags have multiple rules in the UA sheet (e.g. ul has
+// { margin; padding } and separately { list-style-type: disc }).
+// This helper finds the rule with the tag AND the given property.
+const css::Rule* find_rule_by_tag_with_prop(const css::Stylesheet& s,
+                                             std::string_view tag,
+                                             std::string_view prop) {
+    for (const auto& r : s.rules) {
+        bool tag_matches = false;
+        for (const auto& sel : r.selectors.selectors) {
+            for (const auto& part : sel.parts) {
+                for (const auto& simp : part.compound.simples) {
+                    if (simp.kind == css::SimpleKind::Type &&
+                        simp.name == std::string(tag)) {
+                        tag_matches = true;
+                        break;
+                    }
+                }
+                if (tag_matches) break;
+            }
+            if (tag_matches) break;
+        }
+        if (!tag_matches) continue;
+        // Also require the rule to contain the property
+        for (const auto& d : r.declarations) {
+            if (d.property == std::string(prop)) return &r;
+        }
+    }
+    return nullptr;
+}
+
 const css::Declaration* find_decl(const css::Rule& r,
                                    std::string_view prop) {
     for (const auto& d : r.declarations) {
@@ -39,8 +69,10 @@ const css::Declaration* find_decl(const css::Rule& r,
 
 } // namespace
 
-TEST_CASE("ua_stylesheet: parses to 13 rules", "[ua_stylesheet]") {
-    CHECK(css::ua_stylesheet().rules.size() == 17);
+TEST_CASE("ua_stylesheet: parses to 20 rules", "[ua_stylesheet][adr080]") {
+    // ADR-080: 3 rules added (ul/ol list-style-type, li display)
+    // → 17 + 3 = 20.
+    CHECK(css::ua_stylesheet().rules.size() == 20);
 }
 
 TEST_CASE("ua_stylesheet: returns cached reference",
@@ -97,3 +129,26 @@ TEST_CASE("ua_stylesheet: a has blue color", "[ua_stylesheet]") {
     REQUIRE(d != nullptr);
     CHECK(d->value == "#0000EE");
 }
+
+// =============================================================
+// ADR-080: UA rules for ul/ol/li
+// =============================================================
+
+TEST_CASE("ua_stylesheet: ul has list-style-type disc", "[ua_stylesheet][adr080]") {
+    const auto& s = css::ua_stylesheet();
+    const auto* r = find_rule_by_tag_with_prop(s, "ul", "list-style-type");
+    REQUIRE(r != nullptr);
+    const auto* d = find_decl(*r, "list-style-type");
+    REQUIRE(d != nullptr);
+    CHECK(d->value == "disc");
+}
+
+TEST_CASE("ua_stylesheet: li has display list-item", "[ua_stylesheet][adr080]") {
+    const auto& s = css::ua_stylesheet();
+    const auto* r = find_rule_by_tag_with_prop(s, "li", "display");
+    REQUIRE(r != nullptr);
+    const auto* d = find_decl(*r, "display");
+    REQUIRE(d != nullptr);
+    CHECK(d->value == "list-item");
+}
+

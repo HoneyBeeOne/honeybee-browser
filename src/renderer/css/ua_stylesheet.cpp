@@ -22,6 +22,9 @@ em, i, cite, var, address { font-style: italic }
 strong, b { font-weight: bold }
 code, pre, kbd, samp, tt { font-family: monospace }
 ul, ol { margin: 1em 0; padding-left: 40px }
+ul { list-style-type: disc }
+ol { list-style-type: decimal }
+li { display: list-item }
 a:link    { color: #0000EE }
 a:visited { color: #551A8B }
 a:hover   { color: #0055EE }

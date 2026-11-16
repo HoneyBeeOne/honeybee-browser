@@ -4107,3 +4107,33 @@ TEST_CASE("ADR-071: inline h2 becomes InlineContext, not Box",
     CHECK(found_text);
 }
 
+// =============================================================
+// ADR-080: list-style-type captured on li boxes
+// =============================================================
+
+TEST_CASE("ADR-080: li inherits list-style-type from ul via UA",
+          "[layout][adr080]") {
+    // ul has UA rule { list-style-type: disc }, li inherits via
+    // is_inherited. Box.list_style_type should be "disc" on li.
+    auto doc = run_with_ua(
+        "<ul><li>one</li><li>two</li></ul>", "");
+    auto lis = find_all_boxes(doc.root, "li");
+    REQUIRE(lis.size() == 2);
+    CHECK(lis[0]->list_style_type == "disc");
+    CHECK(lis[1]->list_style_type == "disc");
+}
+
+TEST_CASE("ADR-080: non-li elements have empty list-style-type",
+          "[layout][adr080]") {
+    // <p> and <div> should not have list_style_type set.
+    auto doc = run_with_ua(
+        "<p>text</p><div>block</div>", "");
+    auto ps = find_all_boxes(doc.root, "p");
+    auto divs = find_all_boxes(doc.root, "div");
+    REQUIRE(ps.size() >= 1);
+    CHECK(ps[0]->list_style_type.empty());
+    if (!divs.empty()) {
+        CHECK(divs[0]->list_style_type.empty());
+    }
+}
+
