@@ -30,7 +30,9 @@ std::vector<LineFragment> break_into_lines(
     std::string_view font_family,
     float font_size,
     float max_width,
-    const TextMeasurer& measurer);
+    const TextMeasurer& measurer,
+    const layout::FloatContext& float_ctx = {},   // ADR-079
+    float start_y_absolute = 0.0f);               // ADR-079
 
 // A word with its own style, used by the inline formatting context.
 // preceded_by_space tracks whether a space existed in the source
@@ -65,6 +67,8 @@ struct StyledLine {
 std::vector<StyledLine> break_styled_words_into_lines(
     const std::vector<StyledWord>& words,
     float max_width,
-    const TextMeasurer& measurer);
+    const TextMeasurer& measurer,
+    const layout::FloatContext& float_ctx = {},   // ADR-079
+    float start_y_absolute = 0.0f);               // ADR-079
 
 } // namespace honeybee::renderer::layout
