@@ -20,6 +20,7 @@ bool is_inherited(std::string_view property) {
            property == "font-style" ||
            property == "font-weight" ||
            property == "line-height" ||
+           property == "list-style-type" ||   // ADR-080
            property == "visibility";
 }
 

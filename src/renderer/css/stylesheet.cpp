@@ -868,6 +868,7 @@ const std::unordered_set<std::string>& supported_properties() {
         "overflow", "overflow-x", "overflow-y",
         "position", "top", "right", "bottom", "left", "z-index",
         "float", "clear",  // ADR-063
+        "list-style-type",  // ADR-080
         "flex", "flex-grow", "flex-shrink", "flex-basis",
         "flex-direction", "flex-wrap", "justify-content",
         "align-items", "align-content",

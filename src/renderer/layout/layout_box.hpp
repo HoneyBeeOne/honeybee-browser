@@ -45,7 +45,8 @@ struct Color {
 // Commit 1.
 enum class Display : std::uint8_t {
     Block, Inline, None, Grid,
-    Flex, InlineFlex        // ADR-029: CSS flex layout
+    Flex, InlineFlex,       // ADR-029: CSS flex layout
+    ListItem                // ADR-080: display:list-item
 };
 
 // Text direction for a block container (ADR-016). Resolved from
@@ -128,6 +129,11 @@ struct LayoutBox final : LayoutNode {
     // not skip it (visibility:hidden, unlike display:none, still
     // occupies space).
     bool visible = true;
+
+    // ADR-080: list-style-type value (empty = not a list item).
+    // Set in layout_element only when this box's own display is
+    // list-item. Paint draws the marker using this value.
+    std::string list_style_type;
 
     // ADR-033: parsed position. Fixed is honored by layout
     // (out-of-flow + viewport anchor); Relative/Absolute/Sticky

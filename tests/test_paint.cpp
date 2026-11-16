@@ -347,3 +347,71 @@ TEST_CASE("ADR-071: Text leaf is still culled when off-screen",
     CHECK(draws == 0);
 }
 
+// =============================================================
+// ADR-080: list marker rendering
+// =============================================================
+
+TEST_CASE("ADR-080: disc marker paints at (box.x-20, box.y+10)",
+          "[paint][adr080]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto li = std::make_unique<layout::LayoutBox>();
+    li->x = 40.0f;
+    li->y = 10.0f;
+    li->width = 150.0f;
+    li->height = 20.0f;
+    li->list_style_type = "disc";
+
+    // A text child so the li box has content (paint won't skip)
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->x = 40.0f;
+    lt->y = 10.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 40.0f, .y = 10.0f,
+        .width = 50.0f, .height = 16.0f,
+        .text = "item",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    li->children.push_back(std::move(lt));
+    root.children.push_back(std::move(li));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Marker center at (20, 20), radius 3. Pixel at (20, 20) should
+    // be dark (from disc fill), pixel at (60, 60) far away should be white.
+    auto marker_px = pixel_at(c.surface, 20, 20);
+    CHECK(marker_px.r < 100);  // dark red channel = marker drawn
+    CHECK(marker_px.g < 100);
+    CHECK(marker_px.b < 100);
+
+    // Far pixel should be white (nothing drawn)
+    CHECK(is_white(pixel_at(c.surface, 180, 90)));
+}
+
+TEST_CASE("ADR-080: empty list_style_type skips marker",
+          "[paint][adr080]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto block = std::make_unique<layout::LayoutBox>();
+    block->x = 40.0f;
+    block->y = 10.0f;
+    block->width = 150.0f;
+    block->height = 20.0f;
+    // list_style_type empty (default)
+    root.children.push_back(std::move(block));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Nothing should be drawn at (20, 20)
+    CHECK(is_white(pixel_at(c.surface, 20, 20)));
+}
+
