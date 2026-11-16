@@ -757,6 +757,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Tests: 702 → 707 (+5), 2661 → 2676 +N (+N). All green.
 
+- **Line-by-line float wrap** (ADR-079, Proposed): The remaining ~1700px Wikipedia History offset is confirmed to be ADR-031's block-narrowing approximation. When a block starts within a float's vertical extent, the entire block is narrowed for its full height — instead of just the lines that vertically overlap the float. Result: intro paragraphs are ~200px taller than Firefox's line-wrapped version, × 3 paragraphs + infobox push = History at `y≈2210` instead of `y≈500`.
+
+  Fix: replace block-narrowing with per-line narrowing. New `FloatContext` struct carries `{left_w, right_w, bottom}` through the inline layout chain. `break_styled_words_into_lines` evaluates available width per line based on current y range. Completes the ADR-031 → ADR-032 handoff deferred 6 sessions ago.
+
+  Same root cause fixes both ADR-074 bugs (A: infobox at wrong y, B: block-narrowing over-stretch). Measured impact: History from `y≈2210` → `y≈500`, infobox from `y≈799` → `y≈267`.
+
+  Scope: ~300-400 lines, 1-2 sessions. Medium risk (touches inline context + float interaction). Tests: new cases for float wrap behavior + regression checks on existing tests.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):
