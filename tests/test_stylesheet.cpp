@@ -354,11 +354,15 @@ TEST_CASE("Stylesheet::variables: two :root blocks merge, later wins",
     CHECK(sheet.variables.at("--b") == "blue");
 }
 
-TEST_CASE("Stylesheet::variables: multi-selector :root rule NOT extracted",
-          "[css][stylesheet][adr-026]") {
-    // Conservative: `:root, .foo` doesn't trigger extraction.
+TEST_CASE("Stylesheet::variables: multi-selector :root rule IS extracted",
+          "[css][stylesheet][adr-078]") {
+    // ADR-078: `:root, .foo` now extracts — the :root selector
+    // means the variable applies to the root element. Previously
+    // skipped by ADR-026's conservative single-selector-only
+    // rule; that limitation is removed.
     auto sheet = Stylesheet::parse(":root, .foo { --x: red }");
-    CHECK(sheet.variables.empty());
+    REQUIRE(sheet.variables.size() == 1);
+    CHECK(sheet.variables.at("--x") == "red");
     CHECK(sheet.rules.size() == 1);
 }
 
@@ -1450,5 +1454,98 @@ TEST_CASE("background: multi-layer with gradient dropped",
         "linear-gradient(green, yellow); }");
     REQUIRE(sheet.rules.size() == 1);
     CHECK(sheet.rules[0].declarations.empty());
+}
+
+// =============================================================
+// ADR-078: media-scoped and multi-selector var() extraction.
+// =============================================================
+
+TEST_CASE("ADR-078: :root in multi-selector rule contributes vars",
+          "[stylesheet][adr078]") {
+    // :root, .foo { --x: red } .y { color: var(--x) }
+    // Both :root and .foo get --x. .y's var(--x) should resolve.
+    const auto s = Stylesheet::parse(
+        ":root, .foo { --x: red } "
+        ".y { color: var(--x) }");
+    // Find the .y rule, check its color declaration
+    bool found_color = false;
+    for (const auto& rule : s.rules) {
+        for (const auto& decl : rule.declarations) {
+            if (decl.property == "color") {
+                CHECK(decl.value == "red");
+                found_color = true;
+            }
+        }
+    }
+    CHECK(found_color);
+}
+
+TEST_CASE("ADR-078: @media screen scoped :root contributes vars",
+          "[stylesheet][adr078]") {
+    // @media screen { :root { --x: blue } } .y { color: var(--x) }
+    const auto s = Stylesheet::parse(
+        "@media screen { :root { --x: blue } } "
+        ".y { color: var(--x) }");
+    bool found_color = false;
+    for (const auto& rule : s.rules) {
+        for (const auto& decl : rule.declarations) {
+            if (decl.property == "color") {
+                CHECK(decl.value == "blue");
+                found_color = true;
+            }
+        }
+    }
+    CHECK(found_color);
+}
+
+TEST_CASE("ADR-078: width-constrained @media :root not collected",
+          "[stylesheet][adr078]") {
+    // Width-dependent var collection is deferred: parse time doesn't
+    // know viewport. Declaration should be dropped (var unresolved).
+    const auto s = Stylesheet::parse(
+        "@media (min-width: 640px) { :root { --x: green } } "
+        ".y { color: var(--x) }");
+    // .y's color decl should NOT be present (unresolved var, dropped)
+    bool found_color = false;
+    for (const auto& rule : s.rules) {
+        if (rule.media.has_value()) continue;  // skip the @media rule itself
+        for (const auto& decl : rule.declarations) {
+            if (decl.property == "color") found_color = true;
+        }
+    }
+    CHECK_FALSE(found_color);
+}
+
+TEST_CASE("ADR-078: prefers-color-scheme:dark :root not collected",
+          "[stylesheet][adr078]") {
+    const auto s = Stylesheet::parse(
+        "@media (prefers-color-scheme: dark) { :root { --x: white } } "
+        ".y { color: var(--x) }");
+    bool found_color = false;
+    for (const auto& rule : s.rules) {
+        if (rule.media.has_value()) continue;
+        for (const auto& decl : rule.declarations) {
+            if (decl.property == "color") found_color = true;
+        }
+    }
+    CHECK_FALSE(found_color);
+}
+
+TEST_CASE("ADR-078: prefers-color-scheme:light :root is collected",
+          "[stylesheet][adr078]") {
+    // Our env is light, so this rule would apply at cascade.
+    const auto s = Stylesheet::parse(
+        "@media (prefers-color-scheme: light) { :root { --x: black } } "
+        ".y { color: var(--x) }");
+    bool found_color = false;
+    for (const auto& rule : s.rules) {
+        for (const auto& decl : rule.declarations) {
+            if (decl.property == "color") {
+                CHECK(decl.value == "black");
+                found_color = true;
+            }
+        }
+    }
+    CHECK(found_color);
 }
 

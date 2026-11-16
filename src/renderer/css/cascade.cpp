@@ -10,6 +10,11 @@
 namespace honeybee::renderer::css {
 
 bool is_inherited(std::string_view property) {
+    // ADR-078: CSS custom properties inherit per CSS Variables spec.
+    if (property.size() >= 2 &&
+        property[0] == '-' && property[1] == '-') {
+        return true;
+    }
     return property == "color" ||
            property == "font-family" ||
            property == "font-style" ||
