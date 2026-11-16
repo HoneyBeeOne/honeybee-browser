@@ -1242,6 +1242,28 @@ LayoutBox layout_element(const dom::Element& el,
                            child_el.tag().c_str(), child_el.get_attribute("class").c_str());
                     continue;
                 }
+
+                // ADR-079 diagnostic: permanent cursor_y progression trace.
+                // Shows the y cursor before any child processing, so we
+                // can spot exactly which element causes a jump (clear,
+                // float placement, or layout advance). Guarded per ADR-073.
+                if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+                    std::string el_id = child_el.get_attribute("id");
+                    std::string el_cls = child_el.get_attribute("class");
+                    std::string float_v = child_style
+                        ? child_style->get("float").value_or("-")
+                        : "-";
+                    std::string clear_v = child_style
+                        ? child_style->get("clear").value_or("-")
+                        : "-";
+                    HB_LOG(LayoutDetail, Trace,
+                        "YPROG pre: <%s> id='%.30s' class='%.40s' "
+                        "cursor_y=%.1f float_bottom=%.1f "
+                        "float_L=%.1f float_R=%.1f float=%s clear=%s",
+                        child_el.tag().c_str(), el_id.c_str(), el_cls.c_str(),
+                        cursor_y, float_bottom, float_left_w, float_right_w,
+                        float_v.c_str(), clear_v.c_str());
+                }
                 
                 // Permanent diagnostic for heading issues (ADR-071 candidate)
                 if (child_el.tag() == "h2" || child_el.tag() == "h3" ||
