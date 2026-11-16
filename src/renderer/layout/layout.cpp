@@ -1240,7 +1240,10 @@ LayoutBox layout_element(const dom::Element& el,
         // accumulated floats. Only right-float uses line-wrap; left-
         // float keeps block-narrowing (deferred).
         auto make_inline_float_ctx = [&]() -> FloatContext {
-            FloatContext fctx;
+            // ADR-079 fix: start from parent_float_ctx (from ancestor),
+            // then override with any LOCAL floats this element accumulated.
+            // Local floats take precedence because they're more recent.
+            FloatContext fctx = parent_float_ctx;
             if (float_left_w == 0.0f && float_right_w > 0.0f && float_bottom > 0.0f) {
                 fctx.right_w = float_right_w;
                 fctx.bottom = float_bottom;
