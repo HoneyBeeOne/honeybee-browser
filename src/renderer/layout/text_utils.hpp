@@ -12,6 +12,7 @@
 #pragma once
 
 #include <string>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -46,6 +47,13 @@ struct StyledWord {
     // Carried through line breaking so LineFragment::element
     // can be populated.
     const dom::Element* element = nullptr;
+
+    // ADR-081: inline-block atomic word. When inline_block_element
+    // is non-null, this word represents a whole inline-block unit
+    // (not text). flush_inline_run pre-populates inline_block_box
+    // by calling layout_element before line breaking.
+    const dom::Element* inline_block_element = nullptr;
+    std::shared_ptr<layout::LayoutBox> inline_block_box;
 };
 
 // One visual line of styled fragments. fragments are ordered

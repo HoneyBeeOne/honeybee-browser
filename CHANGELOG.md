@@ -777,6 +777,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Deferred:** ordered-list ordinal markers (`1.`, `2.`, `3.`), roman/alphabetic/custom counter styles, `::marker` pseudo-element styling, `list-style-position: inside`.
 
+- **Inline-block hybrid** (ADR-081): `display: inline-block` elements now participate in inline formatting as atomic units while containing a fully-laid-out block subtree.
+
+  Changes:
+  - `Display::InlineBlock` in enum, `display_of` mapping
+  - `LineFragment::inline_block_child` (shared_ptr<LayoutBox>) for atomic inline content
+  - `StyledWord::inline_block_element` + `inline_block_box` fields
+  - `layout_block_children` routes inline-block to `inline_run`
+  - `flatten_inline_to_words` detects inline-block and emits atomic word (no recursion)
+  - `flush_inline_run` pre-lays-out inline-block words via recursive `layout_element`
+  - `break_styled_words_into_lines` sizes atomic words by box outer dimensions
+  - `paint.cpp` InlineContext case translates to fragment position and calls `paint_box` recursively
+
+  **Production-verified:** Header layout improved (hamburger, buttons inline). References intact. PERF-LAYOUT ~2200ms (no regression). Edit links not shown by Firefox either — not a real requirement.
+
+  **Deferred:** borders on inline-block fragments inside InlineContexts (categories separator pipes), baseline alignment, shrink-to-content width for auto-width inline-blocks.
+
 ### Added
 
 - **Box model completion** (ADR-039 Commit 1, delivered):

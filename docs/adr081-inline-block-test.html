@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ADR-081 - Inline-block Test</title>
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    font-size: 16px;
+    color: #202124;
+    background: #ffffff;
+    margin: 24px;
+}
+
+h1 {
+    font-size: 24px;
+}
+
+h2 {
+    font-size: 18px;
+    margin-top: 24px;
+}
+
+.panel {
+    border: 1px solid #888888;
+    padding: 12px;
+    margin-bottom: 20px;
+    width: 620px;
+}
+
+.flow {
+    width: 590px;
+    border: 1px dashed #999999;
+    padding: 8px;
+}
+
+.badge {
+    display: inline-block;
+    width: 110px;
+    height: 34px;
+    margin: 8px 14px 10px 12px;
+    padding: 4px;
+    border: 2px solid #174ea6;
+    background: #c6dafc;
+    color: #174ea6;
+}
+
+.wrap {
+    width: 340px;
+    border: 1px dashed #999999;
+    padding: 8px;
+}
+
+.wrap-item {
+    display: inline-block;
+    width: 130px;
+    height: 42px;
+    margin: 8px 10px;
+    padding: 4px;
+    border: 2px solid #137333;
+    background: #ceead6;
+    color: #137333;
+}
+
+.nested {
+    display: inline-block;
+    width: 190px;
+    margin: 8px 12px;
+    padding: 8px;
+    border: 2px solid #b06000;
+    background: #fce8b2;
+}
+
+.nested-child {
+    display: block;
+    height: 28px;
+    margin: 4px 0;
+    padding: 3px;
+    background: #f9cb9c;
+    border: 1px solid #b06000;
+}
+</style>
+</head>
+
+<body>
+
+<h1>ADR-081: Inline-block Rendering Test</h1>
+
+<p>
+This page tests inline-block flow, dimensions, margins,
+line wrapping, and internal block layout.
+</p>
+
+<h2>Test 1: Inline flow and four-sided margins</h2>
+
+<div class="panel">
+    <div class="flow">
+        Text before the badge
+        <span class="badge">INLINE BOX</span>
+        Text after the badge should continue on the same line.
+    </div>
+</div>
+
+<h2>Test 2: Multiple inline-blocks and line wrapping</h2>
+
+<div class="panel">
+    <div class="wrap">
+        Start
+        <span class="wrap-item">ITEM ONE</span>
+        <span class="wrap-item">ITEM TWO</span>
+        <span class="wrap-item">ITEM THREE</span>
+        End of the wrapping test.
+    </div>
+</div>
+
+<h2>Test 3: Block children inside an inline-block</h2>
+
+<div class="panel">
+    <div class="flow">
+        Text before the nested box
+
+        <div class="nested">
+            <div class="nested-child">INTERNAL BLOCK A</div>
+            <div class="nested-child">INTERNAL BLOCK B</div>
+            <div class="nested-child">INTERNAL BLOCK C</div>
+        </div>
+
+        Text after the nested box.
+    </div>
+</div>
+
+<h2>Test 4: Repeated inline-blocks</h2>
+
+<div class="panel">
+    <div class="flow">
+        <span class="badge">FIRST</span>
+        <span class="badge">SECOND</span>
+        <span class="badge">THIRD</span>
+        <span class="badge">FOURTH</span>
+    </div>
+</div>
+
+</body>
+</html>

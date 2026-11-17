@@ -283,6 +283,27 @@ void flatten_inline_to_words(
         const auto& el = static_cast<const dom::Element&>(node);
         auto it = styles.find(&el);
 
+        // ADR-081: detect inline-block here as well as in
+        // layout_block_children. Inline parents (e.g. `.catlinks ul`
+        // which is display:inline) recurse through flatten, so
+        // inline-block children would otherwise be missed.
+        if (it != styles.end()) {
+            const auto dv = it->second.get("display");
+            if (dv && *dv == "inline-block") {
+                StyledWord w;
+                w.text = "";
+                w.font_family = family;
+                w.font_size = size;
+                w.color = default_color;
+                w.preceded_by_space = !out.empty() && prev_had_space;
+                w.element = &el;
+                w.inline_block_element = &el;
+                prev_had_space = false;
+                out.push_back(std::move(w));
+                return;
+            }
+        }
+
         // ADR-026 fix: display: none check in inline flattening.
         //
         // Block-level iteration skips display: none elements
@@ -1023,6 +1044,28 @@ LayoutBox layout_element(const dom::Element& el,
         std::vector<StyledWord> words;
         bool prev_had_space = false;
         for (const auto* n : inline_run) {
+            // ADR-081: detect inline-block at the iterator level
+            // instead of modifying flatten_inline_to_words.
+            if (n->type() == dom::NodeType::Element) {
+                const auto& child_el = static_cast<const dom::Element&>(*n);
+                auto it = styles.find(&child_el);
+                if (it != styles.end()) {
+                    const auto dv = it->second.get("display");
+                    if (dv && *dv == "inline-block") {
+                        StyledWord w;
+                        w.text = "";
+                        w.font_family = family;
+                        w.font_size = own_font_size;
+                        w.color = tc;
+                        w.preceded_by_space = !words.empty() && prev_had_space;
+                        w.element = &child_el;
+                        w.inline_block_element = &child_el;
+                        prev_had_space = false;
+                        words.push_back(std::move(w));
+                        continue;
+                    }
+                }
+            }
             flatten_inline_to_words(*n, styles, family, own_font_size,
                                     tc, prev_had_space, words, &el);
         }
@@ -1035,6 +1078,20 @@ LayoutBox layout_element(const dom::Element& el,
             run_text += w.text;
         }
         const bool rtl = (own_dir == Direction::Rtl);
+
+        // ADR-081: pre-lay-out inline-block atomic words. Each one
+        // gets a fully-laid-out LayoutBox subtree that paint will
+        // render at the fragment position.
+        for (auto& w : words) {
+            if (w.inline_block_element != nullptr && !w.inline_block_box) {
+                auto child_box = std::make_shared<LayoutBox>(
+                    layout_element(*w.inline_block_element, styles, measurer,
+                                   0.0f, 0.0f, content_w, own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h, own_dir, image_dims));
+                w.inline_block_box = std::move(child_box);
+            }
+        }
 
         auto styled_lines =
             break_styled_words_into_lines(words, content_w, measurer);
@@ -1495,7 +1552,9 @@ LayoutBox layout_element(const dom::Element& el,
                     continue;
                 }
 
-                if (display_of(child_style) == Display::Inline) {
+                if (display_of(child_style) == Display::Inline ||
+                    display_of(child_style) == Display::InlineFlex ||
+                    display_of(child_style) == Display::InlineBlock) {
                     inline_run.push_back(child.get());
                     continue;
                 }
@@ -2383,6 +2442,7 @@ Display display_of(const css::ComputedStyle* style) {
     if (*v == "flex") return Display::Flex;       // ADR-029
     if (*v == "inline-flex") return Display::InlineFlex;  // ADR-029
     if (*v == "list-item") return Display::ListItem;      // ADR-080
+    if (*v == "inline-block") return Display::InlineBlock; // ADR-081
     return Display::Block;
 }
 

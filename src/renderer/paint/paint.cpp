@@ -610,10 +610,51 @@ void paint_children(
                     HB_LOG(Paint, Trace, "     LINE y=%.1f text='%.60s' w=%.1f h=%.1f size=%.1f",
                            line.y, line.text.c_str(), line.width, line.height, line.font_size);
                 }
+                // ADR-081: inline-block fragments carry an atomic
+                // laid-out child box. Paint applies the fragment's
+                // margin-box offset and adjusts the viewport for the
+                // child's local coordinate system before recursing.
                 for (const auto& frag : ctx.lines) {
-                    paint_inline_image(cr, frag, images);
+                    if (frag.inline_block_child) {
+                        const auto& child = *frag.inline_block_child;
+
+                        // The inline-block subtree is laid out in its own
+                        // local coordinate space. Translate both painting
+                        // AND the viewport used by descendant culling.
+                        const float paint_offset_x =
+                            frag.x + child.margin[3] - child.x;
+                        const float paint_offset_y =
+                            frag.y + child.margin[0] - child.y;
+
+                        // Preserve the existing no-culling sentinel used
+                        // during an unallocated initial viewport.
+                        const bool culling_disabled =
+                            visible_bottom <= 0.0f ||
+                            visible_top >= visible_bottom;
+
+                        const float child_visible_top =
+                            culling_disabled
+                                ? visible_top
+                                : visible_top - paint_offset_y;
+                        const float child_visible_bottom =
+                            culling_disabled
+                                ? visible_bottom
+                                : visible_bottom - paint_offset_y;
+
+                        cairo_save(cr);
+                        cairo_translate(cr, paint_offset_x, paint_offset_y);
+                        paint_box(cr, child, drawer, images,
+                                  child_visible_top, child_visible_bottom);
+                        cairo_restore(cr);
+                    } else {
+                        paint_inline_image(cr, frag, images);
+                    }
                 }
-                for (const auto& frag : ctx.lines) drawer(cr, frag);
+                for (const auto& frag : ctx.lines) {
+                    if (!frag.inline_block_child) {
+                        drawer(cr, frag);
+                    }
+                }
                 break;
             }
             case layout::LayoutKind::Inline:
