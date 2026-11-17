@@ -711,21 +711,18 @@ TEST_CASE("display_of: explicit none", "[layout][display]") {
     CHECK(layout::display_of(&it->second) == layout::Display::None);
 }
 
-TEST_CASE("display_of: unknown value falls back to Block",
-          "[layout][display]") {
-    // ADR-028 note: `display: grid` is now a supported value
-    // (returns Display::Grid, verified elsewhere).
-    // ADR-029 note: `display: flex` is now a supported value
-    // (returns Display::Flex, verified elsewhere). Using
-    // `inline-block` here -- genuinely unknown today (not in the
-    // Display enum, not planned for v1) -- preserves the test's
-    // original intent (unknown display value falls back to Block).
+TEST_CASE("display_of: inline-block maps to Display::InlineBlock",
+          "[layout][display][adr081]") {
+    // ADR-081: `display: inline-block` was previously an unknown
+    // value that fell through to Display::Block. It's now a proper
+    // enum value (InlineBlock) so inline-block elements participate
+    // in inline formatting as atomic units.
     auto doc = run("<p>test</p>", "p { display: inline-block }");
     const auto* p = doc.doc->find_element("p");
     REQUIRE(p != nullptr);
     auto it = doc.styles.find(p);
     REQUIRE(it != doc.styles.end());
-    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+    CHECK(layout::display_of(&it->second) == layout::Display::InlineBlock);
 }
 
 TEST_CASE("LineFragment: aggregate init still works",
@@ -4134,6 +4131,103 @@ TEST_CASE("ADR-080: non-li elements have empty list-style-type",
     CHECK(ps[0]->list_style_type.empty());
     if (!divs.empty()) {
         CHECK(divs[0]->list_style_type.empty());
+    }
+}
+
+// =============================================================
+// ADR-081: inline-block hybrid layout
+// =============================================================
+
+TEST_CASE("ADR-081: inline-block routes to inline_run (not block child)",
+          "[layout][adr081]") {
+    // <div>text <span class=x>badge</span> more</div>
+    // The span has display:inline-block. Should be in the div's
+    // InlineContext, not a separate block child.
+    auto doc = run(
+        "<div id='d'>text <span class='x'>badge</span> more</div>",
+        ".x { display: inline-block; padding: 2px }");
+    auto divs = find_all_boxes(doc.root, "div");
+    REQUIRE(divs.size() >= 1);
+    // Find the div with id='d'
+    const layout::LayoutBox* target = nullptr;
+    for (const auto* d : divs) {
+        if (d->element && d->element->get_attribute("id") == "d") {
+            target = d;
+            break;
+        }
+    }
+    REQUIRE(target != nullptr);
+    // The div should have InlineContext children (the text + atomic badge)
+    bool found_inline_ctx = false;
+    for (const auto& child : target->children) {
+        if (child->kind == layout::LayoutKind::InlineContext) {
+            found_inline_ctx = true;
+            break;
+        }
+    }
+    CHECK(found_inline_ctx);
+}
+
+TEST_CASE("ADR-081: inline-block fragment carries inline_block_child",
+          "[layout][adr081]") {
+    auto doc = run(
+        "<div>text <span class='x'>B</span></div>",
+        ".x { display: inline-block; padding: 4px; width: 20px; height: 15px }");
+    auto ctxs = find_all_contexts(doc.root);
+    REQUIRE(!ctxs.empty());
+    bool found_atomic = false;
+    for (const auto* ctx : ctxs) {
+        for (const auto& line : ctx->lines) {
+            if (line.inline_block_child) {
+                found_atomic = true;
+                break;
+            }
+        }
+        if (found_atomic) break;
+    }
+    CHECK(found_atomic);
+}
+
+TEST_CASE("ADR-081: inline-block atomic word width uses box outer size",
+          "[layout][adr081]") {
+    // Explicit width:20 + padding 4 each side = content 20, but
+    // box.width is content-box by convention. The atomic word width
+    // = box.width + margins. Test that fragment.width reflects the
+    // box's contribution (not the text 'B' width).
+    auto doc = run(
+        "<div><span class='x'>B</span></div>",
+        ".x { display: inline-block; padding: 0; margin: 0; "
+        "width: 50px; height: 20px }");
+    auto ctxs = find_all_contexts(doc.root);
+    REQUIRE(!ctxs.empty());
+    bool found = false;
+    for (const auto* ctx : ctxs) {
+        for (const auto& line : ctx->lines) {
+            if (line.inline_block_child) {
+                // The atomic fragment's width should be >= 50 (box width)
+                CHECK(line.width >= 50.0f);
+                found = true;
+                break;
+            }
+        }
+        if (found) break;
+    }
+    CHECK(found);
+}
+
+TEST_CASE("ADR-081: regular inline elements do NOT set inline_block_child",
+          "[layout][adr081]") {
+    // Sanity: an inline <a> should produce text fragments (inline_block_child=null),
+    // not atomic inline-block fragments.
+    auto doc = run(
+        "<div><a href='x'>link</a></div>",
+        "a { display: inline }");
+    auto ctxs = find_all_contexts(doc.root);
+    REQUIRE(!ctxs.empty());
+    for (const auto* ctx : ctxs) {
+        for (const auto& line : ctx->lines) {
+            CHECK(line.inline_block_child == nullptr);
+        }
     }
 }
 

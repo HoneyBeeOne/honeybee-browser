@@ -197,8 +197,21 @@ std::vector<StyledLine> break_styled_words_into_lines(
     float cursor_x = 0.0f;
 
     for (const auto& w : words) {
-        const float ww = measurer(w.text, w.font_family, w.font_size).first;
-        const float wh = measurer(w.text, w.font_family, w.font_size).second;
+        // ADR-081: inline-block words are atomic units sized by
+        // their laid-out box's outer dimensions (content + margins).
+        float ww;
+        float wh;
+        if (w.inline_block_box) {
+            ww = w.inline_block_box->width
+                 + w.inline_block_box->margin[1]
+                 + w.inline_block_box->margin[3];
+            wh = w.inline_block_box->height
+                 + w.inline_block_box->margin[0]
+                 + w.inline_block_box->margin[2];
+        } else {
+            ww = measurer(w.text, w.font_family, w.font_size).first;
+            wh = measurer(w.text, w.font_family, w.font_size).second;
+        }
 
         float sep = 0.0f;
         if (!current.fragments.empty() && w.preceded_by_space) {
@@ -222,7 +235,9 @@ std::vector<StyledLine> break_styled_words_into_lines(
             last->font_family == w.font_family &&
             last->font_size == w.font_size &&
             last->color == w.color &&
-            last->element == w.element;
+            last->element == w.element &&
+            !last->inline_block_child &&     // ADR-081: no merge across atomic
+            !w.inline_block_box;
 
         if (same_style) {
             if (sep > 0.0f) last->text += ' ';
@@ -256,6 +271,7 @@ std::vector<StyledLine> break_styled_words_into_lines(
             f.color = w.color;
             f.height = wh;
             f.element = w.element;
+            f.inline_block_child = w.inline_block_box;  // ADR-081
             current.fragments.push_back(std::move(f));
         }
 

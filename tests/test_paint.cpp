@@ -415,3 +415,170 @@ TEST_CASE("ADR-080: empty list_style_type skips marker",
     CHECK(is_white(pixel_at(c.surface, 20, 20)));
 }
 
+// =============================================================
+// ADR-081: inline-block fragment rendering
+// =============================================================
+
+TEST_CASE("ADR-081: InlineContext with inline_block_child paints box",
+          "[paint][adr081]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 0.0f;
+    ctx->width = 200.0f;
+    ctx->height = 20.0f;
+
+    // Create an inline-block child: red box 40x20 at origin.
+    // Note: at origin because layout_element puts content-box at (margin_left, margin_top).
+    auto child = std::make_shared<layout::LayoutBox>();
+    child->x = 0.0f;
+    child->y = 0.0f;
+    child->width = 40.0f;
+    child->height = 20.0f;
+    child->background = {1.0f, 0.0f, 0.0f, 1.0f};  // red
+
+    // Fragment with inline_block_child set
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 5.0f;
+    frag.width = 40.0f;
+    frag.height = 20.0f;
+    frag.inline_block_child = child;
+    // Note: no text — atomic unit
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Marker center lands at (frag.x + box.x + width/2, ...) = (10+20, 5+10) = (30, 15).
+    auto px = pixel_at(c.surface, 30, 15);
+    CHECK(px.r > 200);   // red channel
+    CHECK(px.g < 50);
+    CHECK(px.b < 50);
+
+    // Outside the box: white
+    CHECK(is_white(pixel_at(c.surface, 100, 50)));
+}
+
+
+// ADR-081: inline-block painting respects top/left margins.
+TEST_CASE("ADR-081: inline-block painting offsets border box by margins",
+          "[paint][adr081]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->width = 100.0f;
+    ctx->height = 40.0f;
+
+    auto child = std::make_shared<layout::LayoutBox>();
+
+    // Deliberately use a different internal origin. The paint
+    // translation must cancel this origin and apply the margins.
+    child->x = 100.0f;
+    child->y = 100.0f;
+    child->width = 20.0f;
+    child->height = 20.0f;
+
+    // LayoutBox margin order: top, right, bottom, left.
+    child->margin[0] = 7.0f;
+    child->margin[3] = 5.0f;
+
+    child->background = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 10.0f;
+    frag.width = 25.0f;
+    frag.height = 27.0f;
+    frag.inline_block_child = child;
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Border box should start at (10 + 5, 10 + 7) = (15, 17).
+    const auto inside = pixel_at(c.surface, 16, 18);
+    CHECK(inside.r > 200);
+    CHECK(inside.g < 50);
+    CHECK(inside.b < 50);
+
+    // These points would incorrectly be red if margins were ignored.
+    CHECK(is_white(pixel_at(c.surface, 12, 18)));
+    CHECK(is_white(pixel_at(c.surface, 16, 14)));
+
+    // Outside the border box.
+    CHECK(is_white(pixel_at(c.surface, 40, 40)));
+}
+
+// ADR-081: descendants of an inline-block must survive viewport culling
+// when the inline-block is positioned far down the document.
+TEST_CASE("ADR-081: inline-block descendants use translated viewport for culling",
+          "[paint][adr081]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 6000.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 5000.0f;
+    ctx->width = 100.0f;
+    ctx->height = 20.0f;
+
+    auto child = std::make_shared<layout::LayoutBox>();
+    child->x = 0.0f;
+    child->y = 0.0f;
+    child->width = 40.0f;
+    child->height = 20.0f;
+
+    // Internal text is at local y=0, not document y=5000.
+    auto text = std::make_unique<layout::LayoutText>();
+    text->x = 0.0f;
+    text->y = 0.0f;
+    text->width = 30.0f;
+    text->height = 10.0f;
+
+    layout::LineFragment text_frag;
+    text_frag.x = 2.0f;
+    text_frag.y = 0.0f;
+    text_frag.width = 20.0f;
+    text_frag.height = 10.0f;
+    text_frag.text = "inside";
+    text->lines.push_back(std::move(text_frag));
+
+    child->children.push_back(std::move(text));
+
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 5000.0f;
+    frag.width = 40.0f;
+    frag.height = 20.0f;
+    frag.inline_block_child = child;
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    // Simulate a viewport scrolled to document y=5000.
+    cairo_translate(c.cr, 0.0, -5000.0);
+
+    paint::paint(c.cr, root, fake_drawer, nullptr,
+                 5000.0f, 5100.0f);
+
+    // The internal text should be visible at viewport y=0.
+    CHECK(is_blue(pixel_at(c.surface, 16, 5)));
+
+    // The rest of the canvas should remain untouched.
+    CHECK(is_white(pixel_at(c.surface, 80, 50)));
+}
