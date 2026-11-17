@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+- **Inline-block hybrid layout** (ADR-081): `display: inline-block` now participates in inline flow as an atomic fragment backed by a recursively laid-out block subtree. Adds atomic sizing, subtree coordinate relocation, recursive `paint_box()` rendering, four layout tests, and one Cairo paint test. Previous-session Wikipedia observations: improved header and intact references; category sizing unresolved. **Deferred:** shrink-to-fit auto width, baseline/`vertical-align`, and mixed inline decoration edge cases.
+
 
 - **CSS border shorthand expansion** (ADR-040): `border: <width> <style> <color>` and
   per-side forms (`border-top/right/bottom/left`) now expand to

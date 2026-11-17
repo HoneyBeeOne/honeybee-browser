@@ -415,3 +415,22 @@ TEST_CASE("ADR-080: empty list_style_type skips marker",
     CHECK(is_white(pixel_at(c.surface, 20, 20)));
 }
 
+TEST_CASE("ADR-081: InlineContext paints an atomic inline-block subtree", "[paint][adr081]") {
+    Canvas c(200, 100);
+    layout::LayoutBox root;
+    root.width = 200.0f; root.height = 100.0f;
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->width = 200.0f; ctx->height = 20.0f;
+    auto child = std::make_shared<layout::LayoutBox>();
+    child->x = 10.0f; child->y = 5.0f;
+    child->width = 40.0f; child->height = 20.0f;
+    child->background = {1.0f, 0.0f, 0.0f, 1.0f};
+    layout::LineFragment frag;
+    frag.x = 10.0f; frag.y = 5.0f; frag.width = 40.0f; frag.height = 20.0f;
+    frag.inline_block_child = child;
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+    paint::paint(c.cr, root, fake_drawer);
+    CHECK(is_red(pixel_at(c.surface, 30, 15)));
+    CHECK(is_white(pixel_at(c.surface, 100, 50)));
+}

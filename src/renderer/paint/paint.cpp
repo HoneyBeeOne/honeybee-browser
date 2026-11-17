@@ -611,9 +611,14 @@ void paint_children(
                            line.y, line.text.c_str(), line.width, line.height, line.font_size);
                 }
                 for (const auto& frag : ctx.lines) {
-                    paint_inline_image(cr, frag, images);
+                    if (frag.inline_block_child)
+                        paint_box(cr, *frag.inline_block_child, drawer, images,
+                                  visible_top, visible_bottom);
+                    else
+                        paint_inline_image(cr, frag, images);
                 }
-                for (const auto& frag : ctx.lines) drawer(cr, frag);
+                for (const auto& frag : ctx.lines)
+                    if (!frag.inline_block_child) drawer(cr, frag);
                 break;
             }
             case layout::LayoutKind::Inline:

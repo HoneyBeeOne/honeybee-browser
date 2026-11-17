@@ -711,21 +711,14 @@ TEST_CASE("display_of: explicit none", "[layout][display]") {
     CHECK(layout::display_of(&it->second) == layout::Display::None);
 }
 
-TEST_CASE("display_of: unknown value falls back to Block",
-          "[layout][display]") {
-    // ADR-028 note: `display: grid` is now a supported value
-    // (returns Display::Grid, verified elsewhere).
-    // ADR-029 note: `display: flex` is now a supported value
-    // (returns Display::Flex, verified elsewhere). Using
-    // `inline-block` here -- genuinely unknown today (not in the
-    // Display enum, not planned for v1) -- preserves the test's
-    // original intent (unknown display value falls back to Block).
+TEST_CASE("display_of: inline-block maps to InlineBlock",
+          "[layout][display][adr081]") {
     auto doc = run("<p>test</p>", "p { display: inline-block }");
     const auto* p = doc.doc->find_element("p");
     REQUIRE(p != nullptr);
     auto it = doc.styles.find(p);
     REQUIRE(it != doc.styles.end());
-    CHECK(layout::display_of(&it->second) == layout::Display::Block);
+    CHECK(layout::display_of(&it->second) == layout::Display::InlineBlock);
 }
 
 TEST_CASE("LineFragment: aggregate init still works",
@@ -4137,3 +4130,54 @@ TEST_CASE("ADR-080: non-li elements have empty list-style-type",
     }
 }
 
+TEST_CASE("ADR-081: inline-block participates in InlineContext", "[layout][adr081]") {
+    auto doc = run("<div id='d'>text <span class='x'>badge</span> more</div>",
+                   ".x { display: inline-block; padding: 2px }");
+    auto divs = find_all_boxes(doc.root, "div");
+    REQUIRE(divs.size() >= 1);
+    const layout::LayoutBox* target = nullptr;
+    for (const auto* d : divs)
+        if (d->element && d->element->get_attribute("id") == "d") target = d;
+    REQUIRE(target != nullptr);
+    bool found = false;
+    for (const auto& child : target->children)
+        if (child->kind == layout::LayoutKind::InlineContext) found = true;
+    CHECK(found);
+}
+
+TEST_CASE("ADR-081: inline-block fragment carries laid-out subtree", "[layout][adr081]") {
+    auto doc = run("<div>text <span class='x'>B</span></div>",
+                   ".x { display: inline-block; padding: 4px; width: 20px; height: 15px }");
+    auto contexts = find_all_contexts(doc.root);
+    REQUIRE(!contexts.empty());
+    bool found = false;
+    for (const auto* ctx : contexts) for (const auto& frag : ctx->lines) {
+        if (!frag.inline_block_child) continue;
+        found = true;
+        CHECK(frag.inline_block_child->width >= 28.0f);
+        CHECK(frag.inline_block_child->height >= 23.0f);
+    }
+    CHECK(found);
+}
+
+TEST_CASE("ADR-081: atomic fragment width includes box and margins", "[layout][adr081]") {
+    auto doc = run("<div><span class='x'>B</span></div>",
+                   ".x { display: inline-block; margin-left: 3px; margin-right: 5px; width: 50px; height: 20px }");
+    auto contexts = find_all_contexts(doc.root);
+    REQUIRE(!contexts.empty());
+    bool found = false;
+    for (const auto* ctx : contexts) for (const auto& frag : ctx->lines) {
+        if (!frag.inline_block_child) continue;
+        CHECK(frag.width >= 58.0f);
+        found = true;
+    }
+    CHECK(found);
+}
+
+TEST_CASE("ADR-081: ordinary inline fragments remain text-only", "[layout][adr081]") {
+    auto doc = run("<div><a href='x'>link</a></div>", "a { display: inline }");
+    auto contexts = find_all_contexts(doc.root);
+    REQUIRE(!contexts.empty());
+    for (const auto* ctx : contexts) for (const auto& frag : ctx->lines)
+        CHECK(frag.inline_block_child == nullptr);
+}

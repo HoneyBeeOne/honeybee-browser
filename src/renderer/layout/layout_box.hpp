@@ -46,7 +46,8 @@ struct Color {
 enum class Display : std::uint8_t {
     Block, Inline, None, Grid,
     Flex, InlineFlex,       // ADR-029: CSS flex layout
-    ListItem                // ADR-080: display:list-item
+    ListItem,               // ADR-080: display:list-item
+    InlineBlock              // ADR-081: atomic inline-level block container
 };
 
 // Text direction for a block container (ADR-016). Resolved from
@@ -245,6 +246,7 @@ struct LineFragment {
     // element. Nullptr for legacy fragments created before
     // this field existed (tests, future code paths).
     const dom::Element* element = nullptr;
+    std::shared_ptr<LayoutBox> inline_block_child; // ADR-081
 };
 
 struct LayoutText final : LayoutNode {

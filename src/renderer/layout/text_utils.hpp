@@ -46,6 +46,8 @@ struct StyledWord {
     // Carried through line breaking so LineFragment::element
     // can be populated.
     const dom::Element* element = nullptr;
+    const dom::Element* inline_block_element = nullptr; // ADR-081
+    std::shared_ptr<LayoutBox> inline_block_box;
 };
 
 // One visual line of styled fragments. fragments are ordered
