@@ -283,6 +283,23 @@ void flatten_inline_to_words(
         const auto& el = static_cast<const dom::Element&>(node);
         auto it = styles.find(&el);
 
+        // ADR-081: preserve inline-block descendants as atomic items.
+        if (it != styles.end()) {
+            const auto dv = it->second.get("display");
+            if (dv && *dv == "inline-block") {
+                StyledWord w;
+                w.font_family = family;
+                w.font_size = size;
+                w.color = default_color;
+                w.preceded_by_space = !out.empty() && prev_had_space;
+                w.element = &el;
+                w.inline_block_element = &el;
+                prev_had_space = false;
+                out.push_back(std::move(w));
+                return;
+            }
+        }
+
         // ADR-026 fix: display: none check in inline flattening.
         //
         // Block-level iteration skips display: none elements
@@ -314,6 +331,47 @@ void flatten_inline_to_words(
     }
 }
 
+// ADR-081: move an independently laid-out subtree from local coordinates
+// into the containing inline formatting context, including nested atomics.
+void translate_inline_block_subtree(LayoutNode& node, float dx, float dy) {
+    node.x += dx;
+    node.y += dy;
+    switch (node.kind) {
+        case LayoutKind::Box: {
+            auto& box = static_cast<LayoutBox&>(node);
+            for (auto& child : box.children)
+                translate_inline_block_subtree(*child, dx, dy);
+            break;
+        }
+        case LayoutKind::Text: {
+            auto& text = static_cast<LayoutText&>(node);
+            for (auto& f : text.lines) {
+                f.x += dx; f.y += dy;
+                if (f.inline_block_child)
+                    translate_inline_block_subtree(*f.inline_block_child, dx, dy);
+            }
+            break;
+        }
+        case LayoutKind::InlineContext: {
+            auto& ctx = static_cast<LayoutInlineContext&>(node);
+            for (auto& f : ctx.lines) {
+                f.x += dx; f.y += dy;
+                if (f.inline_block_child)
+                    translate_inline_block_subtree(*f.inline_block_child, dx, dy);
+            }
+            for (auto& child : ctx.children)
+                translate_inline_block_subtree(*child, dx, dy);
+            break;
+        }
+        case LayoutKind::Inline: {
+            auto& inl = static_cast<LayoutInline&>(node);
+            for (auto& child : inl.children)
+                translate_inline_block_subtree(*child, dx, dy);
+            break;
+        }
+    }
+}
+
 // ADR-045: shared post-process for inline background-image +
 // padding-right. Called from both LayoutText path (single-element
 // text runs, where <a> goes today) and InlineContext path
@@ -340,7 +398,7 @@ void apply_inline_bg_pp(
         if (accumulated_shift > 0.0f) {
             frag.x += accumulated_shift;
         }
-        if (!frag.element) continue;
+        if (frag.inline_block_child || !frag.element) continue;
         const css::ComputedStyle* fs = lookup(styles, *frag.element);
         if (!fs) continue;
 
@@ -1029,6 +1087,20 @@ LayoutBox layout_element(const dom::Element& el,
         inline_run.clear();
         if (words.empty()) return;
 
+        // ADR-081: lay out the internal block formatting context before
+        // line breaking. Coordinates start local; the subtree is relocated
+        // when its final atomic fragment position is known.
+        for (auto& word : words) {
+            if (!word.inline_block_element || word.inline_block_box) continue;
+            auto child_box = layout_element(
+                *word.inline_block_element, styles, measurer,
+                0.0f, 0.0f, content_w, own_content_height,
+                own_font_size, root_font_size,
+                viewport_w, viewport_h, own_dir, image_dims);
+            word.inline_block_box =
+                std::make_shared<LayoutBox>(std::move(child_box));
+        }
+
         std::string run_text;
         for (const auto& w : words) {
             if (!run_text.empty()) run_text += ' ';
@@ -1058,6 +1130,8 @@ LayoutBox layout_element(const dom::Element& el,
                     frag.x = line_start_x + frag.x;
                 }
                 frag.y = line_y;
+                if (frag.inline_block_child)
+                    translate_inline_block_subtree(*frag.inline_block_child, frag.x, frag.y);
                 ctx->lines.push_back(frag);
             }
             if (line.width > max_line_w) max_line_w = line.width;
@@ -1495,7 +1569,9 @@ LayoutBox layout_element(const dom::Element& el,
                     continue;
                 }
 
-                if (display_of(child_style) == Display::Inline) {
+                const Display child_display = display_of(child_style);
+                if (child_display == Display::Inline ||
+                    child_display == Display::InlineBlock) {
                     inline_run.push_back(child.get());
                     continue;
                 }
@@ -2378,6 +2454,7 @@ Display display_of(const css::ComputedStyle* style) {
     const auto v = style->get("display");
     if (!v) return Display::Block;
     if (*v == "inline") return Display::Inline;
+    if (*v == "inline-block") return Display::InlineBlock;  // ADR-081
     if (*v == "none") return Display::None;
     if (*v == "grid") return Display::Grid;       // ADR-028
     if (*v == "flex") return Display::Flex;       // ADR-029

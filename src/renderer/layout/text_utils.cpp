@@ -197,8 +197,12 @@ std::vector<StyledLine> break_styled_words_into_lines(
     float cursor_x = 0.0f;
 
     for (const auto& w : words) {
-        const float ww = measurer(w.text, w.font_family, w.font_size).first;
-        const float wh = measurer(w.text, w.font_family, w.font_size).second;
+        const auto measured = measurer(w.text, w.font_family, w.font_size);
+        float ww = measured.first, wh = measured.second;
+        if (w.inline_block_box) {
+            ww = w.inline_block_box->width + w.inline_block_box->margin[1] + w.inline_block_box->margin[3];
+            wh = w.inline_block_box->height + w.inline_block_box->margin[0] + w.inline_block_box->margin[2];
+        }
 
         float sep = 0.0f;
         if (!current.fragments.empty() && w.preceded_by_space) {
@@ -222,7 +226,8 @@ std::vector<StyledLine> break_styled_words_into_lines(
             last->font_family == w.font_family &&
             last->font_size == w.font_size &&
             last->color == w.color &&
-            last->element == w.element;
+            last->element == w.element &&
+            !last->inline_block_child && !w.inline_block_box;
 
         if (same_style) {
             if (sep > 0.0f) last->text += ' ';
@@ -242,20 +247,23 @@ std::vector<StyledLine> break_styled_words_into_lines(
             // (concatenating all fragments reconstructs the
             // original line text verbatim).
             LineFragment f;
-            if (sep > 0.0f) {
-                f.text = " ";
-                f.text += w.text;
-                f.width = sep + ww;
-            } else {
-                f.text = w.text;
+            if (w.inline_block_box) {
+                f.x = cursor_x + sep; // separator sits before the atomic box
                 f.width = ww;
+            } else {
+                if (sep > 0.0f) {
+                    f.text = " "; f.text += w.text; f.width = sep + ww;
+                } else {
+                    f.text = w.text; f.width = ww;
+                }
+                f.x = cursor_x;
             }
-            f.x = cursor_x;
             f.font_family = w.font_family;
             f.font_size = w.font_size;
             f.color = w.color;
             f.height = wh;
             f.element = w.element;
+            f.inline_block_child = w.inline_block_box;
             current.fragments.push_back(std::move(f));
         }
 
