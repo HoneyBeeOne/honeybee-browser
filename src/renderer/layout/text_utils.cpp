@@ -257,6 +257,7 @@ std::vector<StyledLine> break_styled_words_into_lines(
             last->font_size == w.font_size &&
             last->color == w.color &&
             last->element == w.element &&
+            last->inline_ancestors == w.inline_ancestors &&
             !last->inline_block_child &&     // ADR-081: no merge across atomic
             !w.inline_block_box;
 
@@ -294,6 +295,7 @@ std::vector<StyledLine> break_styled_words_into_lines(
             f.baseline = baseline;
             f.element = w.element;
             f.inline_block_child = w.inline_block_box;  // ADR-081
+            f.inline_ancestors = w.inline_ancestors;
             current.fragments.push_back(std::move(f));
         }
 

@@ -410,7 +410,8 @@ void flatten_inline_to_words(
     const Color& default_color,
     bool& prev_had_space,
     std::vector<StyledWord>& out,
-    const dom::Element* current_element) {
+    const dom::Element* current_element,
+    const std::vector<const dom::Element*>& inline_ancestors) {
 
     if (node.type() == dom::NodeType::Text) {
         const auto& tn = static_cast<const dom::TextNode&>(node);
@@ -434,6 +435,7 @@ void flatten_inline_to_words(
             w.preceded_by_space =
                 !out.empty() && (prev_had_space || pending_ws);
             w.element = current_element;
+            w.inline_ancestors = inline_ancestors;
             pending_ws = false;
             prev_had_space = false;
             out.push_back(std::move(w));
@@ -473,6 +475,8 @@ void flatten_inline_to_words(
                 w.preceded_by_space = !out.empty() && prev_had_space;
                 w.element = &el;
                 w.inline_block_element = &el;
+                w.inline_ancestors = inline_ancestors;
+                w.inline_ancestors.push_back(&el);
                 prev_had_space = false;
                 out.push_back(std::move(w));
                 return;
@@ -494,6 +498,11 @@ void flatten_inline_to_words(
             if (dv && *dv == "none") return;
         }
 
+        // Preserve this inline element in the ancestry passed to
+        // its descendants. The owning block is never added here.
+        auto child_ancestors = inline_ancestors;
+        child_ancestors.push_back(&el);
+
         Color color = default_color;
         if (it != styles.end()) {
             const auto cv = it->second.get("color");
@@ -506,7 +515,7 @@ void flatten_inline_to_words(
             flatten_inline_to_words(
                 *child, styles,
                 element_family, element_size, root_font_size,
-                color, prev_had_space, out, &el);
+                color, prev_had_space, out, &el, child_ancestors);
         }
 
     }
@@ -1220,6 +1229,7 @@ LayoutBox layout_element(const dom::Element& el,
 
         // Inline-element run: LayoutInlineContext path (ADR-016).
         std::vector<StyledWord> words;
+        const std::vector<const dom::Element*> no_inline_ancestors;
         bool prev_had_space = false;
         for (const auto* n : inline_run) {
             // ADR-081: detect inline-block at the iterator level
@@ -1238,6 +1248,7 @@ LayoutBox layout_element(const dom::Element& el,
                         w.preceded_by_space = !words.empty() && prev_had_space;
                         w.element = &child_el;
                         w.inline_block_element = &child_el;
+                        w.inline_ancestors.push_back(&child_el);
                         prev_had_space = false;
                         words.push_back(std::move(w));
                         continue;
@@ -1246,7 +1257,8 @@ LayoutBox layout_element(const dom::Element& el,
             }
             flatten_inline_to_words(*n, styles, family, own_font_size,
                                     root_font_size, tc,
-                                    prev_had_space, words, &el);
+                                    prev_had_space, words, &el,
+                                    no_inline_ancestors);
         }
         inline_run.clear();
         if (words.empty()) return;

@@ -54,6 +54,12 @@ struct StyledWord {
     // by calling layout_element before line breaking.
     const dom::Element* inline_block_element = nullptr;
     std::shared_ptr<layout::LayoutBox> inline_block_box;
+
+    // ADR-082: nested inline elements containing this word, from
+    // outermost to innermost. The block formatting context itself
+    // is deliberately excluded. Inline-block words include their
+    // own element as the final entry.
+    std::vector<const dom::Element*> inline_ancestors;
 };
 
 // One visual line of styled fragments. fragments are ordered

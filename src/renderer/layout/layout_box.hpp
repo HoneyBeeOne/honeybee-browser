@@ -262,6 +262,10 @@ struct LineFragment {
     // ADR-082: stable top coordinate of the containing line box.
     // Unlike y, this does not change when a fragment is baseline-aligned.
     float line_top = 0.0f;
+
+    // ADR-082: nested inline ancestry, outermost to innermost.
+    // Used to resolve inline-box properties such as vertical-align.
+    std::vector<const dom::Element*> inline_ancestors;
 };
 
 struct LayoutText final : LayoutNode {

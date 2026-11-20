@@ -4257,6 +4257,23 @@ TEST_CASE("ADR-082: inline-block and text share the line baseline",
           Catch::Approx(atomic_fragment->height));
 }
 
+TEST_CASE("ADR-082: nested inline ancestry survives fragment creation",
+          "[layout][adr082][inline-ancestry]") {
+    auto t = run(
+        "<div><span><b>nested inline text</b></span></div>",
+        "span { display: inline; } b { display: inline; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+    REQUIRE(contexts[0]->lines.size() == 1);
+
+    const auto& fragment = contexts[0]->lines[0];
+    REQUIRE(fragment.inline_ancestors.size() == 2);
+    CHECK(fragment.element != nullptr);
+    CHECK(fragment.inline_ancestors[0] != nullptr);
+    CHECK(fragment.inline_ancestors[1] == fragment.element);
+}
+
 // ADR-081: inline-block hybrid layout
 // =============================================================
 
