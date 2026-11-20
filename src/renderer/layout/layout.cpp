@@ -373,6 +373,126 @@ float used_line_height(
                       : own_font_size * 1.2f);
 }
 
+
+// Resolve the computed vertical-align keyword/value for an element.
+// vertical-align is non-inherited; an explicit `inherit` walks to
+// the nearest element ancestor. `initial` and `unset` resolve to
+// the initial value, baseline.
+std::string vertical_align_value_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles) {
+
+    auto it = styles.find(&el);
+    if (it == styles.end())
+        return "baseline";
+
+    auto declaration = it->second.declarations.find("vertical-align");
+    if (declaration == it->second.declarations.end())
+        return "baseline";
+
+    const std::string_view value =
+        trim_line_height(declaration->second.value);
+
+    if (value == "baseline" || value == "sub" ||
+        value == "super" || value == "middle" ||
+        value == "text-top" || value == "text-bottom" ||
+        value == "top" || value == "bottom") {
+        return std::string(value);
+    }
+
+    if (value == "initial" || value == "unset" || value.empty())
+        return "baseline";
+
+    if (value == "inherit") {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (!parent)
+            return "baseline";
+
+        return vertical_align_value_for_element(
+            static_cast<const dom::Element&>(*parent), styles);
+    }
+
+    // Lengths and percentages are handled by the numeric resolver.
+    return std::string(value);
+}
+
+// Resolve the first numeric vertical-align stage from ADR-082.
+// Positive values raise the inline box; negative values lower it.
+// Percentages are relative to this element's used line-height.
+float vertical_align_offset_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    const std::string& fallback_family,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetricsProvider& font_metrics) {
+
+    const std::string value =
+        vertical_align_value_for_element(el, styles);
+
+    // Keyword alignment modes are intentionally deferred to a
+    // later ADR-082 implementation stage.
+    if (value == "baseline" || value == "sub" ||
+        value == "super" || value == "middle" ||
+        value == "text-top" || value == "text-bottom" ||
+        value == "top" || value == "bottom") {
+        return 0.0f;
+    }
+
+    auto style_it = styles.find(&el);
+    const css::ComputedStyle* style =
+        style_it == styles.end() ? nullptr : &style_it->second;
+
+    const float own_font_size =
+        computed_font_size_for_element(el, styles, root_font_size);
+
+    std::string element_family = fallback_family;
+    if (style) {
+        const std::string declared_family = font_family_of(style);
+        if (!declared_family.empty())
+            element_family = declared_family;
+    }
+
+    FontMetrics metrics;
+    if (font_metrics) {
+        metrics = font_metrics(element_family, own_font_size);
+    } else {
+        metrics.ascent = own_font_size * 0.8f;
+        metrics.descent = own_font_size * 0.2f;
+        metrics.x_height = own_font_size * 0.5f;
+        metrics.normal_line_height = own_font_size * 1.2f;
+    }
+
+    if (value.size() > 1 && value.back() == '%') {
+        std::string_view numeric(value);
+        numeric.remove_suffix(1);
+
+        float percentage = 0.0f;
+        if (!parse_line_height_number(numeric, percentage))
+            return 0.0f;
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, metrics);
+
+        return line_height * percentage / 100.0f;
+    }
+
+    LengthContext ctx;
+    ctx.font_size = own_font_size;
+    ctx.parent_font_size = own_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    return parse_length(value, ctx);
+}
+
 Color text_color_of(const css::ComputedStyle* style) {
     if (!style) return Color::black();
     const auto v = style->get("color");
@@ -1269,6 +1389,21 @@ LayoutBox layout_element(const dom::Element& el,
             run_text += w.text;
         }
         const bool rtl = (own_dir == Direction::Rtl);
+
+        // ADR-082: calculate the accumulated vertical-align shift
+        // from every inline ancestor, outermost to innermost.
+        // Inline-block words include their own element in this list.
+        for (auto& w : words) {
+            float offset = 0.0f;
+            for (const dom::Element* ancestor : w.inline_ancestors) {
+                if (!ancestor) continue;
+                offset += vertical_align_offset_for_element(
+                    *ancestor, styles, w.font_family,
+                    root_font_size, viewport_w, viewport_h,
+                    font_metrics);
+            }
+            w.baseline_offset = offset;
+        }
 
         // ADR-081: pre-lay-out inline-block atomic words. Each one
         // gets a fully-laid-out LayoutBox subtree that paint will

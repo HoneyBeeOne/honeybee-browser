@@ -231,6 +231,11 @@ std::vector<StyledLine> break_styled_words_into_lines(
             baseline = metrics.baseline;
         }
 
+        // ADR-082: positive vertical-align raises the fragment.
+        // Baselines are measured downward from the fragment top,
+        // so raising the fragment increases its baseline coordinate.
+        baseline += w.baseline_offset;
+
         float sep = 0.0f;
         if (!current.fragments.empty() && w.preceded_by_space) {
             sep = measurer(" ", w.font_family, w.font_size).width;

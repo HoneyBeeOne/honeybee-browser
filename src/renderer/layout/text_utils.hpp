@@ -60,6 +60,10 @@ struct StyledWord {
     // is deliberately excluded. Inline-block words include their
     // own element as the final entry.
     std::vector<const dom::Element*> inline_ancestors;
+
+    // ADR-082: accumulated vertical-align shift from inline
+    // ancestors, positive values raise the fragment.
+    float baseline_offset = 0.0f;
 };
 
 // One visual line of styled fragments. fragments are ordered

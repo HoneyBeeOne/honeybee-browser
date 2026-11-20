@@ -4370,3 +4370,104 @@ TEST_CASE("ADR-081: regular inline elements do NOT set inline_block_child",
     }
 }
 
+
+
+// ---------------- ADR-082: vertical-align numeric values ----------------
+
+TEST_CASE("ADR-082: positive vertical-align length raises inline baseline",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } span { display:inline; }");
+
+    auto raised = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:4px; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto raised_contexts = find_all_contexts(raised.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(raised_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(raised_contexts[0]->lines.size() == 1);
+    REQUIRE(normal_contexts[0]->lines[0].element != nullptr);
+    REQUIRE(raised_contexts[0]->lines[0].element != nullptr);
+
+    CHECK(raised_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 4.0f));
+}
+
+TEST_CASE("ADR-082: negative vertical-align length lowers inline baseline",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } span { display:inline; }");
+
+    auto lowered = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:-4px; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto lowered_contexts = find_all_contexts(lowered.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(lowered_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(lowered_contexts[0]->lines.size() == 1);
+
+    CHECK(lowered_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline - 4.0f));
+}
+
+TEST_CASE("ADR-082: vertical-align percentage uses element line-height",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } span { display:inline; font-size:20px; }");
+
+    auto shifted = run(
+        "<div><span>text</span></div>",
+        "div { display:block; } "
+        "span { display:inline; font-size:20px; "
+        "line-height:150%; vertical-align:50%; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto shifted_contexts = find_all_contexts(shifted.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(shifted_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(shifted_contexts[0]->lines.size() == 1);
+
+    // 20px font-size * 150% line-height * 50% vertical-align = 15px.
+    CHECK(shifted_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 15.0f));
+}
+
+TEST_CASE("ADR-082: nested inline vertical-align offsets accumulate",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span><b>text</b></span></div>",
+        "div { display:block; } "
+        "span { display:inline; } b { display:inline; }");
+
+    auto nested = run(
+        "<div><span><b>text</b></span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:4px; } "
+        "b { display:inline; vertical-align:3px; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto nested_contexts = find_all_contexts(nested.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(nested_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(nested_contexts[0]->lines.size() == 1);
+
+    CHECK(nested_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 7.0f));
+}
