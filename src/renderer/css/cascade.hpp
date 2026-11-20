@@ -39,6 +39,9 @@ struct CascadeValue {
     Origin origin = Origin::Author;
     Specificity specificity;
     std::size_t source_order = 0;
+    // ADR-082: original element that specified this declaration.
+    // Inherited CascadeValues retain this pointer unchanged.
+    const dom::Element* specified_on = nullptr;
 };
 
 // ADR-060: heterogeneous lookup helpers for the declarations

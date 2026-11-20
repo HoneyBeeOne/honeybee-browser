@@ -19,8 +19,13 @@
 
 namespace honeybee::browser {
 
-std::pair<float, float> measure_with_pango(
+renderer::layout::TextMetrics measure_with_pango(
     std::string_view text,
+    std::string_view font_family,
+    float font_size);
+
+// Returns font-wide metrics for baseline-aware inline layout (ADR-082).
+renderer::layout::FontMetrics measure_font_metrics_with_pango(
     std::string_view font_family,
     float font_size);
 

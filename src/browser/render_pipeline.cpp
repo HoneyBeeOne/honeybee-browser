@@ -335,11 +335,16 @@ void RenderPipeline::relayout(float viewport_width,
     // ADR-052: viewport_height now sourced from
     // m_scroll_window.get_height() in production (visible viewport,
     // not DrawingArea content height). vh/vw resolve to real values.
+    // ADR-082: provide cached font-wide metrics to inline layout.
+    renderer::layout::FontMetricsProvider font_metrics =
+        [this](std::string_view family, float size) {
+            return get_font_metrics(family, size);
+        };
     auto _perf_t_mid = std::chrono::steady_clock::now();
     layout_root_ = renderer::layout::layout_with_pseudo(
         *doc_, styles_cache_, pseudo_styles_cache_,
         &measure_with_pango, viewport_width, image_dims,
-        viewport_height);
+        viewport_height, 0.0f, font_metrics);
     HB_LOG(Pipeline, Debug, "layout: root h=%.0f",
            layout_root_.height);
     auto _perf_t1 = std::chrono::steady_clock::now();
@@ -372,6 +377,21 @@ RenderPipeline::~RenderPipeline() {
         if (surf) cairo_surface_destroy(surf);
     }
     image_cache_.clear();
+}
+
+renderer::layout::FontMetrics RenderPipeline::get_font_metrics(
+    std::string_view font_family, float font_size) {
+    const auto key = std::make_pair(std::string(font_family), font_size);
+
+    const auto found = font_metrics_cache_.find(key);
+    if (found != font_metrics_cache_.end()) {
+        return found->second;
+    }
+
+    const auto metrics =
+        measure_font_metrics_with_pango(font_family, font_size);
+    font_metrics_cache_.emplace(key, metrics);
+    return metrics;
 }
 
 namespace {

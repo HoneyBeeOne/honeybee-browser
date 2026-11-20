@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_set>
 #include <unordered_map>
+#include <map>
 
 #include "renderer/dom/node.hpp"
 #include "renderer/layout/layout_box.hpp"
@@ -120,6 +121,15 @@ private:
     // (viewport resize doesn't invalidate decoded images).
     // Mutable: cached lookup from const paint().
     mutable std::unordered_map<std::string, cairo_surface_t*> image_cache_;
+
+    // ADR-082: cache font-wide Pango metrics across layout passes.
+    // Font metrics are independent of viewport dimensions, so this
+    // cache remains useful across relayout() calls.
+    std::map<std::pair<std::string, float>,
+             renderer::layout::FontMetrics> font_metrics_cache_;
+
+    renderer::layout::FontMetrics get_font_metrics(
+        std::string_view font_family, float font_size);
 
     // ADR-034: fetch + decode + cache. Returns a surface owned
     // by image_cache_; nullptr on error. Handles PNG (Cairo),

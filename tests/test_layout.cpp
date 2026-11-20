@@ -36,10 +36,10 @@ struct TestLayout {
     layout::LayoutBox root;
 };
 
-std::pair<float, float> fake_measure(
+layout::TextMetrics fake_measure(
     std::string_view text, std::string_view /*font_family*/,
     float /*font_size*/) {
-    return {static_cast<float>(text.size()) * 8.0f, 16.0f};
+    return {static_cast<float>(text.size()) * 8.0f, 16.0f, 12.8f};
 }
 
 TestLayout run(const std::string& html, const std::string& css_text,
@@ -755,6 +755,62 @@ TEST_CASE("LineFragment: aggregate init still works",
 // Inline formatting (ADR-016, Block B).
 // =============================================================
 
+TEST_CASE("layout: nested inline font sizes are preserved",
+          "[layout][inline][fonts]") {
+    auto t = run(
+        "<p>before <span>large <em>larger</em></span> after</p>",
+        "p { font-size: 16px; }"
+        "span { display: inline; font-size: 24px; }"
+        "em { display: inline; font-size: 32px; }");
+
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+
+    bool found_large = false;
+    bool found_larger = false;
+    bool found_before = false;
+
+    for (const auto& frag : ctxs[0]->lines) {
+        if (frag.text.find("before") != std::string::npos) {
+            found_before = true;
+            CHECK(frag.font_size == 16.0f);
+        }
+
+        if (frag.text.find("large") != std::string::npos &&
+            frag.text.find("larger") == std::string::npos) {
+            found_large = true;
+            CHECK(frag.font_size == 24.0f);
+        }
+
+        if (frag.text.find("larger") != std::string::npos) {
+            found_larger = true;
+            CHECK(frag.font_size == 32.0f);
+        }
+    }
+
+    CHECK(found_before);
+    CHECK(found_large);
+    CHECK(found_larger);
+}
+
+TEST_CASE("layout: inline text fragments retain measured baselines",
+          "[layout][inline][baseline]") {
+    auto t = run(
+        "<p>before <span>inside</span> after</p>",
+        "p { font-size: 16px; }"
+        "span { display: inline; }");
+
+    const auto ctxs = find_all_contexts(t.root);
+    REQUIRE(ctxs.size() == 1);
+    REQUIRE_FALSE(ctxs[0]->lines.empty());
+
+    for (const auto& frag : ctxs[0]->lines) {
+        if (!frag.inline_block_child) {
+            CHECK(frag.baseline == Catch::Approx(12.8f));
+        }
+    }
+}
+
 TEST_CASE("layout: inline em flows with surrounding text",
           "[layout][inline]") {
     auto t = run("<p>Hello <em>world</em>!</p>",
@@ -984,10 +1040,10 @@ const layout::LineFragment* find_fragment_for_element(
     return nullptr;
 }
 
-std::pair<float, float> ht_measure(std::string_view text,
+layout::TextMetrics ht_measure(std::string_view text,
                                    std::string_view,
                                    float fs) {
-    return { static_cast<float>(text.size()) * fs * 0.5f, fs };
+    return { static_cast<float>(text.size()) * fs * 0.5f, fs, fs * 0.8f };
 }
 
 const layout::LayoutNode* find_element_node(
@@ -4135,6 +4191,72 @@ TEST_CASE("ADR-080: non-li elements have empty list-style-type",
 }
 
 // =============================================================
+
+// =============================================================
+// ADR-082: line-height and baseline foundation
+// =============================================================
+
+TEST_CASE("ADR-082: unitless line-height sets the inline strut",
+          "[layout][adr082][line-height]") {
+    auto t = run(
+        "<p>baseline <span>text</span></p>",
+        "p { font-size: 16px; line-height: 2; }"
+        "span { display: inline; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+
+    // 16px font size * unitless multiplier 2.
+    CHECK(contexts[0]->height == Catch::Approx(32.0f));
+}
+
+TEST_CASE("ADR-082: percentage line-height resolves against font size",
+          "[layout][adr082][line-height]") {
+    auto t = run(
+        "<p>baseline <span>text</span></p>",
+        "p { font-size: 16px; line-height: 150%; }"
+        "span { display: inline; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+
+    // 16px * 150%.
+    CHECK(contexts[0]->height == Catch::Approx(24.0f));
+}
+
+TEST_CASE("ADR-082: inline-block and text share the line baseline",
+          "[layout][adr082][baseline]") {
+    auto t = run(
+        "<div>text <span class='box'>X</span></div>",
+        ".box { display: inline-block; width: 20px; height: 30px; "
+        "padding: 0; margin: 0 }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+
+    const layout::LineFragment* text_fragment = nullptr;
+    const layout::LineFragment* atomic_fragment = nullptr;
+
+    for (const auto& frag : contexts[0]->lines) {
+        if (frag.inline_block_child) {
+            atomic_fragment = &frag;
+        } else if (!frag.text.empty()) {
+            text_fragment = &frag;
+        }
+    }
+
+    REQUIRE(text_fragment != nullptr);
+    REQUIRE(atomic_fragment != nullptr);
+
+    // Compare absolute baseline coordinates. Both fragments should
+    // align to the same line baseline despite different heights.
+    CHECK(text_fragment->y + text_fragment->baseline ==
+          Catch::Approx(atomic_fragment->y + atomic_fragment->baseline));
+
+    CHECK(atomic_fragment->baseline ==
+          Catch::Approx(atomic_fragment->height));
+}
+
 // ADR-081: inline-block hybrid layout
 // =============================================================
 

@@ -143,15 +143,16 @@ std::vector<LineFragment> break_into_lines(
     if (words.empty()) return lines;
 
     // Space width and line height come from measuring once.
-    const auto [space_w, line_h] =
-        measurer(" ", font_family, font_size);
+    const auto space_metrics = measurer(" ", font_family, font_size);
+    const float space_w = space_metrics.width;
+    const float line_h = space_metrics.height;
 
     std::string current_text;
     float current_width = 0.0f;
     float current_y = 0.0f;
 
     for (const auto& w : words) {
-        const float ww = measurer(w, font_family, font_size).first;
+        const float ww = measurer(w, font_family, font_size).width;
         const float sep = current_text.empty() ? 0.0f : space_w;
 
         if (current_width + sep + ww <= max_width) {
@@ -188,19 +189,30 @@ std::vector<LineFragment> break_into_lines(
 std::vector<StyledLine> break_styled_words_into_lines(
     const std::vector<StyledWord>& words,
     float max_width,
-    const TextMeasurer& measurer) {
+    const TextMeasurer& measurer,
+    float strut_ascent,
+    float strut_descent) {
 
     std::vector<StyledLine> lines;
     if (words.empty()) return lines;
 
     StyledLine current;
+    current.ascent = strut_ascent;
+    current.descent = strut_descent;
     float cursor_x = 0.0f;
+
+    auto finalize_line = [](StyledLine& line) {
+        line.baseline = line.ascent;
+        line.height = line.ascent + line.descent;
+    };
 
     for (const auto& w : words) {
         // ADR-081: inline-block words are atomic units sized by
         // their laid-out box's outer dimensions (content + margins).
         float ww;
         float wh;
+        float baseline = 0.0f;
+
         if (w.inline_block_box) {
             ww = w.inline_block_box->width
                  + w.inline_block_box->margin[1]
@@ -208,21 +220,30 @@ std::vector<StyledLine> break_styled_words_into_lines(
             wh = w.inline_block_box->height
                  + w.inline_block_box->margin[0]
                  + w.inline_block_box->margin[2];
+
+            // ADR-082: fallback baseline for an inline-block is
+            // its bottom margin edge.
+            baseline = wh;
         } else {
-            ww = measurer(w.text, w.font_family, w.font_size).first;
-            wh = measurer(w.text, w.font_family, w.font_size).second;
+            const auto metrics = measurer(w.text, w.font_family, w.font_size);
+            ww = metrics.width;
+            wh = metrics.height;
+            baseline = metrics.baseline;
         }
 
         float sep = 0.0f;
         if (!current.fragments.empty() && w.preceded_by_space) {
-            sep = measurer(" ", w.font_family, w.font_size).first;
+            sep = measurer(" ", w.font_family, w.font_size).width;
         }
 
         if (!current.fragments.empty() && cursor_x + sep + ww > max_width) {
             // Wrap: flush current line, start new
             current.width = cursor_x;
+            finalize_line(current);
             lines.push_back(std::move(current));
             current = StyledLine{};
+            current.ascent = strut_ascent;
+            current.descent = strut_descent;
             cursor_x = 0.0f;
             sep = 0.0f;
         }
@@ -270,17 +291,21 @@ std::vector<StyledLine> break_styled_words_into_lines(
             f.font_size = w.font_size;
             f.color = w.color;
             f.height = wh;
+            f.baseline = baseline;
             f.element = w.element;
             f.inline_block_child = w.inline_block_box;  // ADR-081
             current.fragments.push_back(std::move(f));
         }
 
         cursor_x += sep + ww;
-        if (wh > current.height) current.height = wh;
+        current.ascent = std::max(current.ascent, baseline);
+        current.descent = std::max(
+            current.descent, std::max(0.0f, wh - baseline));
     }
 
     if (!current.fragments.empty()) {
         current.width = cursor_x;
+        finalize_line(current);
         lines.push_back(std::move(current));
     }
 

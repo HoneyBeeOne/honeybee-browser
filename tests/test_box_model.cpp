@@ -30,10 +30,10 @@ struct TestDoc {
     layout::LayoutBox root;
 };
 
-std::pair<float, float> fake_measure(
+layout::TextMetrics fake_measure(
     std::string_view text, std::string_view /*font_family*/,
     float /*font_size*/) {
-    return {static_cast<float>(text.size()) * 8.0f, 16.0f};
+    return {static_cast<float>(text.size()) * 8.0f, 16.0f, 12.8f};
 }
 
 TestDoc run(const std::string& html, const std::string& css_text,

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -214,6 +215,164 @@ float font_size_of(const css::ComputedStyle* style,
     return px > 0.0f ? px : parent_font_size;
 }
 
+
+// ADR-082: resolve the computed font size of an element while
+// respecting the element on which an inherited declaration
+// was originally specified.
+float computed_font_size_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    float root_font_size) {
+
+    const css::ComputedStyle* style = lookup(styles, el);
+    if (!style) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    auto it = style->declarations.find("font-size");
+    if (it == style->declarations.end()) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    const css::CascadeValue& value = it->second;
+    const dom::Element* source =
+        value.specified_on ? value.specified_on : &el;
+
+    float parent_size = root_font_size;
+    const dom::Node* parent = source->parent();
+    while (parent && parent->type() != dom::NodeType::Element)
+        parent = parent->parent();
+
+    if (parent) {
+        parent_size = computed_font_size_for_element(
+            static_cast<const dom::Element&>(*parent),
+            styles, root_font_size);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = parent_size;
+    ctx.parent_font_size = parent_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = true;
+
+    const float result = parse_length(value.value, ctx);
+    return result > 0.0f ? result : parent_size;
+}
+
+std::string_view trim_line_height(std::string_view value) {
+    while (!value.empty() &&
+           (value.front() == ' ' || value.front() == '\t' ||
+            value.front() == '\n' || value.front() == '\r')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '\t' ||
+            value.back() == '\n' || value.back() == '\r')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+bool parse_line_height_number(std::string_view value, float& result) {
+    value = trim_line_height(value);
+    if (value.empty()) return false;
+
+    std::string copy(value);
+    char* end = nullptr;
+    const float parsed = std::strtof(copy.c_str(), &end);
+
+    if (end == copy.c_str() || !end || *end != '\0')
+        return false;
+
+    result = parsed;
+    return true;
+}
+
+// Resolve line-height using the declaration's original element.
+// Unitless values inherit as multipliers; percentages and lengths
+// inherit as absolute computed lengths.
+float used_line_height(
+    const dom::Element& el,
+    const css::ComputedStyle* style,
+    const css::ComputedStyleMap& styles,
+    float own_font_size,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetrics& metrics) {
+
+    if (!style)
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    auto it = style->declarations.find("line-height");
+    if (it == style->declarations.end())
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    const css::CascadeValue& declaration = it->second;
+    const std::string_view value =
+        trim_line_height(declaration.value);
+
+    if (value == "normal")
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    float number = 0.0f;
+    if (parse_line_height_number(value, number))
+        return std::max(0.0f, number * own_font_size);
+
+    const dom::Element* source =
+        declaration.specified_on ? declaration.specified_on : &el;
+
+    const float source_font_size =
+        computed_font_size_for_element(
+            *source, styles, root_font_size);
+
+    if (!value.empty() && value.back() == '%') {
+        std::string_view numeric = value;
+        numeric.remove_suffix(1);
+        if (parse_line_height_number(numeric, number))
+            return std::max(0.0f, source_font_size * number / 100.0f);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = source_font_size;
+    ctx.parent_font_size = source_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    const float result = parse_length(value, ctx);
+    return result >= 0.0f
+               ? result
+               : (metrics.normal_line_height > 0.0f
+                      ? metrics.normal_line_height
+                      : own_font_size * 1.2f);
+}
+
 Color text_color_of(const css::ComputedStyle* style) {
     if (!style) return Color::black();
     const auto v = style->get("color");
@@ -247,6 +406,7 @@ void flatten_inline_to_words(
     const css::ComputedStyleMap& styles,
     const std::string& family,
     float size,
+    float root_font_size,
     const Color& default_color,
     bool& prev_had_space,
     std::vector<StyledWord>& out,
@@ -283,6 +443,21 @@ void flatten_inline_to_words(
         const auto& el = static_cast<const dom::Element&>(node);
         auto it = styles.find(&el);
 
+        // ADR-082: resolve font properties at each inline element
+        // boundary so nested spans can use their own font metrics.
+        std::string element_family = family;
+        float element_size = size;
+
+        if (it != styles.end()) {
+            const std::string declared_family =
+                font_family_of(&it->second);
+            if (!declared_family.empty())
+                element_family = declared_family;
+
+            element_size = computed_font_size_for_element(
+                el, styles, root_font_size);
+        }
+
         // ADR-081: detect inline-block here as well as in
         // layout_block_children. Inline parents (e.g. `.catlinks ul`
         // which is display:inline) recurse through flatten, so
@@ -292,8 +467,8 @@ void flatten_inline_to_words(
             if (dv && *dv == "inline-block") {
                 StyledWord w;
                 w.text = "";
-                w.font_family = family;
-                w.font_size = size;
+                w.font_family = element_family;
+                w.font_size = element_size;
                 w.color = default_color;
                 w.preceded_by_space = !out.empty() && prev_had_space;
                 w.element = &el;
@@ -328,8 +503,10 @@ void flatten_inline_to_words(
             }
         }
         for (const auto& child : el.children()) {
-            flatten_inline_to_words(*child, styles, family, size, color,
-                                    prev_had_space, out, &el);
+            flatten_inline_to_words(
+                *child, styles,
+                element_family, element_size, root_font_size,
+                color, prev_had_space, out, &el);
         }
 
     }
@@ -481,7 +658,8 @@ LayoutBox layout_element(const dom::Element& el,
                          float viewport_w,   // ADR-051
                          float viewport_h,   // ADR-051
                          Direction parent_dir,
-                         ImageDimLookup image_dims) {
+                         ImageDimLookup image_dims,
+                         const FontMetricsProvider& font_metrics) {
     {
         const css::ComputedStyle* s = nullptr;
         auto it = styles.find(&el);
@@ -568,7 +746,7 @@ LayoutBox layout_element(const dom::Element& el,
     }
 
     const float own_font_size =
-        font_size_of(style, parent_font_size, root_font_size);
+        computed_font_size_for_element(el, styles, root_font_size);
 
     LengthContext ctx;
     ctx.font_size = own_font_size;
@@ -1067,7 +1245,8 @@ LayoutBox layout_element(const dom::Element& el,
                 }
             }
             flatten_inline_to_words(*n, styles, family, own_font_size,
-                                    tc, prev_had_space, words, &el);
+                                    root_font_size, tc,
+                                    prev_had_space, words, &el);
         }
         inline_run.clear();
         if (words.empty()) return;
@@ -1088,13 +1267,40 @@ LayoutBox layout_element(const dom::Element& el,
                     layout_element(*w.inline_block_element, styles, measurer,
                                    0.0f, 0.0f, content_w, own_content_height,
                                    own_font_size, root_font_size,
-                                   viewport_w, viewport_h, own_dir, image_dims));
+                                   viewport_w, viewport_h, own_dir, image_dims, font_metrics));
                 w.inline_block_box = std::move(child_box);
             }
         }
 
-        auto styled_lines =
-            break_styled_words_into_lines(words, content_w, measurer);
+        // ADR-082: establish the block's inline formatting
+        // strut from its font metrics and used line-height.
+        FontMetrics own_metrics;
+        if (font_metrics) {
+            own_metrics = font_metrics(family, own_font_size);
+        } else {
+            own_metrics.ascent = own_font_size * 0.8f;
+            own_metrics.descent = own_font_size * 0.2f;
+            own_metrics.x_height = own_font_size * 0.5f;
+            own_metrics.normal_line_height = own_font_size * 1.2f;
+        }
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, own_metrics);
+
+        const float font_box_height =
+            own_metrics.ascent + own_metrics.descent;
+        const float half_leading =
+            (line_height - font_box_height) * 0.5f;
+
+        const float strut_ascent =
+            std::max(0.0f, own_metrics.ascent + half_leading);
+        const float strut_descent =
+            std::max(0.0f, own_metrics.descent + half_leading);
+
+        auto styled_lines = break_styled_words_into_lines(
+            words, content_w, measurer,
+            strut_ascent, strut_descent);
         if (styled_lines.empty()) return;
 
         auto ctx = std::make_unique<LayoutInlineContext>();
@@ -1114,7 +1320,8 @@ LayoutBox layout_element(const dom::Element& el,
                 } else {
                     frag.x = line_start_x + frag.x;
                 }
-                frag.y = line_y;
+                frag.line_top = line_y;
+                frag.y = line_y + line.baseline - frag.baseline;
                 ctx->lines.push_back(frag);
             }
             if (line.width > max_line_w) max_line_w = line.width;
@@ -1148,8 +1355,8 @@ LayoutBox layout_element(const dom::Element& el,
             float accumulated_shift = 0.0f;
             for (auto& frag : ctx->lines) {
                 // New line: reset per-line shift.
-                if (frag.y != cur_line_y) {
-                    cur_line_y = frag.y;
+                if (frag.line_top != cur_line_y) {
+                    cur_line_y = frag.line_top;
                     accumulated_shift = 0.0f;
                 }
                 // Apply shift from previous fragments' padding.
@@ -1388,7 +1595,7 @@ LayoutBox layout_element(const dom::Element& el,
                                            own_content_height,
                                            own_font_size, root_font_size,
                                            viewport_w, viewport_h,
-                                           own_dir, image_dims));
+                                           own_dir, image_dims, font_metrics));
                         float top_off = 0.0f, left_off = 0.0f;
                         if (auto t = child_style->get("top");
                             t && *t != "auto") {
@@ -1434,7 +1641,7 @@ LayoutBox layout_element(const dom::Element& el,
                                        own_content_height,
                                        own_font_size, root_font_size,
                                        viewport_w, viewport_h,
-                                       own_dir, image_dims));
+                                       own_dir, image_dims, font_metrics));
 
                     // ADR-066: intrinsic width for auto-width floats.
                     // A <figure> with display:table has no explicit
@@ -1506,7 +1713,7 @@ LayoutBox layout_element(const dom::Element& el,
                                                    own_font_size,
                                                    root_font_size,
                                                    viewport_w, viewport_h,
-                                                   own_dir, image_dims));
+                                                   own_dir, image_dims, font_metrics));
                             }
                         }
                     }
@@ -1624,7 +1831,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    narrow_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
             } else if (child->type() == dom::NodeType::Text) {
@@ -1710,7 +1917,7 @@ LayoutBox layout_element(const dom::Element& el,
                 child_el, styles, measurer, 0.0f, 0.0f, content_w,
                 own_content_height,
                 own_font_size, root_font_size, viewport_w, viewport_h,
-                own_dir, image_dims);
+                own_dir, image_dims, font_metrics);
             const float natural_main =
                 is_row ? natural.width : natural.height;
 
@@ -1830,7 +2037,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 const float cross_size = line_is_row
                     ? fc.final_box->height : fc.final_box->width;
                 if (cross_size > container_cross) {
@@ -1997,7 +2204,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    cell_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 PlacedChild pc;
                 pc.box = std::move(child_box);
                 pc.row = row;
@@ -2116,7 +2323,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
 
                 const float natural_w = abs_box->width;
                 const float natural_h = abs_box->height;
@@ -2645,7 +2852,8 @@ LayoutBox layout(const dom::Document& doc,
                  float viewport_width,
                  ImageDimLookup image_dims,
                  float viewport_height,
-                 float parent_content_height) {   // ADR-057
+                 float parent_content_height,
+                 FontMetricsProvider font_metrics) { // ADR-057, ADR-082
     HB_LOG(Layout, Info, "layout: viewport=%.0fx%.0f",
            viewport_width, viewport_height);
     const dom::Element* root = find_root_element(doc);
@@ -2663,7 +2871,7 @@ LayoutBox layout(const dom::Document& doc,
                           parent_content_height,
                           kDefaultFontSize, root_fs,
                           viewport_width, viewport_height,
-                          Direction::Ltr, image_dims);
+                          Direction::Ltr, image_dims, font_metrics);
 }
 
 
@@ -2736,10 +2944,12 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
                              float viewport_width,
                              ImageDimLookup image_dims,
                              float viewport_height,
-                             float parent_content_height) {   // ADR-057
+                             float parent_content_height,
+                             FontMetricsProvider font_metrics) { // ADR-057, ADR-082
     LayoutBox root = layout(doc, styles, measurer, viewport_width,
                             image_dims, viewport_height,
-                            parent_content_height);   // ADR-057
+                            parent_content_height,
+                            font_metrics); // ADR-057, ADR-082
     // Root font size defaults to 16 (pseudo font-size inheritance
     // from root isn't needed for content: '' -- no text).
     apply_pseudo_elements(root, pseudo_styles,

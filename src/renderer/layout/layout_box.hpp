@@ -254,6 +254,14 @@ struct LineFragment {
     // and recursively paints the subtree. Non-null implies
     // this fragment is NOT rendered via Pango text drawing.
     std::shared_ptr<LayoutBox> inline_block_child;
+
+    // ADR-082: Pango baseline measured from the top of the text
+    // layout, in CSS pixels. Used by baseline-aware inline layout.
+    float baseline = 0.0f;
+
+    // ADR-082: stable top coordinate of the containing line box.
+    // Unlike y, this does not change when a fragment is baseline-aligned.
+    float line_top = 0.0f;
 };
 
 struct LayoutText final : LayoutNode {
@@ -293,9 +301,31 @@ struct LayoutInlineContext : LayoutNode {
     LayoutInlineContext() : LayoutNode(LayoutKind::InlineContext) {}
 };
 
-// Measures a single string at a given font (ADR-015).
-using TextMeasurer = std::function<std::pair<float, float>(
+// Text dimensions and baseline measured for a single font run (ADR-082).
+// Baseline is the distance from the top of the measured text layout
+// to its baseline, in CSS pixels.
+struct TextMetrics {
+    float width = 0.0f;
+    float height = 0.0f;
+    float baseline = 0.0f;
+};
+
+// Measures a single string at a given font (ADR-015, ADR-082).
+using TextMeasurer = std::function<TextMetrics(
     std::string_view text,
+    std::string_view font_family,
+    float font_size)>;
+
+// Font-wide metrics used for baseline-aware inline layout (ADR-082).
+// All dimensions are in CSS pixels.
+struct FontMetrics {
+    float ascent = 0.0f;
+    float descent = 0.0f;
+    float x_height = 0.0f;
+    float normal_line_height = 0.0f;
+};
+
+using FontMetricsProvider = std::function<FontMetrics(
     std::string_view font_family,
     float font_size)>;
 

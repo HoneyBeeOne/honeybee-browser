@@ -63,6 +63,11 @@ struct StyledLine {
     std::vector<LineFragment> fragments;
     float width = 0.0f;
     float height = 0.0f;
+
+    // ADR-082: baseline metrics, measured from the line's top.
+    float baseline = 0.0f;
+    float ascent = 0.0f;
+    float descent = 0.0f;
 };
 
 // Greedy line breaking over styled words. Adjacent words with
@@ -73,6 +78,8 @@ struct StyledLine {
 std::vector<StyledLine> break_styled_words_into_lines(
     const std::vector<StyledWord>& words,
     float max_width,
-    const TextMeasurer& measurer);
+    const TextMeasurer& measurer,
+    float strut_ascent = 0.0f,
+    float strut_descent = 0.0f);
 
 } // namespace honeybee::renderer::layout
