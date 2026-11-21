@@ -173,6 +173,135 @@ const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
     return it == styles.end() ? nullptr : &it->second;
 }
 
+// ADR-082: an inline-block uses its last in-flow line-box baseline
+// only when all of its overflow axes remain visible.
+bool overflow_is_visible(const css::ComputedStyle* style) {
+    if (!style) return true;
+
+    const char* properties[] = {
+        "overflow", "overflow-x", "overflow-y"
+    };
+
+    for (const char* property : properties) {
+        const auto value = style->get(property);
+        if (!value) continue;
+
+        const std::string& raw = *value;
+        std::size_t i = 0;
+
+        while (i < raw.size()) {
+            while (i < raw.size() &&
+                   (raw[i] == ' ' || raw[i] == '\t' ||
+                    raw[i] == '\n' || raw[i] == '\r')) {
+                ++i;
+            }
+
+            const std::size_t start = i;
+
+            while (i < raw.size() &&
+                   raw[i] != ' ' && raw[i] != '\t' &&
+                   raw[i] != '\n' && raw[i] != '\r') {
+                ++i;
+            }
+
+            if (start < i &&
+                raw.substr(start, i - start) != "visible") {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// ADR-082: find the last in-flow line box in an inline-block's
+// subtree. Coordinates are relative to the inline-block's border-box
+// origin because its subtree was laid out from (0, 0).
+//
+// Atomic inline-block fragments are deliberately not traversed:
+// they are not descendants in the LayoutBox child tree.
+std::optional<float> last_in_flow_line_baseline(
+    const LayoutBox& root,
+    const css::ComputedStyleMap& styles) {
+
+    std::optional<float> result;
+
+    auto visit = [&](auto&& self, const LayoutNode& node) -> void {
+        switch (node.kind) {
+            case LayoutKind::Text: {
+                const auto& text = static_cast<const LayoutText&>(node);
+                if (!text.lines.empty()) {
+                    const auto& last = text.lines.back();
+                    result = last.y + last.baseline;
+                }
+                break;
+            }
+
+            case LayoutKind::InlineContext: {
+                const auto& context =
+                    static_cast<const LayoutInlineContext&>(node);
+
+                if (!context.line_baselines.empty()) {
+                    result = context.line_baselines.back();
+                }
+
+                for (const auto& child : context.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Inline: {
+                const auto& inline_node =
+                    static_cast<const LayoutInline&>(node);
+
+                for (const auto& child : inline_node.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Box: {
+                const auto& child_box =
+                    static_cast<const LayoutBox&>(node);
+
+                // Absolutely and fixed-positioned boxes are out of flow.
+                if (child_box.position == Position::Absolute ||
+                    child_box.position == Position::Fixed) {
+                    break;
+                }
+
+                // Floats do not establish in-flow line boxes for
+                // the inline-block's baseline.
+                if (child_box.element) {
+                    const auto* child_style =
+                        lookup(styles, *child_box.element);
+
+                    if (child_style) {
+                        const auto float_value =
+                            child_style->get("float");
+
+                        if (float_value && *float_value != "none") {
+                            break;
+                        }
+                    }
+                }
+
+                for (const auto& child : child_box.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+        }
+    };
+
+    for (const auto& child : root.children) {
+        if (child) visit(visit, *child);
+    }
+
+    return result;
+}
+
 void fill_sides(float out[4], const css::ComputedStyle* style,
                 const LengthContext& ctx,
                 const char* top, const char* right,
@@ -1483,6 +1612,21 @@ LayoutBox layout_element(const dom::Element& el,
                                    0.0f, 0.0f, content_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h, own_dir, image_dims, font_metrics));
+                // ADR-082: the selected baseline is relative to
+                // the margin-box top, matching the atomic fragment's
+                // coordinate origin.
+                const auto* inline_block_style =
+                    lookup(styles, *w.inline_block_element);
+
+                if (overflow_is_visible(inline_block_style)) {
+                    if (const auto baseline =
+                            last_in_flow_line_baseline(*child_box, styles)) {
+                        w.inline_block_baseline =
+                            child_box->margin[0] + *baseline;
+                        w.has_inline_block_baseline = true;
+                    }
+                }
+
                 w.inline_block_box = std::move(child_box);
             }
         }
@@ -1683,6 +1827,10 @@ LayoutBox layout_element(const dom::Element& el,
         float total_h = 0.0f;
         float line_y = cursor_y;
         for (auto& line : styled_lines) {
+            // Preserve the line-box baseline independently of the
+            // fragment baselines modified by vertical-align.
+            ctx->line_baselines.push_back(line_y + line.baseline);
+
             const float line_start_x =
                 rtl ? content_x + content_w - line.width : content_x;
             for (auto& frag : line.fragments) {

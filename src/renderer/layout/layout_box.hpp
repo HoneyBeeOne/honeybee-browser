@@ -305,6 +305,12 @@ struct LayoutInline : LayoutNode {
 struct LayoutInlineContext : LayoutNode {
     std::vector<std::unique_ptr<LayoutNode>> children;
     std::vector<LineFragment> lines;
+
+    // ADR-082: line-box baselines in the containing LayoutBox
+    // coordinate system. These are independent of fragment-level
+    // vertical-align adjustments.
+    std::vector<float> line_baselines;
+
     bool rtl = false;
 
     LayoutInlineContext() : LayoutNode(LayoutKind::InlineContext) {}

@@ -165,6 +165,7 @@ std::vector<LineFragment> break_into_lines(
                 f.text = std::move(current_text);
                 f.width = current_width;
                 f.height = line_h;
+                f.baseline = measurer(f.text, font_family, font_size).baseline;
                 f.y = current_y;
                 current_y += line_h;
                 lines.push_back(std::move(f));
@@ -179,6 +180,7 @@ std::vector<LineFragment> break_into_lines(
         f.text = std::move(current_text);
         f.width = current_width;
         f.height = line_h;
+        f.baseline = measurer(f.text, font_family, font_size).baseline;
         f.y = current_y;
         lines.push_back(std::move(f));
     }
@@ -221,9 +223,11 @@ std::vector<StyledLine> break_styled_words_into_lines(
                  + w.inline_block_box->margin[0]
                  + w.inline_block_box->margin[2];
 
-            // ADR-082: fallback baseline for an inline-block is
-            // its bottom margin edge.
-            baseline = wh;
+            // ADR-082: use the last in-flow line-box baseline
+            // when available. Otherwise use the bottom margin edge.
+            baseline = w.has_inline_block_baseline
+                ? w.inline_block_baseline
+                : wh;
         } else {
             const auto metrics = measurer(w.text, w.font_family, w.font_size);
             ww = metrics.width;

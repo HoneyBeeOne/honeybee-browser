@@ -4254,7 +4254,150 @@ TEST_CASE("ADR-082: inline-block and text share the line baseline",
           Catch::Approx(atomic_fragment->y + atomic_fragment->baseline));
 
     CHECK(atomic_fragment->baseline ==
-          Catch::Approx(atomic_fragment->height));
+          Catch::Approx(text_fragment->baseline));
+}
+
+
+TEST_CASE("ADR-082: inline-block uses its last text line baseline",
+          "[layout][adr082][baseline][inline-block]") {
+    auto t = run(
+        "<div>before <span class='box'>one two three four five six</span></div>",
+        ".box { display: inline-block; width: 48px; "
+        "padding: 0; margin: 0; }");
+
+    const auto contexts = find_all_contexts(t.root);
+
+    const layout::LineFragment* atomic = nullptr;
+    for (const auto* context : contexts) {
+        for (const auto& fragment : context->lines) {
+            if (fragment.inline_block_child) {
+                atomic = &fragment;
+            }
+        }
+    }
+
+    REQUIRE(atomic != nullptr);
+    REQUIRE(atomic->inline_block_child != nullptr);
+
+    const layout::LayoutText* text = nullptr;
+    for (const auto& child : atomic->inline_block_child->children) {
+        if (child && child->kind == layout::LayoutKind::Text) {
+            text = static_cast<const layout::LayoutText*>(child.get());
+            break;
+        }
+    }
+
+    REQUIRE(text != nullptr);
+    REQUIRE(text->lines.size() >= 2);
+
+    const auto& last_line = text->lines.back();
+    const float expected_baseline = last_line.y + last_line.baseline;
+
+    CHECK(atomic->baseline == Catch::Approx(expected_baseline));
+    CHECK(atomic->baseline < atomic->height);
+}
+
+TEST_CASE("ADR-082: inline-block baseline includes its top margin",
+          "[layout][adr082][baseline][inline-block]") {
+    auto t = run(
+        "<div>before <span class='box'>inside</span></div>",
+        ".box { display: inline-block; width: 100px; "
+        "padding: 0; margin-top: 5px; margin-right: 0; "
+        "margin-bottom: 0; margin-left: 0; }");
+
+    const auto contexts = find_all_contexts(t.root);
+
+    const layout::LineFragment* atomic = nullptr;
+    for (const auto* context : contexts) {
+        for (const auto& fragment : context->lines) {
+            if (fragment.inline_block_child) {
+                atomic = &fragment;
+            }
+        }
+    }
+
+    REQUIRE(atomic != nullptr);
+    REQUIRE(atomic->inline_block_child != nullptr);
+
+    const layout::LayoutText* text = nullptr;
+    for (const auto& child : atomic->inline_block_child->children) {
+        if (child && child->kind == layout::LayoutKind::Text) {
+            text = static_cast<const layout::LayoutText*>(child.get());
+            break;
+        }
+    }
+
+    REQUIRE(text != nullptr);
+    REQUIRE_FALSE(text->lines.empty());
+
+    const auto& last_line = text->lines.back();
+    const float expected_baseline =
+        5.0f + last_line.y + last_line.baseline;
+
+    CHECK(atomic->baseline == Catch::Approx(expected_baseline));
+}
+
+TEST_CASE("ADR-082: inline-block with hidden overflow uses bottom edge baseline",
+          "[layout][adr082][baseline][inline-block]") {
+    auto t = run(
+        "<div>before <span class='box'>one two three four five six</span></div>",
+        ".box { display: inline-block; width: 48px; "
+        "padding: 0; margin: 0; overflow: hidden; }");
+
+    const auto contexts = find_all_contexts(t.root);
+
+    const layout::LineFragment* atomic = nullptr;
+    for (const auto* context : contexts) {
+        for (const auto& fragment : context->lines) {
+            if (fragment.inline_block_child) {
+                atomic = &fragment;
+            }
+        }
+    }
+
+    REQUIRE(atomic != nullptr);
+
+    // Non-visible overflow retains the established bottom-margin-edge
+    // fallback, even though the inline-block contains line boxes.
+    CHECK(atomic->baseline == Catch::Approx(atomic->height));
+}
+
+TEST_CASE("ADR-082: inline-block uses last nested inline-context baseline",
+          "[layout][adr082][baseline][inline-block]") {
+    auto t = run(
+        "<div>before <span class='box'><b>one two three four five</b></span></div>",
+        ".box { display: inline-block; width: 48px; "
+        "padding: 0; margin: 0; } "
+        "b { display: inline; }");
+
+    const auto contexts = find_all_contexts(t.root);
+
+    const layout::LineFragment* atomic = nullptr;
+    for (const auto* context : contexts) {
+        for (const auto& fragment : context->lines) {
+            if (fragment.inline_block_child) {
+                atomic = &fragment;
+            }
+        }
+    }
+
+    REQUIRE(atomic != nullptr);
+    REQUIRE(atomic->inline_block_child != nullptr);
+
+    const layout::LayoutInlineContext* inner_context = nullptr;
+    for (const auto& child : atomic->inline_block_child->children) {
+        if (child && child->kind == layout::LayoutKind::InlineContext) {
+            inner_context =
+                static_cast<const layout::LayoutInlineContext*>(child.get());
+            break;
+        }
+    }
+
+    REQUIRE(inner_context != nullptr);
+    REQUIRE(inner_context->line_baselines.size() >= 2);
+
+    CHECK(atomic->baseline ==
+          Catch::Approx(inner_context->line_baselines.back()));
 }
 
 TEST_CASE("ADR-082: nested inline ancestry survives fragment creation",

@@ -69,6 +69,11 @@ struct StyledWord {
     // ADR-082: accumulated vertical-align shift from inline
     // ancestors, positive values raise the fragment.
     float baseline_offset = 0.0f;
+
+    // ADR-082: baseline selected from the inline-block's last
+    // in-flow line box, relative to its margin-box top.
+    float inline_block_baseline = 0.0f;
+    bool has_inline_block_baseline = false;
 };
 
 // One visual line of styled fragments. fragments are ordered
