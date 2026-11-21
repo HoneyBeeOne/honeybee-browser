@@ -301,13 +301,23 @@ std::vector<StyledLine> break_styled_words_into_lines(
             f.element = w.element;
             f.inline_block_child = w.inline_block_box;  // ADR-081
             f.inline_ancestors = w.inline_ancestors;
+            f.top_aligned_ancestors = w.top_aligned_ancestors;
+            f.bottom_aligned_ancestors = w.bottom_aligned_ancestors;
             current.fragments.push_back(std::move(f));
         }
 
         cursor_x += sep + ww;
-        current.ascent = std::max(current.ascent, baseline);
-        current.descent = std::max(
-            current.descent, std::max(0.0f, wh - baseline));
+
+        // ADR-082: top/bottom are resolved against the completed line
+        // box, not against the baseline.
+        const bool edge_aligned =
+            !w.top_aligned_ancestors.empty() ||
+            !w.bottom_aligned_ancestors.empty();
+        if (!edge_aligned) {
+            current.ascent = std::max(current.ascent, baseline);
+            current.descent = std::max(
+                current.descent, std::max(0.0f, wh - baseline));
+        }
     }
 
     if (!current.fragments.empty()) {

@@ -266,6 +266,11 @@ struct LineFragment {
     // ADR-082: nested inline ancestry, outermost to innermost.
     // Used to resolve inline-box properties such as vertical-align.
     std::vector<const dom::Element*> inline_ancestors;
+
+    // ADR-082: deferred vertical-align line-edge targets.
+    // The line breaker resolves these after baseline layout.
+    std::vector<const dom::Element*> top_aligned_ancestors;
+    std::vector<const dom::Element*> bottom_aligned_ancestors;
 };
 
 struct LayoutText final : LayoutNode {

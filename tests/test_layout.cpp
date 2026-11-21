@@ -4471,3 +4471,344 @@ TEST_CASE("ADR-082: nested inline vertical-align offsets accumulate",
     CHECK(nested_contexts[0]->lines[0].baseline ==
           Catch::Approx(normal_contexts[0]->lines[0].baseline + 7.0f));
 }
+
+
+TEST_CASE("ADR-082: vertical-align super raises by half parent x-height",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; }");
+
+    auto aligned = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; vertical-align:super; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto aligned_contexts = find_all_contexts(aligned.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(aligned_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(aligned_contexts[0]->lines.size() == 1);
+
+    CHECK(aligned_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 4.0f));
+}
+
+TEST_CASE("ADR-082: vertical-align sub lowers by half parent x-height",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; }");
+
+    auto aligned = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; vertical-align:sub; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto aligned_contexts = find_all_contexts(aligned.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(aligned_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(aligned_contexts[0]->lines.size() == 1);
+
+    CHECK(aligned_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline - 4.0f));
+}
+
+TEST_CASE("ADR-082: vertical-align middle uses parent x-height",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; }");
+
+    auto aligned = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; vertical-align:middle; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto aligned_contexts = find_all_contexts(aligned.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(aligned_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(aligned_contexts[0]->lines.size() == 1);
+
+    CHECK(aligned_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 2.0f));
+}
+
+TEST_CASE("ADR-082: vertical-align text-top aligns font ascents",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; }");
+
+    auto aligned = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; vertical-align:text-top; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto aligned_contexts = find_all_contexts(aligned.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(aligned_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(aligned_contexts[0]->lines.size() == 1);
+
+    CHECK(aligned_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 3.2f));
+}
+
+TEST_CASE("ADR-082: vertical-align text-bottom aligns font descents",
+          "[layout][adr082][vertical-align]") {
+    auto normal = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; }");
+
+    auto aligned = run(
+        "<div><span>text</span></div>",
+        "div { display:block; font-size:16px; } "
+        "span { display:inline; font-size:20px; vertical-align:text-bottom; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto aligned_contexts = find_all_contexts(aligned.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(aligned_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(aligned_contexts[0]->lines.size() == 1);
+
+    CHECK(aligned_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline - 0.8f));
+}
+
+
+TEST_CASE("ADR-082: top and bottom alignment metadata survives line breaking",
+          "[layout][adr082][vertical-align]") {
+    auto t = run(
+        "<div><span class='top'>top</span> "
+        "<span class='bottom'>bottom</span></div>",
+        "div { display:block; } "
+        ".top { display:inline; vertical-align:top; } "
+        ".bottom { display:inline; vertical-align:bottom; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+    REQUIRE(contexts[0]->lines.size() == 2);
+
+    const layout::LineFragment* top_fragment = nullptr;
+    const layout::LineFragment* bottom_fragment = nullptr;
+
+    for (const auto& fragment : contexts[0]->lines) {
+        if (fragment.text.find("top") != std::string::npos)
+            top_fragment = &fragment;
+        if (fragment.text.find("bottom") != std::string::npos)
+            bottom_fragment = &fragment;
+    }
+
+    REQUIRE(top_fragment != nullptr);
+    REQUIRE(bottom_fragment != nullptr);
+
+    // Both fragments must belong to the same visual line, and the
+    // deferred alignment must place their outer edges on its edges.
+    CHECK(top_fragment->line_top == bottom_fragment->line_top);
+    CHECK(top_fragment->y == top_fragment->line_top);
+    CHECK(bottom_fragment->y + bottom_fragment->height ==
+          top_fragment->line_top + contexts[0]->height);
+
+    REQUIRE(top_fragment->top_aligned_ancestors.size() == 1);
+    CHECK(top_fragment->top_aligned_ancestors[0] == top_fragment->element);
+    CHECK(top_fragment->bottom_aligned_ancestors.empty());
+
+    REQUIRE(bottom_fragment->bottom_aligned_ancestors.size() == 1);
+    CHECK(bottom_fragment->bottom_aligned_ancestors[0] ==
+          bottom_fragment->element);
+    CHECK(bottom_fragment->top_aligned_ancestors.empty());
+}
+
+TEST_CASE("ADR-082: inherited numeric vertical-align accumulates through nesting",
+          "[layout][adr082][vertical-align][inherit]") {
+    auto normal = run(
+        "<div><span><b>text</b></span></div>",
+        "div { display:block; } "
+        "span { display:inline; } "
+        "b { display:inline; }");
+
+    auto inherited = run(
+        "<div><span><b>text</b></span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:4px; } "
+        "b { display:inline; vertical-align:inherit; }");
+
+    const auto normal_contexts = find_all_contexts(normal.root);
+    const auto inherited_contexts = find_all_contexts(inherited.root);
+
+    REQUIRE(normal_contexts.size() == 1);
+    REQUIRE(inherited_contexts.size() == 1);
+    REQUIRE(normal_contexts[0]->lines.size() == 1);
+    REQUIRE(inherited_contexts[0]->lines.size() == 1);
+
+    // The parent contributes 4px and the child inherits another 4px.
+    CHECK(inherited_contexts[0]->lines[0].baseline ==
+          Catch::Approx(normal_contexts[0]->lines[0].baseline + 8.0f));
+}
+
+TEST_CASE("ADR-082: inherited top alignment preserves nested ancestors",
+          "[layout][adr082][vertical-align][inherit]") {
+    auto t = run(
+        "<div><span><b>text</b></span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:top; } "
+        "b { display:inline; vertical-align:inherit; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+    REQUIRE(contexts[0]->lines.size() == 1);
+
+    const auto& fragment = contexts[0]->lines[0];
+
+    REQUIRE(fragment.top_aligned_ancestors.size() == 2);
+
+    const auto* span = t.doc->find_element("span");
+    const auto* bold = t.doc->find_element("b");
+
+    REQUIRE(span != nullptr);
+    REQUIRE(bold != nullptr);
+
+    CHECK(fragment.top_aligned_ancestors[0] == span);
+    CHECK(fragment.top_aligned_ancestors[1] == bold);
+    CHECK(fragment.y == fragment.line_top);
+}
+
+TEST_CASE("ADR-082: top-aligned inline ancestor is aligned on every wrapped line",
+          "[layout][adr082][vertical-align][wrapping]") {
+    auto t = run(
+        "<div><span>one two three four five six</span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:top; }",
+        64.0f);
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+
+    const auto& fragments = contexts[0]->lines;
+    REQUIRE(fragments.size() >= 3);
+
+    CHECK(fragments.front().line_top < fragments.back().line_top);
+
+    for (const auto& fragment : fragments) {
+        CHECK(fragment.y == Catch::Approx(fragment.line_top));
+        REQUIRE(fragment.top_aligned_ancestors.size() == 1);
+    }
+}
+
+TEST_CASE("ADR-082: nested bottom alignment preserves outer top alignment",
+          "[layout][adr082][vertical-align][nested]") {
+    auto t = run(
+        "<div><span>before <b>inside</b> after</span></div>",
+        "div { display:block; } "
+        "span { display:inline; vertical-align:top; } "
+        "b { display:inline; vertical-align:bottom; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+    REQUIRE(contexts[0]->lines.size() == 3);
+
+    const layout::LineFragment* before = nullptr;
+    const layout::LineFragment* inside = nullptr;
+    const layout::LineFragment* after = nullptr;
+
+    for (const auto& fragment : contexts[0]->lines) {
+        if (fragment.text.find("before") != std::string::npos)
+            before = &fragment;
+        if (fragment.text.find("inside") != std::string::npos)
+            inside = &fragment;
+        if (fragment.text.find("after") != std::string::npos)
+            after = &fragment;
+    }
+
+    REQUIRE(before != nullptr);
+    REQUIRE(inside != nullptr);
+    REQUIRE(after != nullptr);
+
+    const float line_bottom =
+        inside->line_top + contexts[0]->height;
+
+    // The outer inline's fragments remain top-aligned.
+    CHECK(before->y == Catch::Approx(before->line_top));
+    CHECK(after->y == Catch::Approx(after->line_top));
+
+    // The nested inline fragment is bottom-aligned.
+    CHECK(inside->y + inside->height ==
+          Catch::Approx(line_bottom));
+
+    REQUIRE(before->top_aligned_ancestors.size() == 1);
+    REQUIRE(inside->top_aligned_ancestors.size() == 1);
+    REQUIRE(inside->bottom_aligned_ancestors.size() == 1);
+    REQUIRE(after->top_aligned_ancestors.size() == 1);
+}
+
+
+TEST_CASE("ADR-082: nested bottom alignment handles a taller inline-block",
+          "[layout][adr082][vertical-align][nested][inline-block]") {
+    auto t = run(
+        "<div><span class='outer'>before "
+        "<b class='inner'><i class='box'></i></b> after</span></div>",
+        "div { display:block; } "
+        ".outer { display:inline; vertical-align:top; } "
+        ".inner { display:inline; vertical-align:bottom; } "
+        ".box { display:inline-block; width:20px; height:40px; "
+        "padding:0; margin:0; }");
+
+    const auto contexts = find_all_contexts(t.root);
+    REQUIRE(contexts.size() == 1);
+
+    const auto& fragments = contexts[0]->lines;
+    REQUIRE(fragments.size() == 3);
+
+    const layout::LineFragment* before = nullptr;
+    const layout::LineFragment* atomic = nullptr;
+    const layout::LineFragment* after = nullptr;
+
+    for (const auto& fragment : fragments) {
+        if (fragment.inline_block_child) {
+            atomic = &fragment;
+        } else if (fragment.text.find("before") != std::string::npos) {
+            before = &fragment;
+        } else if (fragment.text.find("after") != std::string::npos) {
+            after = &fragment;
+        }
+    }
+
+    REQUIRE(before != nullptr);
+    REQUIRE(atomic != nullptr);
+    REQUIRE(after != nullptr);
+
+    CHECK(atomic->height >= 40.0f);
+    CHECK(before->line_top == atomic->line_top);
+    CHECK(atomic->line_top == after->line_top);
+
+    // The outer top-aligned inline remains at the line's top.
+    CHECK(before->y == Catch::Approx(before->line_top));
+    CHECK(after->y == Catch::Approx(after->line_top));
+
+    // The nested bottom-aligned inline-block reaches the line's bottom.
+    CHECK(atomic->y + atomic->height ==
+          Catch::Approx(atomic->line_top + contexts[0]->height));
+
+    REQUIRE(before->top_aligned_ancestors.size() == 1);
+    REQUIRE(atomic->top_aligned_ancestors.size() == 1);
+    REQUIRE(atomic->bottom_aligned_ancestors.size() == 1);
+    REQUIRE(after->top_aligned_ancestors.size() == 1);
+}

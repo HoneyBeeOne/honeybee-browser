@@ -419,9 +419,8 @@ std::string vertical_align_value_for_element(
     return std::string(value);
 }
 
-// Resolve the first numeric vertical-align stage from ADR-082.
-// Positive values raise the inline box; negative values lower it.
-// Percentages are relative to this element's used line-height.
+// Resolve vertical-align offsets for baseline-relative keyword values
+// and numeric values. Positive offsets raise the inline box.
 float vertical_align_offset_for_element(
     const dom::Element& el,
     const css::ComputedStyleMap& styles,
@@ -434,14 +433,86 @@ float vertical_align_offset_for_element(
     const std::string value =
         vertical_align_value_for_element(el, styles);
 
-    // Keyword alignment modes are intentionally deferred to a
-    // later ADR-082 implementation stage.
-    if (value == "baseline" || value == "sub" ||
-        value == "super" || value == "middle" ||
-        value == "text-top" || value == "text-bottom" ||
-        value == "top" || value == "bottom") {
+    if (value == "baseline" || value == "top" || value == "bottom")
         return 0.0f;
+
+    auto metrics_for = [&](const dom::Element& target,
+                           const std::string& inherited_family) {
+        auto style_it = styles.find(&target);
+        const css::ComputedStyle* target_style =
+            style_it == styles.end() ? nullptr : &style_it->second;
+
+        const float size =
+            computed_font_size_for_element(target, styles, root_font_size);
+
+        std::string family = inherited_family;
+        if (target_style) {
+            const std::string declared_family =
+                font_family_of(target_style);
+            if (!declared_family.empty())
+                family = declared_family;
+        }
+
+        FontMetrics metrics;
+        if (font_metrics) {
+            metrics = font_metrics(family, size);
+        } else {
+            metrics.ascent = size * 0.8f;
+            metrics.descent = size * 0.2f;
+            metrics.x_height = size * 0.5f;
+            metrics.normal_line_height = size * 1.2f;
+        }
+
+        if (metrics.ascent <= 0.0f)
+            metrics.ascent = size * 0.8f;
+        if (metrics.descent <= 0.0f)
+            metrics.descent = size * 0.2f;
+        if (metrics.x_height <= 0.0f)
+            metrics.x_height = size * 0.5f;
+
+        return metrics;
+    };
+
+    const FontMetrics element_metrics =
+        metrics_for(el, fallback_family);
+
+    const dom::Element* parent_element = nullptr;
+    const dom::Node* parent_node = el.parent();
+    while (parent_node) {
+        if (parent_node->type() == dom::NodeType::Element) {
+            parent_element =
+                static_cast<const dom::Element*>(parent_node);
+            break;
+        }
+        parent_node = parent_node->parent();
     }
+
+    const FontMetrics parent_metrics = parent_element
+        ? metrics_for(*parent_element, fallback_family)
+        : element_metrics;
+
+    // The exact sub/super displacement is user-agent-defined.
+    // Use half the parent's x-height consistently.
+    if (value == "super")
+        return parent_metrics.x_height * 0.5f;
+
+    if (value == "sub")
+        return -parent_metrics.x_height * 0.5f;
+
+    // Align the element's font-box midpoint with the parent's baseline
+    // plus half the parent's x-height.
+    if (value == "middle") {
+        return (element_metrics.ascent - element_metrics.descent -
+                parent_metrics.x_height) * 0.5f;
+    }
+
+    // Baseline coordinates increase downward. Align the corresponding
+    // font-box edges with the parent's font-box edges.
+    if (value == "text-top")
+        return element_metrics.ascent - parent_metrics.ascent;
+
+    if (value == "text-bottom")
+        return parent_metrics.descent - element_metrics.descent;
 
     auto style_it = styles.find(&el);
     const css::ComputedStyle* style =
@@ -449,23 +520,6 @@ float vertical_align_offset_for_element(
 
     const float own_font_size =
         computed_font_size_for_element(el, styles, root_font_size);
-
-    std::string element_family = fallback_family;
-    if (style) {
-        const std::string declared_family = font_family_of(style);
-        if (!declared_family.empty())
-            element_family = declared_family;
-    }
-
-    FontMetrics metrics;
-    if (font_metrics) {
-        metrics = font_metrics(element_family, own_font_size);
-    } else {
-        metrics.ascent = own_font_size * 0.8f;
-        metrics.descent = own_font_size * 0.2f;
-        metrics.x_height = own_font_size * 0.5f;
-        metrics.normal_line_height = own_font_size * 1.2f;
-    }
 
     if (value.size() > 1 && value.back() == '%') {
         std::string_view numeric(value);
@@ -477,7 +531,7 @@ float vertical_align_offset_for_element(
 
         const float line_height = used_line_height(
             el, style, styles, own_font_size, root_font_size,
-            viewport_w, viewport_h, metrics);
+            viewport_w, viewport_h, element_metrics);
 
         return line_height * percentage / 100.0f;
     }
@@ -1395,13 +1449,27 @@ LayoutBox layout_element(const dom::Element& el,
         // Inline-block words include their own element in this list.
         for (auto& w : words) {
             float offset = 0.0f;
+            w.top_aligned_ancestors.clear();
+            w.bottom_aligned_ancestors.clear();
+
             for (const dom::Element* ancestor : w.inline_ancestors) {
                 if (!ancestor) continue;
-                offset += vertical_align_offset_for_element(
-                    *ancestor, styles, w.font_family,
-                    root_font_size, viewport_w, viewport_h,
-                    font_metrics);
+
+                const std::string align =
+                    vertical_align_value_for_element(*ancestor, styles);
+
+                if (align == "top") {
+                    w.top_aligned_ancestors.push_back(ancestor);
+                } else if (align == "bottom") {
+                    w.bottom_aligned_ancestors.push_back(ancestor);
+                } else {
+                    offset += vertical_align_offset_for_element(
+                        *ancestor, styles, w.font_family,
+                        root_font_size, viewport_w, viewport_h,
+                        font_metrics);
+                }
             }
+
             w.baseline_offset = offset;
         }
 
@@ -1449,6 +1517,162 @@ LayoutBox layout_element(const dom::Element& el,
             words, content_w, measurer,
             strut_ascent, strut_descent);
         if (styled_lines.empty()) return;
+
+        // ADR-082: resolve vertical-align: top/bottom against each
+        // completed visual line. An inline ancestor can produce several
+        // fragments on a line, so move the ancestor's fragments together.
+        struct EdgeAlignedGroup {
+            const dom::Element* ancestor = nullptr;
+            bool align_top = false;
+        };
+
+        for (auto& line : styled_lines) {
+            std::vector<EdgeAlignedGroup> groups;
+
+            for (const auto& frag : line.fragments) {
+                for (const auto* ancestor : frag.top_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, true});
+                }
+
+                for (const auto* ancestor : frag.bottom_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   !group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, false});
+                }
+            }
+
+            // A fragment belonging to a deeper edge-aligned descendant
+            // must not determine its ancestor group's own alignment edge.
+            // The descendant is aligned independently after its ancestor.
+            auto belongs_to_nested_edge_group =
+                [](const LineFragment& frag,
+                   const EdgeAlignedGroup& group) {
+                    const auto group_it = std::find(
+                        frag.inline_ancestors.begin(),
+                        frag.inline_ancestors.end(),
+                        group.ancestor);
+
+                    if (group_it == frag.inline_ancestors.end())
+                        return false;
+
+                    const auto group_depth = std::distance(
+                        frag.inline_ancestors.begin(), group_it);
+
+                    auto has_deeper_edge_ancestor =
+                        [&](const std::vector<const dom::Element*>& aligned) {
+                            for (const auto* candidate : aligned) {
+                                if (!candidate || candidate == group.ancestor)
+                                    continue;
+
+                                const auto candidate_it = std::find(
+                                    frag.inline_ancestors.begin(),
+                                    frag.inline_ancestors.end(),
+                                    candidate);
+
+                                if (candidate_it != frag.inline_ancestors.end() &&
+                                    std::distance(
+                                        frag.inline_ancestors.begin(),
+                                        candidate_it) > group_depth) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        };
+
+                    return has_deeper_edge_ancestor(
+                               frag.top_aligned_ancestors) ||
+                           has_deeper_edge_ancestor(
+                               frag.bottom_aligned_ancestors);
+                };
+
+            // Determine the line height needed to contain all edge groups.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom >= group_top) {
+                    line.height = std::max(
+                        line.height, group_bottom - group_top);
+                }
+            }
+
+            line.descent = std::max(
+                line.descent, line.height - line.baseline);
+
+            // Align each ancestor's complete fragment group to its edge.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom < group_top) continue;
+
+                const float shift = group.align_top
+                    ? -group_top
+                    : line.height - group_bottom;
+
+                for (auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) != ancestors.end()) {
+                        // A positive shift moves the fragment down.
+                        frag.baseline -= shift;
+                    }
+                }
+            }
+        }
 
         auto ctx = std::make_unique<LayoutInlineContext>();
         ctx->x = content_x;

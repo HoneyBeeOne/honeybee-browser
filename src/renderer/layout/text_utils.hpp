@@ -61,6 +61,11 @@ struct StyledWord {
     // own element as the final entry.
     std::vector<const dom::Element*> inline_ancestors;
 
+    // ADR-082: deferred line-edge alignment targets. These are
+    // resolved after baseline-aligned line metrics are established.
+    std::vector<const dom::Element*> top_aligned_ancestors;
+    std::vector<const dom::Element*> bottom_aligned_ancestors;
+
     // ADR-082: accumulated vertical-align shift from inline
     // ancestors, positive values raise the fragment.
     float baseline_offset = 0.0f;
