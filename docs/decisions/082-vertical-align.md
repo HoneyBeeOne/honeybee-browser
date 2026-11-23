@@ -39,6 +39,13 @@ have not all been verified.
 - Opt-in `inline_layout` trace diagnostics document the path from inline
   word construction and measurement through line breaking, positioning,
   and Pango drawing.
+- Pixel-based rendering tests for mixed-font baseline alignment,
+  length-offset `vertical-align`, multi-line wrap stacking, and
+  inline-block baseline alignment live in
+  `tests/test_inline_baseline_paint.cpp` (tagged `[adr082]`). They drive
+  the real `break_styled_words_into_lines` and `paint::paint` through a
+  deterministic stub measurer and assert pixel colours at computed
+  baseline coordinates.
 
 ### Partially implemented / approximated
 
@@ -56,8 +63,10 @@ have not all been verified.
 
 ### Still missing / not yet verified
 
-- Pixel-based rendering tests for representative mixed-font, nested,
-  superscript/subscript, edge-alignment, and inline-block cases.
+- Pixel-based rendering tests for nested inline elements, painted
+  `sup`/`sub` offsets, and `top`/`bottom` edge alignment. The mixed-font,
+  length-offset, multi-line wrap, and inline-block cases are now covered
+  by `tests/test_inline_baseline_paint.cpp`.
 - End-to-end browser validation against reference browsers across different
   fonts, viewport sizes, wrapping conditions, and RTL content.
 - A completed investigation of the previously observed Wikipedia rendering

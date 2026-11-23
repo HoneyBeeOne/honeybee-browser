@@ -20,6 +20,7 @@ add_executable(honeybee_tests
   test_grid_layout.cpp
   test_layout.cpp
   test_paint.cpp
+  test_inline_baseline_paint.cpp   # ADR-082 pixel tests
   test_lexbor_smoke.cpp
   test_convert.cpp
   test_css_sources.cpp
