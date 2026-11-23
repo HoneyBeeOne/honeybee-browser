@@ -4,6 +4,78 @@
 - **Date:** 2026-11-20
 - **Related ADRs:** ADR-015, ADR-016, ADR-029, ADR-081
 
+## Implementation status (2026-11-23)
+
+The decision remains **Accepted**. Implementation is substantially underway,
+but this ADR is **not complete** and the browser-level acceptance criteria
+have not all been verified.
+
+### Implemented
+
+- Text measurement carries width, height, and baseline separately from
+  font metrics.
+- The Pango backend supplies text baselines and font metrics, including
+  ascent, descent, an x-height estimate, and recommended line height.
+- The layout pipeline has a font-metrics provider and fallback metrics.
+- Line-height resolution handles `normal`, unitless numbers, lengths, and
+  percentages. Cascade values retain their declaration source so inherited
+  unitless values can be distinguished from values resolved on an ancestor.
+- Inline flattening preserves per-element font family, font size, color,
+  element identity, and inline ancestry instead of applying one font
+  configuration to the entire run.
+- Inline fragments carry baseline information and are positioned relative
+  to a shared line baseline.
+- `vertical-align` supports the initial `baseline` behavior, explicit
+  `inherit`, length and percentage offsets, `sub`, `super`, `middle`,
+  `text-top`, `text-bottom`, `top`, and `bottom`.
+- The UA stylesheet supplies the conventional `sup { vertical-align: super }`
+  and `sub { vertical-align: sub }` defaults.
+- Inline-block baseline selection uses the last in-flow line-box baseline
+  when qualifying content exists and overflow is visible; otherwise it
+  falls back to the bottom margin edge. Margin contribution is retained.
+- Focused regression tests cover baseline offsets, keyword alignment,
+  inheritance, nested inline alignment, wrapping, inline-block baseline
+  selection/fallback, and the UA `sup`/`sub` defaults.
+- Opt-in `inline_layout` trace diagnostics document the path from inline
+  word construction and measurement through line breaking, positioning,
+  and Pango drawing.
+
+### Partially implemented / approximated
+
+- `sub` and `super` offsets are font-relative approximations, not a
+  complete implementation of browser-specific typographic conventions.
+- The x-height is estimated from font metrics/glyph data with a fallback;
+  it is not a full OpenType baseline or typographic model.
+- Font-metric fallback values remain available when the backend cannot
+  provide metrics. Their behavior needs broader font/platform validation.
+- The current baseline and line-box calculations are covered by unit tests,
+  but have not been demonstrated to match all CSS 2.1 edge cases or
+  interoperable browser behavior.
+- Inline style preservation currently covers the text properties handled by
+  this renderer; it is not a general computed-style/token-stream rewrite.
+
+### Still missing / not yet verified
+
+- Pixel-based rendering tests for representative mixed-font, nested,
+  superscript/subscript, edge-alignment, and inline-block cases.
+- End-to-end browser validation against reference browsers across different
+  fonts, viewport sizes, wrapping conditions, and RTL content.
+- A completed investigation of the previously observed Wikipedia rendering
+  differences. Existing diagnostics did not establish a vertical-align
+  defect in the ordinary paragraph examined, so that issue must not be
+  considered fixed by this work.
+- A complete audit of the acceptance checklist below, including line-height
+  inheritance and mixed line-height/font-size combinations under broader
+  nested and multi-line cases.
+- Further CSS conformance work where tests or browser comparisons expose
+  differences, especially around line-box expansion and the interaction of
+  `top`/`bottom` alignment with complex inline descendants.
+
+The implementation should therefore be treated as a substantial first
+implementation, not as full CSS vertical-align conformance. Keep this ADR
+open for follow-up work until the remaining rendering and conformance
+validation is complete.
+
 ## Context
 
 ADR-016 established the initial inline formatting model. ADR-081 added
