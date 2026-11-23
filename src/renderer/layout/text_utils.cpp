@@ -1,5 +1,8 @@
 #include "renderer/layout/text_utils.hpp"
 
+#include "base/log.hpp"
+#include "renderer/dom/node.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -238,7 +241,20 @@ std::vector<StyledLine> break_styled_words_into_lines(
         // ADR-082: positive vertical-align raises the fragment.
         // Baselines are measured downward from the fragment top,
         // so raising the fragment increases its baseline coordinate.
+        const float measured_baseline = baseline;
         baseline += w.baseline_offset;
+
+        if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+            HB_LOG(InlineLayout, Trace,
+                "INLINE_MEASURE element=%p text='%.96s' "
+                "font='%s' size=%.2f width=%.3f height=%.3f "
+                "measured_baseline=%.3f baseline_offset=%.3f "
+                "used_baseline=%.3f cursor_x=%.3f",
+                static_cast<const void*>(w.element), w.text.c_str(),
+                w.font_family.c_str(), w.font_size, ww, wh,
+                measured_baseline, w.baseline_offset,
+                baseline, cursor_x);
+        }
 
         float sep = 0.0f;
         if (!current.fragments.empty() && w.preceded_by_space) {
@@ -246,6 +262,14 @@ std::vector<StyledLine> break_styled_words_into_lines(
         }
 
         if (!current.fragments.empty() && cursor_x + sep + ww > max_width) {
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_WRAP line=%zu cursor_x=%.3f separator=%.3f "
+                    "word_width=%.3f max_width=%.3f word='%.72s'",
+                    lines.size(), cursor_x, sep, ww, max_width,
+                    w.text.c_str());
+            }
+
             // Wrap: flush current line, start new
             current.width = cursor_x;
             finalize_line(current);
@@ -270,7 +294,34 @@ std::vector<StyledLine> break_styled_words_into_lines(
             !last->inline_block_child &&     // ADR-081: no merge across atomic
             !w.inline_block_box;
 
+        if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+            HB_LOG(InlineLayout, Trace,
+                "INLINE_MERGE_DECISION line=%zu previous=%p "
+                "next_element=%p merge=%d previous_text='%.64s' "
+                "next_text='%.64s' previous_baseline=%.3f "
+                "next_baseline=%.3f baseline_delta=%.3f "
+                "previous_height=%.3f next_height=%.3f separator=%.3f",
+                lines.size(), static_cast<const void*>(last),
+                static_cast<const void*>(w.element),
+                same_style ? 1 : 0,
+                last ? last->text.c_str() : "",
+                w.text.c_str(),
+                last ? last->baseline : 0.0f,
+                baseline,
+                last ? baseline - last->baseline : 0.0f,
+                last ? last->height : 0.0f, wh, sep);
+        }
+
         if (same_style) {
+            if ((baseline != last->baseline || wh != last->height) &&
+                log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_MERGE_METRIC_MISMATCH previous='%.64s' "
+                    "next='%.64s' previous_baseline=%.3f "
+                    "next_baseline=%.3f previous_height=%.3f next_height=%.3f",
+                    last->text.c_str(), w.text.c_str(),
+                    last->baseline, baseline, last->height, wh);
+            }
             if (sep > 0.0f) last->text += ' ';
             last->text += w.text;
             last->width += sep + ww;
@@ -328,6 +379,41 @@ std::vector<StyledLine> break_styled_words_into_lines(
         current.width = cursor_x;
         finalize_line(current);
         lines.push_back(std::move(current));
+    }
+
+    if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+        for (std::size_t line_index = 0;
+             line_index < lines.size(); ++line_index) {
+            const auto& line = lines[line_index];
+
+            HB_LOG(InlineLayout, Trace,
+                "INLINE_LINE phase=line_break line=%zu fragments=%zu "
+                "width=%.3f height=%.3f baseline=%.3f "
+                "ascent=%.3f descent=%.3f max_width=%.3f",
+                line_index, line.fragments.size(),
+                line.width, line.height, line.baseline,
+                line.ascent, line.descent, max_width);
+
+            for (std::size_t fragment_index = 0;
+                 fragment_index < line.fragments.size(); ++fragment_index) {
+                const auto& frag = line.fragments[fragment_index];
+
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_FRAGMENT phase=line_break line=%zu fragment=%zu "
+                    "element=%p text='%.96s' font='%s' size=%.2f "
+                    "x=%.3f y=%.3f width=%.3f height=%.3f "
+                    "baseline=%.3f inline_ancestors=%zu "
+                    "top_ancestors=%zu bottom_ancestors=%zu",
+                    line_index, fragment_index,
+                    static_cast<const void*>(frag.element),
+                    frag.text.c_str(), frag.font_family.c_str(),
+                    frag.font_size, frag.x, frag.y,
+                    frag.width, frag.height, frag.baseline,
+                    frag.inline_ancestors.size(),
+                    frag.top_aligned_ancestors.size(),
+                    frag.bottom_aligned_ancestors.size());
+            }
+        }
     }
 
     return lines;

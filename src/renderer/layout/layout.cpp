@@ -2,6 +2,7 @@
 #include "renderer/layout/grid_layout.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -1600,6 +1601,48 @@ LayoutBox layout_element(const dom::Element& el,
             }
 
             w.baseline_offset = offset;
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                const std::string element_tag =
+                    w.element ? w.element->tag() : "null";
+                const std::string element_id =
+                    w.element ? w.element->get_attribute("id") : "";
+                const std::string element_class =
+                    w.element ? w.element->get_attribute("class") : "";
+
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_WORD element=%p tag=%s id='%s' class='%.64s' "
+                    "text='%.96s' font='%s' size=%.2f "
+                    "baseline_offset=%.3f top_ancestors=%zu "
+                    "bottom_ancestors=%zu inline_ancestors=%zu",
+                    static_cast<const void*>(w.element),
+                    element_tag.c_str(), element_id.c_str(),
+                    element_class.c_str(), w.text.c_str(),
+                    w.font_family.c_str(), w.font_size,
+                    w.baseline_offset,
+                    w.top_aligned_ancestors.size(),
+                    w.bottom_aligned_ancestors.size(),
+                    w.inline_ancestors.size());
+
+                for (const auto* ancestor : w.inline_ancestors) {
+                    if (!ancestor) continue;
+
+                    const std::string tag = ancestor->tag();
+                    const std::string id = ancestor->get_attribute("id");
+                    const std::string class_name =
+                        ancestor->get_attribute("class");
+                    const std::string align =
+                        vertical_align_value_for_element(*ancestor, styles);
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_ANCESTOR word_element=%p ancestor=%p "
+                        "tag=%s id='%s' class='%.64s' vertical_align='%s'",
+                        static_cast<const void*>(w.element),
+                        static_cast<const void*>(ancestor),
+                        tag.c_str(), id.c_str(), class_name.c_str(),
+                        align.c_str());
+                }
+            }
         }
 
         // ADR-081: pre-lay-out inline-block atomic words. Each one
@@ -1826,6 +1869,8 @@ LayoutBox layout_element(const dom::Element& el,
         float max_line_w = 0.0f;
         float total_h = 0.0f;
         float line_y = cursor_y;
+        std::size_t line_index = 0;
+
         for (auto& line : styled_lines) {
             // Preserve the line-box baseline independently of the
             // fragment baselines modified by vertical-align.
@@ -1833,6 +1878,8 @@ LayoutBox layout_element(const dom::Element& el,
 
             const float line_start_x =
                 rtl ? content_x + content_w - line.width : content_x;
+
+            std::size_t fragment_index = 0;
             for (auto& frag : line.fragments) {
                 if (rtl) {
                     frag.x = content_x + content_w - frag.x - frag.width;
@@ -1841,11 +1888,46 @@ LayoutBox layout_element(const dom::Element& el,
                 }
                 frag.line_top = line_y;
                 frag.y = line_y + line.baseline - frag.baseline;
+
+                if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                    const std::string tag =
+                        frag.element ? frag.element->tag() : "null";
+                    const std::string id =
+                        frag.element ? frag.element->get_attribute("id") : "";
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_POSITION context=%p line=%zu fragment=%zu "
+                        "element=%p tag=%s id='%s' text='%.96s' "
+                        "line_top=%.3f line_baseline=%.3f "
+                        "fragment_baseline=%.3f x=%.3f y=%.3f "
+                        "width=%.3f height=%.3f rtl=%d",
+                        static_cast<const void*>(ctx.get()),
+                        line_index, fragment_index,
+                        static_cast<const void*>(frag.element),
+                        tag.c_str(), id.c_str(), frag.text.c_str(),
+                        frag.line_top, line.baseline, frag.baseline,
+                        frag.x, frag.y, frag.width, frag.height,
+                        rtl ? 1 : 0);
+                }
+
                 ctx->lines.push_back(frag);
+                ++fragment_index;
             }
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_POSITION_LINE context=%p line=%zu "
+                    "y=%.3f width=%.3f height=%.3f "
+                    "baseline=%.3f ascent=%.3f descent=%.3f",
+                    static_cast<const void*>(ctx.get()),
+                    line_index, line_y, line.width, line.height,
+                    line.baseline, line.ascent, line.descent);
+            }
+
             if (line.width > max_line_w) max_line_w = line.width;
             line_y += line.height;
             total_h += line.height;
+            ++line_index;
         }
 
         // ADR-045: post-process ctx->lines.

@@ -20,6 +20,8 @@ h6 { font-size: 0.67em; font-weight: bold; margin: 1.67em 0 }
 p { margin: 1em 0 }
 em, i, cite, var, address { font-style: italic }
 strong, b { font-weight: bold }
+sup { vertical-align: super }
+sub { vertical-align: sub }
 code, pre, kbd, samp, tt { font-family: monospace }
 ul, ol { margin: 1em 0; padding-left: 40px }
 ul { list-style-type: disc }

@@ -133,6 +133,20 @@ void draw_line_with_pango(
         make_layout(cr, frag.text, frag.font_family, frag.font_size);
     cairo_set_source_rgba(
         cr, frag.color.r, frag.color.g, frag.color.b, frag.color.a);
+
+    if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+        HB_LOG(InlineLayout, Trace,
+            "INLINE_DRAW element=%p text='%.96s' "
+            "x=%.3f y=%.3f line_top=%.3f "
+            "width=%.3f height=%.3f baseline=%.3f "
+            "font='%s' size=%.2f color=(%.2f,%.2f,%.2f,%.2f)",
+            static_cast<const void*>(frag.element),
+            frag.text.c_str(), frag.x, frag.y, frag.line_top,
+            frag.width, frag.height, frag.baseline,
+            frag.font_family.c_str(), frag.font_size,
+            frag.color.r, frag.color.g, frag.color.b, frag.color.a);
+    }
+
     cairo_move_to(cr, frag.x, frag.y);
     pango_cairo_show_layout(cr, layout);
     g_object_unref(layout);

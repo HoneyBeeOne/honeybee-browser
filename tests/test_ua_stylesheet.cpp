@@ -69,10 +69,30 @@ const css::Declaration* find_decl(const css::Rule& r,
 
 } // namespace
 
-TEST_CASE("ua_stylesheet: parses to 20 rules", "[ua_stylesheet][adr080]") {
-    // ADR-080: 3 rules added (ul/ol list-style-type, li display)
-    // → 17 + 3 = 20.
-    CHECK(css::ua_stylesheet().rules.size() == 20);
+TEST_CASE("ua_stylesheet: parses to 22 rules", "[ua_stylesheet]") {
+    // Two additional inline-element rules provide the default
+    // vertical alignment for superscripts and subscripts.
+    CHECK(css::ua_stylesheet().rules.size() == 22);
+}
+
+TEST_CASE("ua_stylesheet: sup defaults to vertical-align super",
+          "[ua_stylesheet][vertical-align]") {
+    const auto& s = css::ua_stylesheet();
+    const auto* r = find_rule_by_tag_with_prop(s, "sup", "vertical-align");
+    REQUIRE(r != nullptr);
+    const auto* d = find_decl(*r, "vertical-align");
+    REQUIRE(d != nullptr);
+    CHECK(d->value == "super");
+}
+
+TEST_CASE("ua_stylesheet: sub defaults to vertical-align sub",
+          "[ua_stylesheet][vertical-align]") {
+    const auto& s = css::ua_stylesheet();
+    const auto* r = find_rule_by_tag_with_prop(s, "sub", "vertical-align");
+    REQUIRE(r != nullptr);
+    const auto* d = find_decl(*r, "vertical-align");
+    REQUIRE(d != nullptr);
+    CHECK(d->value == "sub");
 }
 
 TEST_CASE("ua_stylesheet: returns cached reference",
