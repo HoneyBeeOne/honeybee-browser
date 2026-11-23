@@ -61,6 +61,9 @@ const char* category_name(LogCategory c) {
         case LogCategory::Paint:    return "paint";
         case LogCategory::Fetch:    return "fetch";
         case LogCategory::Event:    return "event";
+        case LogCategory::LayoutDetail: return "layout_detail";
+        case LogCategory::PaintDetail:  return "paint_detail";
+        case LogCategory::InlineLayout: return "inline_layout";
     }
     return "?";
 }
@@ -93,6 +96,9 @@ std::uint32_t category_bit(const std::string& t) {
     if (t == "paint")    return 1u << static_cast<int>(LogCategory::Paint);
     if (t == "fetch")    return 1u << static_cast<int>(LogCategory::Fetch);
     if (t == "event")    return 1u << static_cast<int>(LogCategory::Event);
+    if (t == "layout_detail") return 1u << static_cast<int>(LogCategory::LayoutDetail);
+    if (t == "paint_detail")  return 1u << static_cast<int>(LogCategory::PaintDetail);
+    if (t == "inline_layout") return 1u << static_cast<int>(LogCategory::InlineLayout);
     return 0;
 }
 
@@ -102,7 +108,7 @@ std::uint32_t parse_category_mask(const char* s) {
     if (!s || !*s) return 0;
     if (std::strcmp(s, "all") == 0) {
         std::uint32_t m = 0;
-        for (int i = 0; i <= static_cast<int>(LogCategory::Event); ++i) {
+        for (int i = 0; i <= static_cast<int>(LogCategory::InlineLayout); ++i) {
             m |= 1u << i;
         }
         return m;
@@ -165,6 +171,7 @@ void log_init() noexcept {
                 else if (c == "event") mask |= (1u << static_cast<int>(LogCategory::Event));
                 else if (c == "layout_detail") mask |= (1u << static_cast<int>(LogCategory::LayoutDetail));
                 else if (c == "paint_detail") mask |= (1u << static_cast<int>(LogCategory::PaintDetail));
+                else if (c == "inline_layout") mask |= (1u << static_cast<int>(LogCategory::InlineLayout));
                 start = end + 1;
             }
         }
@@ -254,6 +261,7 @@ void log_writev(LogCategory cat, LogLevel lvl,
         case LogCategory::Event:        strncpy(cat_str, "event", 31); break;
         case LogCategory::LayoutDetail: strncpy(cat_str, "layout_detail", 31); break;
         case LogCategory::PaintDetail:  strncpy(cat_str, "paint_detail", 31); break;
+        case LogCategory::InlineLayout: strncpy(cat_str, "inline_layout", 31); break;
     }
     const char* lvl_str = "unknown";
     switch (lvl) {

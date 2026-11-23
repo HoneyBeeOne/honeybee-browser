@@ -84,6 +84,7 @@ void apply_rule(const Rule& rule, const dom::Element& el,
         v.origin = origin;
         v.specificity = *spec;
         v.source_order = counter++;
+        v.specified_on = &el;  // ADR-082
 
         auto it = style.declarations.find(d.property);
         if (it == style.declarations.end()) {

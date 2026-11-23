@@ -373,6 +373,31 @@ TEST_CASE("cascade: :visited on absolute URL ignores base",
     CHECK(result.at(a).get("color").value_or("") == "purple");
 }
 
+TEST_CASE("cascade: author vertical-align overrides sup/sub UA defaults",
+          "[cascade][vertical-align]") {
+    auto doc = honeybee::renderer::html::parse(
+        "<html><body><sup>x</sup><sub>y</sub></body></html>");
+    REQUIRE(doc);
+
+    const auto* sup = doc->find_element("sup");
+    const auto* sub = doc->find_element("sub");
+    REQUIRE(sup);
+    REQUIRE(sub);
+
+    const auto author = css::Stylesheet::parse(
+        "sup { vertical-align: baseline } "
+        "sub { vertical-align: 0.25em }");
+
+    const auto styles = css::cascade(
+        css::ua_stylesheet(), author, *doc);
+
+    REQUIRE(styles.count(sup) == 1);
+    REQUIRE(styles.count(sub) == 1);
+
+    CHECK(styles.at(sup).get("vertical-align").value_or("") == "baseline");
+    CHECK(styles.at(sub).get("vertical-align").value_or("") == "0.25em");
+}
+
 // =============================================================
 // ADR-022: targeted cascade primitives.
 // =============================================================

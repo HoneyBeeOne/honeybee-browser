@@ -2,7 +2,9 @@
 #include "renderer/layout/grid_layout.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -172,6 +174,135 @@ const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
     return it == styles.end() ? nullptr : &it->second;
 }
 
+// ADR-082: an inline-block uses its last in-flow line-box baseline
+// only when all of its overflow axes remain visible.
+bool overflow_is_visible(const css::ComputedStyle* style) {
+    if (!style) return true;
+
+    const char* properties[] = {
+        "overflow", "overflow-x", "overflow-y"
+    };
+
+    for (const char* property : properties) {
+        const auto value = style->get(property);
+        if (!value) continue;
+
+        const std::string& raw = *value;
+        std::size_t i = 0;
+
+        while (i < raw.size()) {
+            while (i < raw.size() &&
+                   (raw[i] == ' ' || raw[i] == '\t' ||
+                    raw[i] == '\n' || raw[i] == '\r')) {
+                ++i;
+            }
+
+            const std::size_t start = i;
+
+            while (i < raw.size() &&
+                   raw[i] != ' ' && raw[i] != '\t' &&
+                   raw[i] != '\n' && raw[i] != '\r') {
+                ++i;
+            }
+
+            if (start < i &&
+                raw.substr(start, i - start) != "visible") {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// ADR-082: find the last in-flow line box in an inline-block's
+// subtree. Coordinates are relative to the inline-block's border-box
+// origin because its subtree was laid out from (0, 0).
+//
+// Atomic inline-block fragments are deliberately not traversed:
+// they are not descendants in the LayoutBox child tree.
+std::optional<float> last_in_flow_line_baseline(
+    const LayoutBox& root,
+    const css::ComputedStyleMap& styles) {
+
+    std::optional<float> result;
+
+    auto visit = [&](auto&& self, const LayoutNode& node) -> void {
+        switch (node.kind) {
+            case LayoutKind::Text: {
+                const auto& text = static_cast<const LayoutText&>(node);
+                if (!text.lines.empty()) {
+                    const auto& last = text.lines.back();
+                    result = last.y + last.baseline;
+                }
+                break;
+            }
+
+            case LayoutKind::InlineContext: {
+                const auto& context =
+                    static_cast<const LayoutInlineContext&>(node);
+
+                if (!context.line_baselines.empty()) {
+                    result = context.line_baselines.back();
+                }
+
+                for (const auto& child : context.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Inline: {
+                const auto& inline_node =
+                    static_cast<const LayoutInline&>(node);
+
+                for (const auto& child : inline_node.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Box: {
+                const auto& child_box =
+                    static_cast<const LayoutBox&>(node);
+
+                // Absolutely and fixed-positioned boxes are out of flow.
+                if (child_box.position == Position::Absolute ||
+                    child_box.position == Position::Fixed) {
+                    break;
+                }
+
+                // Floats do not establish in-flow line boxes for
+                // the inline-block's baseline.
+                if (child_box.element) {
+                    const auto* child_style =
+                        lookup(styles, *child_box.element);
+
+                    if (child_style) {
+                        const auto float_value =
+                            child_style->get("float");
+
+                        if (float_value && *float_value != "none") {
+                            break;
+                        }
+                    }
+                }
+
+                for (const auto& child : child_box.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+        }
+    };
+
+    for (const auto& child : root.children) {
+        if (child) visit(visit, *child);
+    }
+
+    return result;
+}
+
 void fill_sides(float out[4], const css::ComputedStyle* style,
                 const LengthContext& ctx,
                 const char* top, const char* right,
@@ -214,6 +345,338 @@ float font_size_of(const css::ComputedStyle* style,
     return px > 0.0f ? px : parent_font_size;
 }
 
+
+// ADR-082: resolve the computed font size of an element while
+// respecting the element on which an inherited declaration
+// was originally specified.
+float computed_font_size_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    float root_font_size) {
+
+    const css::ComputedStyle* style = lookup(styles, el);
+    if (!style) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    auto it = style->declarations.find("font-size");
+    if (it == style->declarations.end()) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    const css::CascadeValue& value = it->second;
+    const dom::Element* source =
+        value.specified_on ? value.specified_on : &el;
+
+    float parent_size = root_font_size;
+    const dom::Node* parent = source->parent();
+    while (parent && parent->type() != dom::NodeType::Element)
+        parent = parent->parent();
+
+    if (parent) {
+        parent_size = computed_font_size_for_element(
+            static_cast<const dom::Element&>(*parent),
+            styles, root_font_size);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = parent_size;
+    ctx.parent_font_size = parent_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = true;
+
+    const float result = parse_length(value.value, ctx);
+    return result > 0.0f ? result : parent_size;
+}
+
+std::string_view trim_line_height(std::string_view value) {
+    while (!value.empty() &&
+           (value.front() == ' ' || value.front() == '\t' ||
+            value.front() == '\n' || value.front() == '\r')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '\t' ||
+            value.back() == '\n' || value.back() == '\r')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+bool parse_line_height_number(std::string_view value, float& result) {
+    value = trim_line_height(value);
+    if (value.empty()) return false;
+
+    std::string copy(value);
+    char* end = nullptr;
+    const float parsed = std::strtof(copy.c_str(), &end);
+
+    if (end == copy.c_str() || !end || *end != '\0')
+        return false;
+
+    result = parsed;
+    return true;
+}
+
+// Resolve line-height using the declaration's original element.
+// Unitless values inherit as multipliers; percentages and lengths
+// inherit as absolute computed lengths.
+float used_line_height(
+    const dom::Element& el,
+    const css::ComputedStyle* style,
+    const css::ComputedStyleMap& styles,
+    float own_font_size,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetrics& metrics) {
+
+    if (!style)
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    auto it = style->declarations.find("line-height");
+    if (it == style->declarations.end())
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    const css::CascadeValue& declaration = it->second;
+    const std::string_view value =
+        trim_line_height(declaration.value);
+
+    if (value == "normal")
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    float number = 0.0f;
+    if (parse_line_height_number(value, number))
+        return std::max(0.0f, number * own_font_size);
+
+    const dom::Element* source =
+        declaration.specified_on ? declaration.specified_on : &el;
+
+    const float source_font_size =
+        computed_font_size_for_element(
+            *source, styles, root_font_size);
+
+    if (!value.empty() && value.back() == '%') {
+        std::string_view numeric = value;
+        numeric.remove_suffix(1);
+        if (parse_line_height_number(numeric, number))
+            return std::max(0.0f, source_font_size * number / 100.0f);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = source_font_size;
+    ctx.parent_font_size = source_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    const float result = parse_length(value, ctx);
+    return result >= 0.0f
+               ? result
+               : (metrics.normal_line_height > 0.0f
+                      ? metrics.normal_line_height
+                      : own_font_size * 1.2f);
+}
+
+
+// Resolve the computed vertical-align keyword/value for an element.
+// vertical-align is non-inherited; an explicit `inherit` walks to
+// the nearest element ancestor. `initial` and `unset` resolve to
+// the initial value, baseline.
+std::string vertical_align_value_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles) {
+
+    auto it = styles.find(&el);
+    if (it == styles.end())
+        return "baseline";
+
+    auto declaration = it->second.declarations.find("vertical-align");
+    if (declaration == it->second.declarations.end())
+        return "baseline";
+
+    const std::string_view value =
+        trim_line_height(declaration->second.value);
+
+    if (value == "baseline" || value == "sub" ||
+        value == "super" || value == "middle" ||
+        value == "text-top" || value == "text-bottom" ||
+        value == "top" || value == "bottom") {
+        return std::string(value);
+    }
+
+    if (value == "initial" || value == "unset" || value.empty())
+        return "baseline";
+
+    if (value == "inherit") {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (!parent)
+            return "baseline";
+
+        return vertical_align_value_for_element(
+            static_cast<const dom::Element&>(*parent), styles);
+    }
+
+    // Lengths and percentages are handled by the numeric resolver.
+    return std::string(value);
+}
+
+// Resolve vertical-align offsets for baseline-relative keyword values
+// and numeric values. Positive offsets raise the inline box.
+float vertical_align_offset_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    const std::string& fallback_family,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetricsProvider& font_metrics) {
+
+    const std::string value =
+        vertical_align_value_for_element(el, styles);
+
+    if (value == "baseline" || value == "top" || value == "bottom")
+        return 0.0f;
+
+    auto metrics_for = [&](const dom::Element& target,
+                           const std::string& inherited_family) {
+        auto style_it = styles.find(&target);
+        const css::ComputedStyle* target_style =
+            style_it == styles.end() ? nullptr : &style_it->second;
+
+        const float size =
+            computed_font_size_for_element(target, styles, root_font_size);
+
+        std::string family = inherited_family;
+        if (target_style) {
+            const std::string declared_family =
+                font_family_of(target_style);
+            if (!declared_family.empty())
+                family = declared_family;
+        }
+
+        FontMetrics metrics;
+        if (font_metrics) {
+            metrics = font_metrics(family, size);
+        } else {
+            metrics.ascent = size * 0.8f;
+            metrics.descent = size * 0.2f;
+            metrics.x_height = size * 0.5f;
+            metrics.normal_line_height = size * 1.2f;
+        }
+
+        if (metrics.ascent <= 0.0f)
+            metrics.ascent = size * 0.8f;
+        if (metrics.descent <= 0.0f)
+            metrics.descent = size * 0.2f;
+        if (metrics.x_height <= 0.0f)
+            metrics.x_height = size * 0.5f;
+
+        return metrics;
+    };
+
+    const FontMetrics element_metrics =
+        metrics_for(el, fallback_family);
+
+    const dom::Element* parent_element = nullptr;
+    const dom::Node* parent_node = el.parent();
+    while (parent_node) {
+        if (parent_node->type() == dom::NodeType::Element) {
+            parent_element =
+                static_cast<const dom::Element*>(parent_node);
+            break;
+        }
+        parent_node = parent_node->parent();
+    }
+
+    const FontMetrics parent_metrics = parent_element
+        ? metrics_for(*parent_element, fallback_family)
+        : element_metrics;
+
+    // The exact sub/super displacement is user-agent-defined.
+    // Use half the parent's x-height consistently.
+    if (value == "super")
+        return parent_metrics.x_height * 0.5f;
+
+    if (value == "sub")
+        return -parent_metrics.x_height * 0.5f;
+
+    // Align the element's font-box midpoint with the parent's baseline
+    // plus half the parent's x-height.
+    if (value == "middle") {
+        return (element_metrics.ascent - element_metrics.descent -
+                parent_metrics.x_height) * 0.5f;
+    }
+
+    // Baseline coordinates increase downward. Align the corresponding
+    // font-box edges with the parent's font-box edges.
+    if (value == "text-top")
+        return element_metrics.ascent - parent_metrics.ascent;
+
+    if (value == "text-bottom")
+        return parent_metrics.descent - element_metrics.descent;
+
+    auto style_it = styles.find(&el);
+    const css::ComputedStyle* style =
+        style_it == styles.end() ? nullptr : &style_it->second;
+
+    const float own_font_size =
+        computed_font_size_for_element(el, styles, root_font_size);
+
+    if (value.size() > 1 && value.back() == '%') {
+        std::string_view numeric(value);
+        numeric.remove_suffix(1);
+
+        float percentage = 0.0f;
+        if (!parse_line_height_number(numeric, percentage))
+            return 0.0f;
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, element_metrics);
+
+        return line_height * percentage / 100.0f;
+    }
+
+    LengthContext ctx;
+    ctx.font_size = own_font_size;
+    ctx.parent_font_size = own_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    return parse_length(value, ctx);
+}
+
 Color text_color_of(const css::ComputedStyle* style) {
     if (!style) return Color::black();
     const auto v = style->get("color");
@@ -247,10 +710,12 @@ void flatten_inline_to_words(
     const css::ComputedStyleMap& styles,
     const std::string& family,
     float size,
+    float root_font_size,
     const Color& default_color,
     bool& prev_had_space,
     std::vector<StyledWord>& out,
-    const dom::Element* current_element) {
+    const dom::Element* current_element,
+    const std::vector<const dom::Element*>& inline_ancestors) {
 
     if (node.type() == dom::NodeType::Text) {
         const auto& tn = static_cast<const dom::TextNode&>(node);
@@ -274,6 +739,7 @@ void flatten_inline_to_words(
             w.preceded_by_space =
                 !out.empty() && (prev_had_space || pending_ws);
             w.element = current_element;
+            w.inline_ancestors = inline_ancestors;
             pending_ws = false;
             prev_had_space = false;
             out.push_back(std::move(w));
@@ -282,6 +748,21 @@ void flatten_inline_to_words(
     } else if (node.type() == dom::NodeType::Element) {
         const auto& el = static_cast<const dom::Element&>(node);
         auto it = styles.find(&el);
+
+        // ADR-082: resolve font properties at each inline element
+        // boundary so nested spans can use their own font metrics.
+        std::string element_family = family;
+        float element_size = size;
+
+        if (it != styles.end()) {
+            const std::string declared_family =
+                font_family_of(&it->second);
+            if (!declared_family.empty())
+                element_family = declared_family;
+
+            element_size = computed_font_size_for_element(
+                el, styles, root_font_size);
+        }
 
         // ADR-081: detect inline-block here as well as in
         // layout_block_children. Inline parents (e.g. `.catlinks ul`
@@ -292,12 +773,14 @@ void flatten_inline_to_words(
             if (dv && *dv == "inline-block") {
                 StyledWord w;
                 w.text = "";
-                w.font_family = family;
-                w.font_size = size;
+                w.font_family = element_family;
+                w.font_size = element_size;
                 w.color = default_color;
                 w.preceded_by_space = !out.empty() && prev_had_space;
                 w.element = &el;
                 w.inline_block_element = &el;
+                w.inline_ancestors = inline_ancestors;
+                w.inline_ancestors.push_back(&el);
                 prev_had_space = false;
                 out.push_back(std::move(w));
                 return;
@@ -319,6 +802,11 @@ void flatten_inline_to_words(
             if (dv && *dv == "none") return;
         }
 
+        // Preserve this inline element in the ancestry passed to
+        // its descendants. The owning block is never added here.
+        auto child_ancestors = inline_ancestors;
+        child_ancestors.push_back(&el);
+
         Color color = default_color;
         if (it != styles.end()) {
             const auto cv = it->second.get("color");
@@ -328,8 +816,10 @@ void flatten_inline_to_words(
             }
         }
         for (const auto& child : el.children()) {
-            flatten_inline_to_words(*child, styles, family, size, color,
-                                    prev_had_space, out, &el);
+            flatten_inline_to_words(
+                *child, styles,
+                element_family, element_size, root_font_size,
+                color, prev_had_space, out, &el, child_ancestors);
         }
 
     }
@@ -481,7 +971,8 @@ LayoutBox layout_element(const dom::Element& el,
                          float viewport_w,   // ADR-051
                          float viewport_h,   // ADR-051
                          Direction parent_dir,
-                         ImageDimLookup image_dims) {
+                         ImageDimLookup image_dims,
+                         const FontMetricsProvider& font_metrics) {
     {
         const css::ComputedStyle* s = nullptr;
         auto it = styles.find(&el);
@@ -568,7 +1059,7 @@ LayoutBox layout_element(const dom::Element& el,
     }
 
     const float own_font_size =
-        font_size_of(style, parent_font_size, root_font_size);
+        computed_font_size_for_element(el, styles, root_font_size);
 
     LengthContext ctx;
     ctx.font_size = own_font_size;
@@ -1042,6 +1533,7 @@ LayoutBox layout_element(const dom::Element& el,
 
         // Inline-element run: LayoutInlineContext path (ADR-016).
         std::vector<StyledWord> words;
+        const std::vector<const dom::Element*> no_inline_ancestors;
         bool prev_had_space = false;
         for (const auto* n : inline_run) {
             // ADR-081: detect inline-block at the iterator level
@@ -1060,6 +1552,7 @@ LayoutBox layout_element(const dom::Element& el,
                         w.preceded_by_space = !words.empty() && prev_had_space;
                         w.element = &child_el;
                         w.inline_block_element = &child_el;
+                        w.inline_ancestors.push_back(&child_el);
                         prev_had_space = false;
                         words.push_back(std::move(w));
                         continue;
@@ -1067,7 +1560,9 @@ LayoutBox layout_element(const dom::Element& el,
                 }
             }
             flatten_inline_to_words(*n, styles, family, own_font_size,
-                                    tc, prev_had_space, words, &el);
+                                    root_font_size, tc,
+                                    prev_had_space, words, &el,
+                                    no_inline_ancestors);
         }
         inline_run.clear();
         if (words.empty()) return;
@@ -1079,6 +1574,77 @@ LayoutBox layout_element(const dom::Element& el,
         }
         const bool rtl = (own_dir == Direction::Rtl);
 
+        // ADR-082: calculate the accumulated vertical-align shift
+        // from every inline ancestor, outermost to innermost.
+        // Inline-block words include their own element in this list.
+        for (auto& w : words) {
+            float offset = 0.0f;
+            w.top_aligned_ancestors.clear();
+            w.bottom_aligned_ancestors.clear();
+
+            for (const dom::Element* ancestor : w.inline_ancestors) {
+                if (!ancestor) continue;
+
+                const std::string align =
+                    vertical_align_value_for_element(*ancestor, styles);
+
+                if (align == "top") {
+                    w.top_aligned_ancestors.push_back(ancestor);
+                } else if (align == "bottom") {
+                    w.bottom_aligned_ancestors.push_back(ancestor);
+                } else {
+                    offset += vertical_align_offset_for_element(
+                        *ancestor, styles, w.font_family,
+                        root_font_size, viewport_w, viewport_h,
+                        font_metrics);
+                }
+            }
+
+            w.baseline_offset = offset;
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                const std::string element_tag =
+                    w.element ? w.element->tag() : "null";
+                const std::string element_id =
+                    w.element ? w.element->get_attribute("id") : "";
+                const std::string element_class =
+                    w.element ? w.element->get_attribute("class") : "";
+
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_WORD element=%p tag=%s id='%s' class='%.64s' "
+                    "text='%.96s' font='%s' size=%.2f "
+                    "baseline_offset=%.3f top_ancestors=%zu "
+                    "bottom_ancestors=%zu inline_ancestors=%zu",
+                    static_cast<const void*>(w.element),
+                    element_tag.c_str(), element_id.c_str(),
+                    element_class.c_str(), w.text.c_str(),
+                    w.font_family.c_str(), w.font_size,
+                    w.baseline_offset,
+                    w.top_aligned_ancestors.size(),
+                    w.bottom_aligned_ancestors.size(),
+                    w.inline_ancestors.size());
+
+                for (const auto* ancestor : w.inline_ancestors) {
+                    if (!ancestor) continue;
+
+                    const std::string tag = ancestor->tag();
+                    const std::string id = ancestor->get_attribute("id");
+                    const std::string class_name =
+                        ancestor->get_attribute("class");
+                    const std::string align =
+                        vertical_align_value_for_element(*ancestor, styles);
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_ANCESTOR word_element=%p ancestor=%p "
+                        "tag=%s id='%s' class='%.64s' vertical_align='%s'",
+                        static_cast<const void*>(w.element),
+                        static_cast<const void*>(ancestor),
+                        tag.c_str(), id.c_str(), class_name.c_str(),
+                        align.c_str());
+                }
+            }
+        }
+
         // ADR-081: pre-lay-out inline-block atomic words. Each one
         // gets a fully-laid-out LayoutBox subtree that paint will
         // render at the fragment position.
@@ -1088,14 +1654,212 @@ LayoutBox layout_element(const dom::Element& el,
                     layout_element(*w.inline_block_element, styles, measurer,
                                    0.0f, 0.0f, content_w, own_content_height,
                                    own_font_size, root_font_size,
-                                   viewport_w, viewport_h, own_dir, image_dims));
+                                   viewport_w, viewport_h, own_dir, image_dims, font_metrics));
+                // ADR-082: the selected baseline is relative to
+                // the margin-box top, matching the atomic fragment's
+                // coordinate origin.
+                const auto* inline_block_style =
+                    lookup(styles, *w.inline_block_element);
+
+                if (overflow_is_visible(inline_block_style)) {
+                    if (const auto baseline =
+                            last_in_flow_line_baseline(*child_box, styles)) {
+                        w.inline_block_baseline =
+                            child_box->margin[0] + *baseline;
+                        w.has_inline_block_baseline = true;
+                    }
+                }
+
                 w.inline_block_box = std::move(child_box);
             }
         }
 
-        auto styled_lines =
-            break_styled_words_into_lines(words, content_w, measurer);
+        // ADR-082: establish the block's inline formatting
+        // strut from its font metrics and used line-height.
+        FontMetrics own_metrics;
+        if (font_metrics) {
+            own_metrics = font_metrics(family, own_font_size);
+        } else {
+            own_metrics.ascent = own_font_size * 0.8f;
+            own_metrics.descent = own_font_size * 0.2f;
+            own_metrics.x_height = own_font_size * 0.5f;
+            own_metrics.normal_line_height = own_font_size * 1.2f;
+        }
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, own_metrics);
+
+        const float font_box_height =
+            own_metrics.ascent + own_metrics.descent;
+        const float half_leading =
+            (line_height - font_box_height) * 0.5f;
+
+        const float strut_ascent =
+            std::max(0.0f, own_metrics.ascent + half_leading);
+        const float strut_descent =
+            std::max(0.0f, own_metrics.descent + half_leading);
+
+        auto styled_lines = break_styled_words_into_lines(
+            words, content_w, measurer,
+            strut_ascent, strut_descent);
         if (styled_lines.empty()) return;
+
+        // ADR-082: resolve vertical-align: top/bottom against each
+        // completed visual line. An inline ancestor can produce several
+        // fragments on a line, so move the ancestor's fragments together.
+        struct EdgeAlignedGroup {
+            const dom::Element* ancestor = nullptr;
+            bool align_top = false;
+        };
+
+        for (auto& line : styled_lines) {
+            std::vector<EdgeAlignedGroup> groups;
+
+            for (const auto& frag : line.fragments) {
+                for (const auto* ancestor : frag.top_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, true});
+                }
+
+                for (const auto* ancestor : frag.bottom_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   !group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, false});
+                }
+            }
+
+            // A fragment belonging to a deeper edge-aligned descendant
+            // must not determine its ancestor group's own alignment edge.
+            // The descendant is aligned independently after its ancestor.
+            auto belongs_to_nested_edge_group =
+                [](const LineFragment& frag,
+                   const EdgeAlignedGroup& group) {
+                    const auto group_it = std::find(
+                        frag.inline_ancestors.begin(),
+                        frag.inline_ancestors.end(),
+                        group.ancestor);
+
+                    if (group_it == frag.inline_ancestors.end())
+                        return false;
+
+                    const auto group_depth = std::distance(
+                        frag.inline_ancestors.begin(), group_it);
+
+                    auto has_deeper_edge_ancestor =
+                        [&](const std::vector<const dom::Element*>& aligned) {
+                            for (const auto* candidate : aligned) {
+                                if (!candidate || candidate == group.ancestor)
+                                    continue;
+
+                                const auto candidate_it = std::find(
+                                    frag.inline_ancestors.begin(),
+                                    frag.inline_ancestors.end(),
+                                    candidate);
+
+                                if (candidate_it != frag.inline_ancestors.end() &&
+                                    std::distance(
+                                        frag.inline_ancestors.begin(),
+                                        candidate_it) > group_depth) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        };
+
+                    return has_deeper_edge_ancestor(
+                               frag.top_aligned_ancestors) ||
+                           has_deeper_edge_ancestor(
+                               frag.bottom_aligned_ancestors);
+                };
+
+            // Determine the line height needed to contain all edge groups.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom >= group_top) {
+                    line.height = std::max(
+                        line.height, group_bottom - group_top);
+                }
+            }
+
+            line.descent = std::max(
+                line.descent, line.height - line.baseline);
+
+            // Align each ancestor's complete fragment group to its edge.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom < group_top) continue;
+
+                const float shift = group.align_top
+                    ? -group_top
+                    : line.height - group_bottom;
+
+                for (auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) != ancestors.end()) {
+                        // A positive shift moves the fragment down.
+                        frag.baseline -= shift;
+                    }
+                }
+            }
+        }
 
         auto ctx = std::make_unique<LayoutInlineContext>();
         ctx->x = content_x;
@@ -1105,21 +1869,65 @@ LayoutBox layout_element(const dom::Element& el,
         float max_line_w = 0.0f;
         float total_h = 0.0f;
         float line_y = cursor_y;
+        std::size_t line_index = 0;
+
         for (auto& line : styled_lines) {
+            // Preserve the line-box baseline independently of the
+            // fragment baselines modified by vertical-align.
+            ctx->line_baselines.push_back(line_y + line.baseline);
+
             const float line_start_x =
                 rtl ? content_x + content_w - line.width : content_x;
+
+            std::size_t fragment_index = 0;
             for (auto& frag : line.fragments) {
                 if (rtl) {
                     frag.x = content_x + content_w - frag.x - frag.width;
                 } else {
                     frag.x = line_start_x + frag.x;
                 }
-                frag.y = line_y;
+                frag.line_top = line_y;
+                frag.y = line_y + line.baseline - frag.baseline;
+
+                if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                    const std::string tag =
+                        frag.element ? frag.element->tag() : "null";
+                    const std::string id =
+                        frag.element ? frag.element->get_attribute("id") : "";
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_POSITION context=%p line=%zu fragment=%zu "
+                        "element=%p tag=%s id='%s' text='%.96s' "
+                        "line_top=%.3f line_baseline=%.3f "
+                        "fragment_baseline=%.3f x=%.3f y=%.3f "
+                        "width=%.3f height=%.3f rtl=%d",
+                        static_cast<const void*>(ctx.get()),
+                        line_index, fragment_index,
+                        static_cast<const void*>(frag.element),
+                        tag.c_str(), id.c_str(), frag.text.c_str(),
+                        frag.line_top, line.baseline, frag.baseline,
+                        frag.x, frag.y, frag.width, frag.height,
+                        rtl ? 1 : 0);
+                }
+
                 ctx->lines.push_back(frag);
+                ++fragment_index;
             }
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_POSITION_LINE context=%p line=%zu "
+                    "y=%.3f width=%.3f height=%.3f "
+                    "baseline=%.3f ascent=%.3f descent=%.3f",
+                    static_cast<const void*>(ctx.get()),
+                    line_index, line_y, line.width, line.height,
+                    line.baseline, line.ascent, line.descent);
+            }
+
             if (line.width > max_line_w) max_line_w = line.width;
             line_y += line.height;
             total_h += line.height;
+            ++line_index;
         }
 
         // ADR-045: post-process ctx->lines.
@@ -1148,8 +1956,8 @@ LayoutBox layout_element(const dom::Element& el,
             float accumulated_shift = 0.0f;
             for (auto& frag : ctx->lines) {
                 // New line: reset per-line shift.
-                if (frag.y != cur_line_y) {
-                    cur_line_y = frag.y;
+                if (frag.line_top != cur_line_y) {
+                    cur_line_y = frag.line_top;
                     accumulated_shift = 0.0f;
                 }
                 // Apply shift from previous fragments' padding.
@@ -1388,7 +2196,7 @@ LayoutBox layout_element(const dom::Element& el,
                                            own_content_height,
                                            own_font_size, root_font_size,
                                            viewport_w, viewport_h,
-                                           own_dir, image_dims));
+                                           own_dir, image_dims, font_metrics));
                         float top_off = 0.0f, left_off = 0.0f;
                         if (auto t = child_style->get("top");
                             t && *t != "auto") {
@@ -1434,7 +2242,7 @@ LayoutBox layout_element(const dom::Element& el,
                                        own_content_height,
                                        own_font_size, root_font_size,
                                        viewport_w, viewport_h,
-                                       own_dir, image_dims));
+                                       own_dir, image_dims, font_metrics));
 
                     // ADR-066: intrinsic width for auto-width floats.
                     // A <figure> with display:table has no explicit
@@ -1506,7 +2314,7 @@ LayoutBox layout_element(const dom::Element& el,
                                                    own_font_size,
                                                    root_font_size,
                                                    viewport_w, viewport_h,
-                                                   own_dir, image_dims));
+                                                   own_dir, image_dims, font_metrics));
                             }
                         }
                     }
@@ -1624,7 +2432,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    narrow_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
             } else if (child->type() == dom::NodeType::Text) {
@@ -1710,7 +2518,7 @@ LayoutBox layout_element(const dom::Element& el,
                 child_el, styles, measurer, 0.0f, 0.0f, content_w,
                 own_content_height,
                 own_font_size, root_font_size, viewport_w, viewport_h,
-                own_dir, image_dims);
+                own_dir, image_dims, font_metrics);
             const float natural_main =
                 is_row ? natural.width : natural.height;
 
@@ -1830,7 +2638,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 const float cross_size = line_is_row
                     ? fc.final_box->height : fc.final_box->width;
                 if (cross_size > container_cross) {
@@ -1997,7 +2805,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    cell_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
                 PlacedChild pc;
                 pc.box = std::move(child_box);
                 pc.row = row;
@@ -2116,7 +2924,7 @@ LayoutBox layout_element(const dom::Element& el,
                                    own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims));
+                                   own_dir, image_dims, font_metrics));
 
                 const float natural_w = abs_box->width;
                 const float natural_h = abs_box->height;
@@ -2645,7 +3453,8 @@ LayoutBox layout(const dom::Document& doc,
                  float viewport_width,
                  ImageDimLookup image_dims,
                  float viewport_height,
-                 float parent_content_height) {   // ADR-057
+                 float parent_content_height,
+                 FontMetricsProvider font_metrics) { // ADR-057, ADR-082
     HB_LOG(Layout, Info, "layout: viewport=%.0fx%.0f",
            viewport_width, viewport_height);
     const dom::Element* root = find_root_element(doc);
@@ -2663,7 +3472,7 @@ LayoutBox layout(const dom::Document& doc,
                           parent_content_height,
                           kDefaultFontSize, root_fs,
                           viewport_width, viewport_height,
-                          Direction::Ltr, image_dims);
+                          Direction::Ltr, image_dims, font_metrics);
 }
 
 
@@ -2736,10 +3545,12 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
                              float viewport_width,
                              ImageDimLookup image_dims,
                              float viewport_height,
-                             float parent_content_height) {   // ADR-057
+                             float parent_content_height,
+                             FontMetricsProvider font_metrics) { // ADR-057, ADR-082
     LayoutBox root = layout(doc, styles, measurer, viewport_width,
                             image_dims, viewport_height,
-                            parent_content_height);   // ADR-057
+                            parent_content_height,
+                            font_metrics); // ADR-057, ADR-082
     // Root font size defaults to 16 (pseudo font-size inheritance
     // from root isn't needed for content: '' -- no text).
     apply_pseudo_elements(root, pseudo_styles,

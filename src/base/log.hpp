@@ -29,6 +29,7 @@ enum class LogCategory : std::uint8_t {
     Event,        // click, wheel, hover, keyboard
     LayoutDetail, // Highly detailed layout tree traces
     PaintDetail,  // Highly detailed paint fragment traces
+    InlineLayout, // Inline word, line, fragment and baseline diagnostics
 };
 
 enum class LogLevel : std::uint8_t {

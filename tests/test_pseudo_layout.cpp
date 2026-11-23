@@ -24,10 +24,10 @@ struct TestDoc {
     layout::LayoutBox root;
 };
 
-std::pair<float, float> fixed_measurer(
+layout::TextMetrics fixed_measurer(
         std::string_view text, std::string_view /*family*/,
         float font_size) {
-    return {text.size() * font_size * 0.5f, font_size};
+    return {static_cast<float>(text.size()) * font_size * 0.5f, font_size, font_size * 0.8f};
 }
 
 TestDoc run(const std::string& html, const std::string& css,

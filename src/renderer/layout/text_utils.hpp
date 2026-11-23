@@ -54,6 +54,26 @@ struct StyledWord {
     // by calling layout_element before line breaking.
     const dom::Element* inline_block_element = nullptr;
     std::shared_ptr<layout::LayoutBox> inline_block_box;
+
+    // ADR-082: nested inline elements containing this word, from
+    // outermost to innermost. The block formatting context itself
+    // is deliberately excluded. Inline-block words include their
+    // own element as the final entry.
+    std::vector<const dom::Element*> inline_ancestors;
+
+    // ADR-082: deferred line-edge alignment targets. These are
+    // resolved after baseline-aligned line metrics are established.
+    std::vector<const dom::Element*> top_aligned_ancestors;
+    std::vector<const dom::Element*> bottom_aligned_ancestors;
+
+    // ADR-082: accumulated vertical-align shift from inline
+    // ancestors, positive values raise the fragment.
+    float baseline_offset = 0.0f;
+
+    // ADR-082: baseline selected from the inline-block's last
+    // in-flow line box, relative to its margin-box top.
+    float inline_block_baseline = 0.0f;
+    bool has_inline_block_baseline = false;
 };
 
 // One visual line of styled fragments. fragments are ordered
@@ -63,6 +83,11 @@ struct StyledLine {
     std::vector<LineFragment> fragments;
     float width = 0.0f;
     float height = 0.0f;
+
+    // ADR-082: baseline metrics, measured from the line's top.
+    float baseline = 0.0f;
+    float ascent = 0.0f;
+    float descent = 0.0f;
 };
 
 // Greedy line breaking over styled words. Adjacent words with
@@ -73,6 +98,8 @@ struct StyledLine {
 std::vector<StyledLine> break_styled_words_into_lines(
     const std::vector<StyledWord>& words,
     float max_width,
-    const TextMeasurer& measurer);
+    const TextMeasurer& measurer,
+    float strut_ascent = 0.0f,
+    float strut_descent = 0.0f);
 
 } // namespace honeybee::renderer::layout
