@@ -1,8 +1,67 @@
 # ADR-079: Line-by-line float wrap
 
-**Status:** Proposed (diagnosed, implementation deferred)
+**Status:** Accepted (implemented in PR #295; production History
+  improvement requires ADR-074's Bug A fix, see Implementation status)
 **Date:** 2026-11-16
+**Implemented:** 2026-11-24
 **Related:** ADR-031 (float block-narrowing), ADR-032 (deferred line-wrap), ADR-074 (float positioning), ADR-078 (media-scoped vars)
+
+## Implementation status (2026-11-24)
+
+Implemented in [PR #295](https://github.com/HoneyBeeOne/honeybee-browser/pull/295).
+LTR now wraps line-by-line around floats; RTL retains block-narrowing as
+a scoped fallback.
+
+### Verified
+
+- New tests `tests/test_float_wrap.cpp` (`[adr079]`): 6/6, 25 assertions.
+- Full suite: **3017 assertions in 764 test cases, all passing.**
+- ADR-066 float-intrinsic-width and ADR-031 placement invariants untouched.
+  5 pre-existing tests retargeted to assert float width directly and
+  expect the following block to be full-width.
+- Production trace (`HONEYBEE_LOG=layout_detail:trace`) confirms
+  `FLOAT_CTX_CHILD <p> ... L=0.0 R=358.4 mode=per-line` fires with the
+  infobox width passed to the line breaker. The mechanism is live.
+
+### Honest scope note: production History position is not improved
+
+At default viewport (984px content width), `HONEYBEE_LOG` traces show
+`<h2 id='History'>` at y=2281.5 (window 912px content width). Pre-ADR-079
+baseline was y=2210. The ~71px difference matches narrower-window wrap
+noise; **net effect of ADR-079 on History is ~0**, not the ~1700px
+improvement this ADR originally predicted.
+
+Root cause: **ADR-074 Bug A dominates.** The infobox is placed at y=798
+(after the intro paragraphs, not alongside them), so:
+
+1. The intro paragraphs (`YPROG cursor_y=152.9, 238.9, 531.9`) are
+   laid out **before** the infobox — they receive no `FLOAT_CTX_CHILD`
+   and no per-line narrowing (nothing to narrow against).
+2. The paragraphs that *do* receive `FLOAT_CTX_CHILD` (start_y=1568+,
+   `R=358.4 float_bottom=2389.7`) sit **entirely inside** the float
+   zone. Every line is narrowed, so per-line wrapping produces the
+   same result block-narrowing would.
+
+ADR-074 estimated Bug B contributed ~565px to History's offset. Direct
+measurement now shows ~0px for this article. **This ADR's estimated
+benefit was based on the assumption that Wikipedia's intro paragraphs
+were long enough to span the float boundary; in fact they are not.**
+
+ADR-079 remains correct and necessary — once Bug A is fixed and the
+infobox is placed alongside the intro (y≈267), those paragraphs will
+span the float boundary and the per-line wrap will produce real benefit.
+Until then, ADR-079 is a **prerequisite, not a fix**, for History's
+position.
+
+### Follow-up (blocking History parity)
+
+- **ADR-074 Bug A**: infobox placement at default viewport width.
+  Diagnosis candidates listed in ADR-074 §Scope split. This is where the
+  History-position win lives.
+- Optional observability nit: `FLOAT_CTX_CHILD start_y=-1.0 float_bottom=0.0
+  L=0.0 R=0.0 mode=per-line` appears for children of an inactive-but-structurally-
+  active `FloatContext`. Harmless (reserves=0 makes the callback a no-op),
+  but could be filtered at the trace site for readability.
 
 ## Context
 
