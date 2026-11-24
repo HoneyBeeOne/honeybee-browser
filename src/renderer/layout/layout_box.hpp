@@ -271,6 +271,11 @@ struct LineFragment {
     // The line breaker resolves these after baseline layout.
     std::vector<const dom::Element*> top_aligned_ancestors;
     std::vector<const dom::Element*> bottom_aligned_ancestors;
+
+    // ADR-079: left indent for the line this fragment lives on,
+    // from the LineWidthProvider. Callers add this to content_x
+    // when computing frag.x. Always 0 in non-float contexts.
+    float x_offset = 0.0f;
 };
 
 struct LayoutText final : LayoutNode {

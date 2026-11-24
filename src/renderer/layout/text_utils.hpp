@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 #include <memory>
 #include <string_view>
@@ -22,6 +23,16 @@ namespace honeybee::renderer::dom { class Element; }
 
 namespace honeybee::renderer::layout {
 
+// ADR-079: per-line width available for wrapping.
+struct LineWidth {
+    float x_offset = 0.0f;   // left indent for this line (left float)
+    float available = 0.0f;  // wrap width for this line
+};
+
+// ADR-079: called with the line's absolute y_top. Returns (x_offset, available).
+// Empty function → callers use a single max_width (no float awareness).
+using LineWidthProvider = std::function<LineWidth(float y_top)>;
+
 std::string collapse_whitespace(std::string_view text);
 
 bool detect_rtl(std::string_view text);
@@ -31,7 +42,9 @@ std::vector<LineFragment> break_into_lines(
     std::string_view font_family,
     float font_size,
     float max_width,
-    const TextMeasurer& measurer);
+    const TextMeasurer& measurer,
+    float starting_y = 0.0f,
+    const LineWidthProvider& line_width = nullptr);
 
 // A word with its own style, used by the inline formatting context.
 // preceded_by_space tracks whether a space existed in the source
@@ -100,6 +113,8 @@ std::vector<StyledLine> break_styled_words_into_lines(
     float max_width,
     const TextMeasurer& measurer,
     float strut_ascent = 0.0f,
-    float strut_descent = 0.0f);
+    float strut_descent = 0.0f,
+    float starting_y = 0.0f,
+    const LineWidthProvider& line_width = nullptr);
 
 } // namespace honeybee::renderer::layout

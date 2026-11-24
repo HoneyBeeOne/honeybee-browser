@@ -22,6 +22,19 @@ namespace {
 
 constexpr float kDefaultFontSize = 16.0f;
 
+// ADR-079: per-block float context, threaded into layout_element so
+// descendants can wrap text around ancestor floats per line instead
+// of being block-narrowed wholesale. All coordinates are absolute
+// within the layout tree's coordinate system.
+struct FloatContext {
+    float parent_x      = 0.0f;  // parent's content-left (absolute x)
+    float parent_width  = 0.0f;  // parent's content width
+    float float_left_w  = 0.0f;
+    float float_right_w = 0.0f;
+    float float_bottom  = 0.0f;  // absolute y where floats end
+    bool  active        = false;
+};
+
 // ADR-062: local helpers for gradient parsing. Duplicated from
 // style_values.cpp's anonymous namespace (file-local there);
 // cheaper than restructuring the layering -- same pattern as
@@ -972,7 +985,8 @@ LayoutBox layout_element(const dom::Element& el,
                          float viewport_h,   // ADR-051
                          Direction parent_dir,
                          ImageDimLookup image_dims,
-                         const FontMetricsProvider& font_metrics) {
+                         const FontMetricsProvider& font_metrics,
+                         const FloatContext* float_ctx = nullptr) {
     {
         const css::ComputedStyle* s = nullptr;
         auto it = styles.find(&el);
@@ -1468,6 +1482,30 @@ LayoutBox layout_element(const dom::Element& el,
 
     auto flush_inline_run = [&]() {
         if (inline_run.empty()) return;
+
+        // ADR-079: build a per-line width provider if this block is
+        // inside an active float range (LTR only). Empty function
+        // preserves pre-ADR-079 behavior and covers RTL.
+        LineWidthProvider line_width_provider;
+        if (float_ctx && float_ctx->active && own_dir == Direction::Ltr) {
+            const FloatContext* fc = float_ctx;
+            const float my_x = content_x;
+            const float my_w = content_w;
+            line_width_provider = [fc, my_x, my_w](float y_abs) -> LineWidth {
+                if (y_abs >= fc->float_bottom) {
+                    return { 0.0f, my_w };
+                }
+                const float c_right = my_x + my_w;
+                const float f_right = fc->parent_x + fc->parent_width
+                                      - fc->float_right_w;
+                const float right_edge = std::min(c_right, f_right);
+                const float left_edge  = std::max(my_x,
+                                                  fc->parent_x + fc->float_left_w);
+                const float avail = right_edge - left_edge;
+                if (avail <= 0.0f) return { 0.0f, my_w };
+                return { left_edge - my_x, avail };
+            };
+        }
         HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes", inline_run.size());
         HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes in run", inline_run.size());
 
@@ -1495,8 +1533,19 @@ LayoutBox layout_element(const dom::Element& el,
             if (collapsed.empty()) return;
 
             const bool rtl = (own_dir == Direction::Rtl);
+            // ADR-079: wrap the provider so it accepts the relative
+            // y that break_into_lines tracks internally.
+            LineWidthProvider rel_provider;
+            if (line_width_provider) {
+                auto p = line_width_provider;
+                const float base = cursor_y;
+                rel_provider = [p, base](float rel_y) {
+                    return p(base + rel_y);
+                };
+            }
             auto fragments = break_into_lines(
-                collapsed, family, own_font_size, content_w, measurer);
+                collapsed, family, own_font_size, content_w, measurer,
+                0.0f, rel_provider);
             if (fragments.empty()) return;
 
             float max_line_w = 0.0f;
@@ -1505,7 +1554,9 @@ LayoutBox layout_element(const dom::Element& el,
                 f.font_family = family;
                 f.font_size = own_font_size;
                 f.color = tc;
-                f.x = rtl ? content_x + content_w - f.width : content_x;
+                // ADR-079: apply per-line x_offset.
+                f.x = rtl ? content_x + content_w - f.width - f.x_offset
+                          : content_x + f.x_offset;
                 f.y += cursor_y;
                 f.element = &el;
                 if (f.width > max_line_w) max_line_w = f.width;
@@ -1702,7 +1753,8 @@ LayoutBox layout_element(const dom::Element& el,
 
         auto styled_lines = break_styled_words_into_lines(
             words, content_w, measurer,
-            strut_ascent, strut_descent);
+            strut_ascent, strut_descent,
+            cursor_y, line_width_provider);
         if (styled_lines.empty()) return;
 
         // ADR-082: resolve vertical-align: top/bottom against each
@@ -1881,10 +1933,12 @@ LayoutBox layout_element(const dom::Element& el,
 
             std::size_t fragment_index = 0;
             for (auto& frag : line.fragments) {
+                // ADR-079: apply per-line x_offset (already frozen
+                // onto the fragment by the breaker).
                 if (rtl) {
                     frag.x = content_x + content_w - frag.x - frag.width;
                 } else {
-                    frag.x = line_start_x + frag.x;
+                    frag.x = line_start_x + frag.x + frag.x_offset;
                 }
                 frag.line_top = line_y;
                 frag.y = line_y + line.baseline - frag.baseline;
@@ -2408,6 +2462,8 @@ LayoutBox layout_element(const dom::Element& el,
                 const float start_y = cursor_y + child_margin_top;
                 float narrow_x = content_x;
                 float narrow_w = content_w;
+                const FloatContext* child_ctx = nullptr;
+                FloatContext local_ctx;
                 // ADR-073 (extended): trace the block-narrowing decision.
                 if (log_enabled(LogCategory::LayoutDetail,
                                 LogLevel::Trace)) {
@@ -2421,10 +2477,40 @@ LayoutBox layout_element(const dom::Element& el,
                             ? content_w - float_left_w - float_right_w
                             : content_w);
                 }
-                if (start_y < float_bottom) {
-                    narrow_x = content_x + float_left_w;
-                    narrow_w = content_w - float_left_w - float_right_w;
-                    if (narrow_w < 0.0f) narrow_w = 0.0f;
+                if (own_dir == Direction::Ltr) {
+                    // ADR-079: LTR uses per-line float-aware wrapping,
+                    // so the child's width is NOT narrowed. Instead, a
+                    // FloatContext is built for its inline content to
+                    // consult on each line.
+                    if (start_y < float_bottom) {
+                        local_ctx.parent_x      = content_x;
+                        local_ctx.parent_width  = content_w;
+                        local_ctx.float_left_w  = float_left_w;
+                        local_ctx.float_right_w = float_right_w;
+                        local_ctx.float_bottom  = float_bottom;
+                        local_ctx.active        = true;
+                        child_ctx = &local_ctx;
+                    } else if (float_ctx && float_ctx->active
+                               && start_y < float_ctx->float_bottom) {
+                        child_ctx = float_ctx;
+                    }
+                } else {
+                    // RTL: preserve block-narrowing (ADR-031).
+                    if (start_y < float_bottom) {
+                        narrow_x = content_x + float_left_w;
+                        narrow_w = content_w - float_left_w - float_right_w;
+                        if (narrow_w < 0.0f) narrow_w = 0.0f;
+                    }
+                }
+
+                if (child_ctx && log_enabled(LogCategory::LayoutDetail,
+                                             LogLevel::Trace)) {
+                    HB_LOG(LayoutDetail, Trace,
+                        "FLOAT_CTX_CHILD <%s> start_y=%.1f float_bottom=%.1f "
+                        "L=%.1f R=%.1f mode=per-line",
+                        child_el.tag().c_str(), start_y,
+                        child_ctx->float_bottom,
+                        child_ctx->float_left_w, child_ctx->float_right_w);
                 }
 
                 auto child_box = std::make_unique<LayoutBox>(
@@ -2432,7 +2518,8 @@ LayoutBox layout_element(const dom::Element& el,
                                    narrow_w, own_content_height,
                                    own_font_size, root_font_size,
                                    viewport_w, viewport_h,
-                                   own_dir, image_dims, font_metrics));
+                                   own_dir, image_dims, font_metrics,
+                                   child_ctx));
                 cursor_y = child_box->y + child_box->height + child_box->margin[2];
                 box.children.push_back(std::move(child_box));
             } else if (child->type() == dom::NodeType::Text) {
