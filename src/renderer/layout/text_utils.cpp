@@ -128,7 +128,9 @@ std::vector<LineFragment> break_into_lines(
     std::string_view font_family,
     float font_size,
     float max_width,
-    const TextMeasurer& measurer) {
+    const TextMeasurer& measurer,
+    float starting_y,
+    const LineWidthProvider& line_width) {
 
     std::vector<LineFragment> lines;
     if (collapsed_text.empty()) return lines;
@@ -152,13 +154,29 @@ std::vector<LineFragment> break_into_lines(
 
     std::string current_text;
     float current_width = 0.0f;
-    float current_y = 0.0f;
+    float current_y = starting_y;
+
+    // ADR-079: per-line width lookup. Empty provider -> pre-ADR-079
+    // single-max_width behavior (fully backward compatible).
+    float line_x_offset = 0.0f;
+    float line_available = max_width;
+    auto refresh_line_width = [&]() {
+        if (line_width) {
+            const LineWidth lw = line_width(current_y);
+            line_x_offset = lw.x_offset;
+            line_available = lw.available;
+        } else {
+            line_x_offset = 0.0f;
+            line_available = max_width;
+        }
+    };
+    refresh_line_width();
 
     for (const auto& w : words) {
         const float ww = measurer(w, font_family, font_size).width;
         const float sep = current_text.empty() ? 0.0f : space_w;
 
-        if (current_width + sep + ww <= max_width) {
+        if (current_width + sep + ww <= line_available) {
             if (!current_text.empty()) current_text += ' ';
             current_text += w;
             current_width += sep + ww;
@@ -170,11 +188,13 @@ std::vector<LineFragment> break_into_lines(
                 f.height = line_h;
                 f.baseline = measurer(f.text, font_family, font_size).baseline;
                 f.y = current_y;
+                f.x_offset = line_x_offset;
                 current_y += line_h;
                 lines.push_back(std::move(f));
             }
             current_text = std::string(w);
             current_width = ww;
+            refresh_line_width();
         }
     }
 
@@ -185,6 +205,7 @@ std::vector<LineFragment> break_into_lines(
         f.height = line_h;
         f.baseline = measurer(f.text, font_family, font_size).baseline;
         f.y = current_y;
+        f.x_offset = line_x_offset;
         lines.push_back(std::move(f));
     }
 
@@ -196,7 +217,9 @@ std::vector<StyledLine> break_styled_words_into_lines(
     float max_width,
     const TextMeasurer& measurer,
     float strut_ascent,
-    float strut_descent) {
+    float strut_descent,
+    float starting_y,
+    const LineWidthProvider& line_width) {
 
     std::vector<StyledLine> lines;
     if (words.empty()) return lines;
@@ -205,6 +228,23 @@ std::vector<StyledLine> break_styled_words_into_lines(
     current.ascent = strut_ascent;
     current.descent = strut_descent;
     float cursor_x = 0.0f;
+    float current_y = starting_y;
+
+    // ADR-079: per-line width lookup. Empty provider -> pre-ADR-079
+    // single-max_width behavior (fully backward compatible).
+    float line_x_offset = 0.0f;
+    float line_available = max_width;
+    auto refresh_line_width = [&]() {
+        if (line_width) {
+            const LineWidth lw = line_width(current_y);
+            line_x_offset = lw.x_offset;
+            line_available = lw.available;
+        } else {
+            line_x_offset = 0.0f;
+            line_available = max_width;
+        }
+    };
+    refresh_line_width();
 
     auto finalize_line = [](StyledLine& line) {
         line.baseline = line.ascent;
@@ -261,24 +301,30 @@ std::vector<StyledLine> break_styled_words_into_lines(
             sep = measurer(" ", w.font_family, w.font_size).width;
         }
 
-        if (!current.fragments.empty() && cursor_x + sep + ww > max_width) {
+        if (!current.fragments.empty() && cursor_x + sep + ww > line_available) {
             if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
                 HB_LOG(InlineLayout, Trace,
                     "INLINE_WRAP line=%zu cursor_x=%.3f separator=%.3f "
-                    "word_width=%.3f max_width=%.3f word='%.72s'",
-                    lines.size(), cursor_x, sep, ww, max_width,
+                    "word_width=%.3f line_available=%.3f word='%.72s'",
+                    lines.size(), cursor_x, sep, ww, line_available,
                     w.text.c_str());
             }
 
             // Wrap: flush current line, start new
+            // ADR-079: freeze this line's x_offset onto its fragments.
+            for (auto& frag : current.fragments) {
+                frag.x_offset = line_x_offset;
+            }
             current.width = cursor_x;
             finalize_line(current);
+            current_y += current.height;
             lines.push_back(std::move(current));
             current = StyledLine{};
             current.ascent = strut_ascent;
             current.descent = strut_descent;
             cursor_x = 0.0f;
             sep = 0.0f;
+            refresh_line_width();
         }
 
         // Try to merge with the last fragment on this line.
@@ -376,6 +422,9 @@ std::vector<StyledLine> break_styled_words_into_lines(
     }
 
     if (!current.fragments.empty()) {
+        for (auto& frag : current.fragments) {
+            frag.x_offset = line_x_offset;
+        }
         current.width = cursor_x;
         finalize_line(current);
         lines.push_back(std::move(current));

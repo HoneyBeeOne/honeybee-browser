@@ -1994,8 +1994,11 @@ TEST_CASE("float: left places element at left edge",
     CHECK(near(f->width, 100.0f));
 }
 
-TEST_CASE("float: following block narrows within float zone",
-          "[layout][float][adr-031]") {
+TEST_CASE("float: following block keeps full width (ADR-079)",
+          "[layout][float][adr-031][adr-079]") {
+    // ADR-079 replaces ADR-031's block-level narrowing with line-level
+    // wrapping inside the block's inline context. The block itself is
+    // full-width; per-line behavior is tested in test_float_wrap.cpp.
     auto doc = run(
         "<div class='c'>"
         "<div class='f'>F</div>"
@@ -2007,8 +2010,10 @@ TEST_CASE("float: following block narrows within float zone",
     const auto* b = find_class(doc.root, "b");
     REQUIRE(f != nullptr);
     REQUIRE(b != nullptr);
-    // .b should be narrowed by float's 100px width
-    CHECK(near(b->width, 400.0f));
+    // Float still positioned at right edge with its 100px width
+    CHECK(near(f->width, 100.0f));
+    // Block spans full parent content width (no block-level narrowing)
+    CHECK(near(b->width, 500.0f));
 }
 
 TEST_CASE("float: following block full width when below float",
@@ -2042,8 +2047,12 @@ TEST_CASE("float: float doesn't advance cursor_y",
     CHECK(near(b->y, 0.0f));
 }
 
-TEST_CASE("float: left narrows following block from left",
-          "[layout][float][adr-031]") {
+TEST_CASE("float: left float does not shift following block (ADR-079)",
+          "[layout][float][adr-031][adr-079]") {
+    // ADR-079 replaces ADR-031's block-level left-shift with line-level
+    // x_offset inside the block's inline context. The block starts at
+    // content_x and spans full width; per-line x_offset is tested in
+    // test_float_wrap.cpp.
     auto doc = run(
         "<div class='c'>"
         "<div class='f'>F</div>"
@@ -2051,11 +2060,16 @@ TEST_CASE("float: left narrows following block from left",
         "</div>",
         ".c{width:500px}.f{float:left;width:100px;height:100px}"
         ".b{height:200px}");
+    const auto* f = find_class(doc.root, "f");
     const auto* b = find_class(doc.root, "b");
+    REQUIRE(f != nullptr);
     REQUIRE(b != nullptr);
-    // .b starts at x=100 (after float), width = 500-100 = 400
-    CHECK(near(b->x, 100.0f));
-    CHECK(near(b->width, 400.0f));
+    // Float anchored at content_x, 100px wide
+    CHECK(near(f->x, 0.0f));
+    CHECK(near(f->width, 100.0f));
+    // Block starts at content_x with full width
+    CHECK(near(b->x, 0.0f));
+    CHECK(near(b->width, 500.0f));
 }
 
 TEST_CASE("float: multiple float:right, no stacking (v1 limitation)",
@@ -4006,11 +4020,17 @@ TEST_CASE("float: img child gives intrinsic width (ADR-066)",
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
 
+    // ADR-066: float narrows to img intrinsic (20); unchanged by ADR-079.
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(f->width > 15.0f);
+    CHECK(f->width < 25.0f);
+
+    // ADR-079: paragraph block keeps full content width.
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    // Readable width: paragraph narrowed by ~20 (img), so ~780
-    CHECK(ps[0]->width > 700.0f);
-    CHECK(ps[0]->width < 800.0f);
+    CHECK(ps[0]->width >= 799.0f);
+    CHECK(ps[0]->width <= 800.0f);
 }
 
 TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
@@ -4039,11 +4059,17 @@ TEST_CASE("float: explicit-width div NOT re-laid-out (ADR-066 control)",
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
 
+    // ADR-066 control: float width is the explicit 120.
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(f->width > 115.0f);
+    CHECK(f->width < 125.0f);
+
+    // ADR-079: paragraph block is full width.
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    // Narrowed by ~120 (explicit width), so ~680
-    CHECK(ps[0]->width > 600.0f);
-    CHECK(ps[0]->width < 720.0f);
+    CHECK(ps[0]->width >= 799.0f);
+    CHECK(ps[0]->width <= 800.0f);
 }
 
 TEST_CASE("img: HTML width attribute overrides intrinsic (ADR-066 Layer 1)",
@@ -4106,11 +4132,17 @@ TEST_CASE("float: huge intrinsic img caps at half-parent (ADR-066 Layer 2)",
     };
     auto root = honeybee::renderer::layout::layout(
         *doc, styles, fake_measure, 800.0f, fake_imgs, 600.0f);
+    // ADR-066 Layer 2: float capped at half-parent (400).
+    const auto* f = find_class(root, "f");
+    REQUIRE(f != nullptr);
+    CHECK(f->width > 350.0f);
+    CHECK(f->width < 450.0f);
+
+    // ADR-079: paragraph block is full width.
     const auto ps = find_all_boxes(root, "p");
     REQUIRE(ps.size() == 1);
-    // Cap at half (400), narrow_w = 800 - 400 = 400 (readable)
-    CHECK(ps[0]->width > 350.0f);
-    CHECK(ps[0]->width < 450.0f);
+    CHECK(ps[0]->width >= 799.0f);
+    CHECK(ps[0]->width <= 800.0f);
 }
 
 // =============================================================
