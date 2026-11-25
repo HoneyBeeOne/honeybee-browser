@@ -1,6 +1,6 @@
 # ADR-074: Float positioning at narrow viewport
 
-**Status:** Proposed (diagnosed, implementation deferred)
+**Status:** Proposed (diagnosed, implementation deferred — parked pending ADR-076 cascade work)
 **Date:** 2026-11-15
 **Related:** ADR-031 (float layout), ADR-073 (permanent tracing), ADR-032 (line-wrap deferred)
 
@@ -98,3 +98,30 @@ Both zero-cost when `HONEYBEE_LOG` is unset.
 - ADR-032 — deferred line-wrap (never implemented)
 - ADR-073 — permanent tracing policy
 - This ADR — diagnosis + trace additions, no code fix
+
+## Session note (2026-11-25)
+
+Diagnosis parked. Working hypothesis: root cause is cascade-driven
+(per ADR-075), not float machinery. Resuming after ADR-076 cascade
+gaps close. Reproduction recipe retained above; trace category is
+`layout_detail`, enable with:
+
+    HONEYBEE_LOG=layout,layout_detail \
+    HONEYBEE_LOG_LEVEL=trace \
+    HONEYBEE_LOG_FILE=/tmp/hb-trace.log \
+    ./build/bin/honeybee
+
+Note: `HONEYBEE_LOG=layout_detail:trace` (as quoted in ADR-079's
+implementation status) is incorrect — the parser splits on commas
+only, so `:trace` is swallowed and the mask ends up 0. Correct form
+is two env vars: one for categories, one for level.
+
+Open evidence from the 2026-11-25 trace:
+
+- `mw-indicators` FLOAT placed at `y=539.9` at 984px content width,
+  matching ADR-074's original 2026-11-15 measurement — bug unchanged.
+- `#firstHeading` laid out twice; second pass reports `x=24.0 w=0.0`
+  (invalid geometry, matches ADR-075's observation).
+- Wide-viewport capture was not obtained; resize did not trigger a
+  fresh layout pass in the trace. Future session needs either a CLI/
+  env init-width override, or a way to force relayout after resize.
