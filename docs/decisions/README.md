@@ -40,7 +40,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 035 | [Layout-Integrated `<img>`](035-img-layout.md) | Intrinsic dims reserve space; tagline unhide; thumbnails no longer overlap |
 | 036 | [Attribute Selectors + `clear`](036-attr-clear.md) | `[attr~=val]` etc.; float stacking via `clear`; thumbnail right-anchoring |
 | 037 | [CSS Value Functions: calc() / min() / max() / clamp()](037-calc.md) | Math expression evaluator + var()-inside-calc; search icon sized correctly |
-| 038 | [Pseudo-Class Expansion](038-pseudo-expansion.md) | 14 pseudos: structural (10) + logical `:not`/`:is`/`:where` (3) + `:lang` (1); ~840 rules unblocked |
+| 038 | [Pseudo-Class Expansion](038-pseudo-expansion.md) | 14 pseudos: structural (10) + logical `:not`/`:is`/`:where` (3) + `:lang` (1); ~840 rules unblocked; logical pseudos support full selector-list arguments, combinators, nesting, and recursive specificity |
 | 039 | [Box Model Completion](039-box-model.md) | `height` + `min/max` clamps + `box-sizing` + `overflow: hidden`; closes ADR-037 height gap |
 | 040 | [Border Shorthand Expansion](040-border-shorthand.md) | `border: <width> <style> <color>` + per-side forms; parse-only, first-viewport borders appear |
 | 041 | [Pseudo-elements (::before / ::after)](041-pseudo-elements.md) | Parse + cascade (partial; visible synthesis deferred to ADR-042) |

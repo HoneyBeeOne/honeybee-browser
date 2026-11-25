@@ -607,3 +607,72 @@ participate in the cascade.
 **Structural value**: 14 of 17 non-`:has()`/`:dir()` pseudo-
 class forms supported. The remaining 3 (`:has`, `:dir`, and
 the form-state category) have clear ADR homes.
+
+## Implementation Addendum — Full Selector-List Arguments
+
+**Date:** 2026-11-25
+**Implementation commit:** `60ddc54` — `feat(css): support selector lists in logical pseudos`
+
+This addendum supersedes earlier statements in this ADR that describe logical
+pseudo-class arguments as compound-only or say that arguments containing
+combinators are dropped.
+
+### Implemented behavior
+
+`:not()`, `:is()`, and `:where()` now accept comma-separated lists of complete
+selectors, including selectors containing combinators.
+
+For example:
+
+```css
+:not(.disabled, section > .hidden)
+:is(article .title, main > h1)
+:where(.card, section.featured > article)
+```
+
+Each argument is represented as a complete `Selector` and evaluated using
+the selector matching implementation.
+
+Nested logical pseudo-classes are supported:
+
+```css
+:not(:is(.disabled, .hidden))
+:is(article, section > :not(.active))
+```
+
+### Specificity
+
+- `:not()` takes the maximum specificity of its selector arguments.
+- `:is()` takes the maximum specificity of its selector arguments.
+- `:where()` always contributes zero specificity.
+
+Specificity is calculated recursively, using the complete argument selectors.
+
+### Parsing behavior and limitations
+
+The current parser uses strict parsing for these selector lists. An invalid
+argument causes the containing selector to fail parsing. Forgiving selector-list
+behavior has not been implemented.
+
+The following remain deferred:
+
+- `:has()` and relative selectors.
+- Forgiving parsing of invalid entries in logical selector lists.
+- Pseudo-elements inside logical pseudo-class arguments.
+
+### Verification
+
+- Five focused logical-pseudo test cases passed.
+- Forty-five focused assertions passed.
+- The complete CTest suite passed (`1/1`).
+- The build succeeded.
+- `git diff --check` was clean.
+
+The implementation is recorded in commit `60ddc54`.
+
+### Historical note
+
+Earlier sections of this ADR document the original compound-only
+implementation and its limitations. They are retained as historical design
+context. Where those sections conflict with this addendum, this addendum
+describes the current implementation.
