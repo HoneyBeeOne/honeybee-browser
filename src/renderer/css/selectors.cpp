@@ -180,7 +180,7 @@ private:
             const size_t save = pos_;
             const bool had_ws = skip_ws();
 
-            if (at_end() || peek() == ',') {
+            if (at_end() || peek() == ',' || peek() == ')') {
                 pos_ = save;
                 break;
             }
@@ -326,30 +326,62 @@ private:
             if (*name == "nth-of-type")      return parse_nth_pseudo(SimpleKind::PseudoNthOfType);
             if (*name == "nth-last-of-type") return parse_nth_pseudo(SimpleKind::PseudoNthLastOfType);
 
-            // ADR-038 Commit 2: logical pseudo-classes
+            // Logical pseudo-classes accept complete selector lists.
+            // Each comma-separated alternative is parsed as a full selector.
             auto parse_logical_pseudo = [&](SimpleKind k)
                     -> std::optional<SimpleSelector> {
-                if (peek() != '(') { failed_ = true; return std::nullopt; }
-                advance();
-                SimpleSelector result;
-                result.kind = k;
-                while (true) {
-                    skip_ws();
-                    auto comp = parse_compound();
-                    if (!comp) { failed_ = true; return std::nullopt; }
-                    result.sub_args.push_back(std::move(comp->simples));
-                    skip_ws();
-                    if (at_end()) { failed_ = true; return std::nullopt; }
-                    if (peek() == ',') { advance(); continue; }
-                    if (peek() == ')') { advance(); break; }
+                if (peek() != '(') {
                     failed_ = true;
                     return std::nullopt;
                 }
+
+                advance();
+
+                SimpleSelector result;
+                result.kind = k;
+
+                while (true) {
+                    skip_ws();
+
+                    auto selector = parse_selector();
+                    if (!selector) {
+                        failed_ = true;
+                        return std::nullopt;
+                    }
+
+                    result.sub_args.push_back(
+                        std::make_shared<Selector>(std::move(*selector)));
+
+                    skip_ws();
+
+                    if (at_end()) {
+                        failed_ = true;
+                        return std::nullopt;
+                    }
+
+                    if (peek() == ',') {
+                        advance();
+                        continue;
+                    }
+
+                    if (peek() == ')') {
+                        advance();
+                        break;
+                    }
+
+                    failed_ = true;
+                    return std::nullopt;
+                }
+
                 return result;
             };
-            if (*name == "not")   return parse_logical_pseudo(SimpleKind::PseudoNot);
-            if (*name == "is")    return parse_logical_pseudo(SimpleKind::PseudoIs);
-            if (*name == "where") return parse_logical_pseudo(SimpleKind::PseudoWhere);
+
+            if (*name == "not")
+                return parse_logical_pseudo(SimpleKind::PseudoNot);
+            if (*name == "is")
+                return parse_logical_pseudo(SimpleKind::PseudoIs);
+            if (*name == "where")
+                return parse_logical_pseudo(SimpleKind::PseudoWhere);
 
             // ADR-038 Commit 3: language pseudo-class :lang(tag)
             if (*name == "lang") {
@@ -491,51 +523,26 @@ Specificity Selector::specificity() const {
                 case SimpleKind::PseudoNthOfType:
                 case SimpleKind::PseudoNthLastOfType:
                 case SimpleKind::PseudoLang: ++out.b; break;
-                // ADR-038 Commit 2: :not() and :is() take the max
-                // specificity of their arguments; :where() is always 0.
+                // :not() and :is() take the maximum specificity
+                // of their complete selector-list arguments.
+                // :where() always contributes zero specificity.
                 case SimpleKind::PseudoNot:
                 case SimpleKind::PseudoIs: {
                     Specificity max_arg;
-                    for (const auto& arg_compound : s.sub_args) {
-                        Specificity arg_spec;
-                        for (const auto& sub : arg_compound) {
-                            switch (sub.kind) {
-                                case SimpleKind::Id: ++arg_spec.a; break;
-                                case SimpleKind::Class:
-                                case SimpleKind::Attribute:
-                                case SimpleKind::PseudoLink:
-                                case SimpleKind::PseudoVisited:
-                                case SimpleKind::PseudoHover:
-                                case SimpleKind::PseudoRoot:
-                                case SimpleKind::PseudoFirstChild:
-                                case SimpleKind::PseudoLastChild:
-                                case SimpleKind::PseudoOnlyChild:
-                                case SimpleKind::PseudoEmpty:
-                                case SimpleKind::PseudoFirstOfType:
-                                case SimpleKind::PseudoLastOfType:
-                                case SimpleKind::PseudoOnlyOfType:
-                                case SimpleKind::PseudoNthChild:
-                                case SimpleKind::PseudoNthLastChild:
-                                case SimpleKind::PseudoNthOfType:
-                                case SimpleKind::PseudoNthLastOfType:
-                                case SimpleKind::PseudoLang: ++arg_spec.b; break;
-                                case SimpleKind::Type: ++arg_spec.c; break;
-                                case SimpleKind::PseudoElementBefore:
-                                case SimpleKind::PseudoElementAfter: ++arg_spec.c; break;
-                                case SimpleKind::Universal: break;
-                                case SimpleKind::PseudoNot:
-                                case SimpleKind::PseudoIs:
-                                case SimpleKind::PseudoWhere: break;  // recurse: rare, skip
-                            }
-                        }
+
+                    for (const auto& arg : s.sub_args) {
+                        if (!arg) continue;
+                        const Specificity arg_spec = arg->specificity();
                         if (max_arg < arg_spec) max_arg = arg_spec;
                     }
+
                     out.a += max_arg.a;
                     out.b += max_arg.b;
                     out.c += max_arg.c;
                     break;
                 }
-                case SimpleKind::PseudoWhere: break;  // always 0,0,0
+                case SimpleKind::PseudoWhere:
+                    break;
                 case SimpleKind::Type:      ++out.c; break;
                 // ADR-041: pseudo-elements are type-level (0,0,1).
                 case SimpleKind::PseudoElementBefore:
@@ -776,33 +783,21 @@ bool matches_simple(const SimpleSelector& s, const dom::Element& el,
         case SimpleKind::PseudoNthLastOfType:
             return matches_nth(same_type_count(el) - same_type_index(el),
                                s.nth_a, s.nth_b);
-        // ADR-038 Commit 2: logical pseudo-classes
-        case SimpleKind::PseudoNot: {
-            for (const auto& arg_compound : s.sub_args) {
-                bool all_match = true;
-                for (const auto& sub : arg_compound) {
-                    if (!matches_simple(sub, el, state)) {
-                        all_match = false;
-                        break;
-                    }
-                }
-                if (all_match) return false;  // :not() -> NOT any
-            }
-            return true;
-        }
+        // Logical pseudo-classes evaluate each complete argument selector.
+        case SimpleKind::PseudoNot:
         case SimpleKind::PseudoIs:
         case SimpleKind::PseudoWhere: {
-            for (const auto& arg_compound : s.sub_args) {
-                bool all_match = true;
-                for (const auto& sub : arg_compound) {
-                    if (!matches_simple(sub, el, state)) {
-                        all_match = false;
-                        break;
-                    }
+            bool any_match = false;
+
+            for (const auto& arg : s.sub_args) {
+                if (arg && arg->matches(el, state)) {
+                    any_match = true;
+                    break;
                 }
-                if (all_match) return true;
             }
-            return false;
+
+            if (s.kind == SimpleKind::PseudoNot) return !any_match;
+            return any_match;
         }
         // ADR-038 Commit 3: language pseudo-class
         case SimpleKind::PseudoLang:

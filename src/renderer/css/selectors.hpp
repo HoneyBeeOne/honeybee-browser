@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,8 @@
 namespace honeybee::renderer::dom { class Node; }
 
 namespace honeybee::renderer::css {
+
+struct Selector;
 
 // Forward declaration from render_state.hpp (ADR-018).
 struct RenderState;
@@ -89,10 +92,10 @@ struct SimpleSelector {
     // ADR-038: An+B arguments for :nth-* pseudos (a=0 for plain integers)
     int nth_a = 0;
     int nth_b = 0;
-    // ADR-038 Commit 2: argument list for :not() / :is() / :where().
-    // Outer vector = OR alternatives (comma list); inner vector =
-    // compound (AND of simples). Empty for all non-logical pseudos.
-    std::vector<std::vector<SimpleSelector>> sub_args;
+    // Logical pseudo-class arguments are complete selectors.
+    // Each entry is one OR alternative from the selector list.
+    // Shared ownership permits recursive selectors such as :not(:is(...)).
+    std::vector<std::shared_ptr<Selector>> sub_args;
 };
 
 struct CompoundSelector {
