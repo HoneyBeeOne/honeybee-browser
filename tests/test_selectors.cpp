@@ -377,6 +377,69 @@ TEST_CASE("matcher: full chain with multiple combinators",
     CHECK_FALSE(parse_ok("div > span").matches(*span));  // span's parent is p, not div
 }
 
+
+TEST_CASE("parse: logical pseudos accept complete selector lists",
+          "[css][selectors][logical]") {
+    auto s = Selector::parse("div:not(section > .hidden, article .item)");
+    REQUIRE(s);
+    REQUIRE(s->parts.size() == 1);
+
+    const auto& simples = s->parts[0].compound.simples;
+    REQUIRE(simples.size() == 2);
+    REQUIRE(simples[1].kind == SimpleKind::PseudoNot);
+    REQUIRE(simples[1].sub_args.size() == 2);
+
+    REQUIRE(simples[1].sub_args[0]);
+    REQUIRE(simples[1].sub_args[1]);
+    CHECK(simples[1].sub_args[0]->parts.size() == 2);
+    CHECK(simples[1].sub_args[1]->parts.size() == 2);
+
+    auto nested = Selector::parse("div:not(:is(.hidden, #excluded))");
+    REQUIRE(nested);
+    const auto& nested_simple = nested->parts[0].compound.simples[1];
+    REQUIRE(nested_simple.sub_args.size() == 1);
+    REQUIRE(nested_simple.sub_args[0]);
+    REQUIRE(nested_simple.sub_args[0]->parts.size() == 1);
+}
+
+TEST_CASE("parse: logical pseudos reject empty and incomplete arguments",
+          "[css][selectors][logical]") {
+    CHECK_FALSE(Selector::parse("div:not()"));
+    CHECK_FALSE(Selector::parse("div:is(.a,)"));
+    CHECK_FALSE(Selector::parse("div:where(, .a)"));
+    CHECK_FALSE(Selector::parse("div:not(section >)"));
+}
+
+
+TEST_CASE("matcher: logical pseudos support selector-list combinators",
+          "[css][matcher][logical]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    const auto* span = doc->find_element("span");
+    REQUIRE(div);
+    REQUIRE(span);
+
+    CHECK(parse_ok("div:not(section > .hidden)").matches(*div));
+    CHECK_FALSE(parse_ok("div:not(.container, section > .hidden)").matches(*div));
+
+    CHECK(parse_ok("span:is(p > span, article > span)").matches(*span));
+    CHECK(parse_ok("span:where(div span)").matches(*span));
+    CHECK_FALSE(parse_ok("span:not(p > span)").matches(*span));
+}
+
+TEST_CASE("matcher: nested logical pseudos",
+          "[css][matcher][logical]") {
+    const auto doc = build_test_tree();
+    const auto* div = doc->find_element("div");
+    const auto* span = doc->find_element("span");
+    REQUIRE(div);
+    REQUIRE(span);
+
+    CHECK(parse_ok("div:not(:is(section > div, .missing))").matches(*div));
+    CHECK(parse_ok("span:is(:not(.missing), p > span)").matches(*span));
+    CHECK_FALSE(parse_ok("span:not(:is(.missing, p > span))").matches(*span));
+}
+
 TEST_CASE("matcher: SelectorList returns highest matching specificity",
           "[css][matcher]") {
     const auto doc = build_test_tree();
@@ -455,6 +518,26 @@ TEST_CASE("parse: :first-child now supported (ADR-038)",
     CHECK(ps.kind == SimpleKind::PseudoNthChild);
     CHECK(ps.nth_a == 2);
     CHECK(ps.nth_b == 1);
+}
+
+
+TEST_CASE("specificity: logical pseudos use recursive maximum argument",
+          "[css][selectors][specificity][logical]") {
+    auto is_selector = Selector::parse("div:is(.a, #b)");
+    REQUIRE(is_selector);
+    CHECK(is_selector->specificity() == Specificity{1, 0, 1});
+
+    auto not_selector = Selector::parse("div:not(section > .hidden)");
+    REQUIRE(not_selector);
+    CHECK(not_selector->specificity() == Specificity{0, 1, 2});
+
+    auto where_selector = Selector::parse("div:where(#x)");
+    REQUIRE(where_selector);
+    CHECK(where_selector->specificity() == Specificity{0, 0, 1});
+
+    auto nested_selector = Selector::parse("div:not(:is(.hidden, #excluded))");
+    REQUIRE(nested_selector);
+    CHECK(nested_selector->specificity() == Specificity{1, 0, 1});
 }
 
 TEST_CASE("specificity: :link adds class weight", "[css][selectors][specificity]") {
