@@ -19,7 +19,7 @@ a scoped fallback.
 - ADR-066 float-intrinsic-width and ADR-031 placement invariants untouched.
   5 pre-existing tests retargeted to assert float width directly and
   expect the following block to be full-width.
-- Production trace (`HONEYBEE_LOG=layout_detail:trace`) confirms
+- Production trace (`HONEYBEE_LOG=layout,layout_detail HONEYBEE_LOG_LEVEL=trace`) confirms
   `FLOAT_CTX_CHILD <p> ... L=0.0 R=358.4 mode=per-line` fires with the
   infobox width passed to the line breaker. The mechanism is live.
 
