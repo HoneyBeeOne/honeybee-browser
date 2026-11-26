@@ -1,4 +1,5 @@
 add_executable(honeybee_tests
+  test_cli.cpp
   test_pango_text.cpp
   test_version.cpp
   test_url.cpp

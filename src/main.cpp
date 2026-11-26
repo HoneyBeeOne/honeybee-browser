@@ -1,11 +1,17 @@
 #include "browser/app.hpp"
 #include <cstdlib>
 #include <iostream>
+#include "browser/cli.hpp"
 
 #include "base/log.hpp"
 #include "base/version.hpp"
 
 int main(int argc, char* argv[]) {
+    if (honeybee::handle_cli_options(argc, argv, std::cout,
+                                     honeybee::version_string())) {
+        return 0;
+    }
+
     // ADR-068: GTK4's GSK GPU renderer crashes on very large
     // cairo surfaces (empirically >~25,000px tall) with
     // corrupted clip state during GPU upload. HoneyBee paints
