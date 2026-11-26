@@ -1,0 +1,122 @@
+# ================================================================
+# الملف: نسخ بيانات جِتهَب الاحتياطي
+#
+# ما وظيفته؟
+# نسخ بيانات المستودع الوصفية إلى فرع منفصل. والبيانات الوصفية
+# تشمل: المشاكل، وطلبات الدمج، والوسوم، والمراحل.
+#
+# لماذا نحتاج هذا السِّير؟
+# النسخة الاحتياطية للشيفرة تحمي الكود فقط. لكن المشاكل
+# وطلبات الدمج تحمل تاريخ المشروع ومناقشاته وقراراته.
+# ================================================================
+
+name: Backup Metadata
+
+on:
+  schedule:
+    # كل يوم جمعة الساعة 2 صباحًا UTC
+    - cron: '0 2 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    name: Backup issues and PRs to backups/metadata branch
+    runs-on: ubuntu-latest
+
+    steps:
+      # الخُطوة الأولى: استنساخ المستودع
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # الخُطوة الثانية: تثبيت بايثون
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # الخُطوة الثالثة: تثبيت أداة النسخ
+      - name: Install github-backup
+        run: pip install github-backup
+
+      # الخُطوة الرابعة: تشغيل أداة النسخ
+      #
+      # الخيارات:
+      #   -O: تعني أن المستهدف منظمة، لا مستخدماً عادياً.
+      #   -t: الرمز المستخدم للتوثيق.
+      #   -o: مجلد المخرجات.
+      #   -R: اسم المستودع المحدد.
+      #   --issues: نسخ المشاكل.
+      #   --pulls: نسخ طلبات الدمج.
+      #   --labels: نسخ الوسوم.
+      #   --milestones: نسخ المراحل.
+      - name: Run github-backup
+        env:
+          BACKUP_TOKEN: ${{ secrets.METADATA_BACKUP_TOKEN }}
+        run: |
+          mkdir -p /tmp/metadata-backup
+          github-backup HoneyBeeOne \
+            -O \
+            -t "$BACKUP_TOKEN" \
+            -o /tmp/metadata-backup \
+            -R honeybee-browser \
+            --issues \
+            --pulls \
+            --labels \
+            --milestones
+
+      # الخُطوة الخامسة: تجهيز فرع النسخ الاحتياطي
+      #
+      # ننشئ فرعاً جديداً من الصفر، بلا تاريخ سابق. والسبب:
+      # نريد أن يحتوي الفرع على البيانات الوصفية فقط، بلا
+      # شيفرة، ولا تاريخ قديم.
+      - name: Prepare orphan backups/metadata branch
+        run: |
+          git checkout --orphan backups/metadata
+          git rm -rf . || true
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+
+      # الخُطوة السادسة: إضافة ملف تعريفي للفرع
+      - name: Add README to the backup branch
+        run: |
+          cat << 'MARKDOWN' > README.md
+          # Metadata Backup
+
+          This branch is generated automatically by the `backup-metadata` workflow.
+
+          It contains JSON snapshots of GitHub metadata (issues, PRs, labels,
+          milestones) for the HoneyBee Browser repository, produced by the
+          `github-backup` tool.
+
+          **Do not edit this branch manually.** It is force-pushed on each run.
+          MARKDOWN
+
+      # الخُطوة السابعة: نقل البيانات إلى الفرع
+      - name: Copy backup data into the branch
+        run: |
+          cp -r /tmp/metadata-backup/* . || echo "No data to copy"
+
+      # ==========================================================
+      # الخُطوة الثامنة: الإيداع والدفع
+      #
+      # نستخدم الرمز المدمج هنا، وليس رمزاً شخصياً.
+      #
+      # لماذا؟ لأن سير المزامنة لن يُشغَّل عبر الدفع، بل عبر
+      # حدث workflow_run، الذي يستمع إلى انتهاء هذا السير
+      # بغض النظر عن آلية الدفع. فلا حاجة إلى رمز شخصي.
+      #
+      # وفائدة العودة إلى الرمز المدمج:
+      #   - لا حاجة إلى تحديث رمز شخصي دورياً.
+      #   - لا مخاطر أمنية إضافية.
+      #   - سلوك افتراضي متوقع من جِتهَب.
+      # ==========================================================
+      - name: Commit and push
+        run: |
+          git add -A
+          git commit -m "chore: metadata backup $(date -u +%Y-%m-%d)" || echo "No changes to commit"
+          git push --force origin backups/metadata

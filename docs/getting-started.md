@@ -37,9 +37,17 @@ You should see a version like `4.10.0` or higher. If you see an error, your Ubun
 
 ## Step 2 — Clone the repository
 
+Clone with the `--recursive` flag, so the vendored dependencies are fetched automatically:
+
 ```bash
-git clone https://github.com/HoneyBeeOne/honeybee-browser.git
+git clone --recursive https://github.com/HoneyBeeOne/honeybee-browser.git
 cd honeybee-browser
+```
+
+HoneyBee vendors **lexbor** (its HTML parser) as a git submodule. If you already cloned without `--recursive`, or the build complains about a missing `third_party/lexbor`, initialize the submodule manually:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ## Step 3 — Build
@@ -51,7 +59,7 @@ cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Debug
 ninja
 ```
 
-The build should finish in a few seconds and produce an executable at `build/bin/honeybee`.
+The first build compiles lexbor alongside HoneyBee, so it may take a minute or two. Subsequent builds are fast. The build produces an executable at `build/bin/honeybee`.
 
 If you see `Package gtkmm-4.0 was not found`, revisit Step 1 — the dev package isn't installed.
 
@@ -119,6 +127,16 @@ Ninja isn't installed. Either install it with `sudo apt install ninja-build`, or
 ### `CMake Error: Could not find a package configuration file`
 
 `pkg-config` is missing. Install it with `sudo apt install pkg-config`.
+
+### Build fails with `third_party/lexbor` missing
+
+The submodule wasn't initialized. From the repository root, run:
+
+```bash
+git submodule update --init --recursive
+```
+
+Then re-run CMake.
 
 ### Compilation errors about GTK APIs
 

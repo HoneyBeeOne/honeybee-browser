@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head>
+  <title>ADR-057: parent_content_height + % height</title>
+  <style>
+    body, html { margin: 0; padding: 0; height: 100%;
+                 font-family: sans-serif; font-size: 14px; }
+    body { background: #f8f9fa; }
+
+    .section { padding: 12px 20px; border-bottom: 1px solid #ccc; }
+
+    .fixed-parent   { height: 120px; background: #ddd; margin: 8px 0; }
+    .fixed-parent .child-50 { height: 50%; background: #2980b9;
+                              color: #fff; padding: 4px; }
+
+    .auto-parent    { background: #ddd; margin: 8px 0; }
+    .auto-parent .child-50 { height: 50%; background: #d35400;
+                             color: #fff; padding: 4px; }
+
+    .fixed-parent-max { height: 120px; background: #ddd; margin: 8px 0; }
+    .fixed-parent-max .child-tall-max30 { height: 500px;
+                                          max-height: 30%;
+                                          background: #27ae60;
+                                          color: #fff; padding: 4px; }
+
+    .viewport { background: #8e44ad; color: #fff; padding: 8px;
+                height: 20%; }
+  </style>
+</head>
+<body>
+  <div class="section viewport">
+    Row 1: body { height: 100% } -- this bar sits at TOP of full-height body
+  </div>
+
+  <div class="section">
+    Row 2: .fixed-parent { height: 120px } .child { height: 50% }
+    <div class="fixed-parent">
+      <div class="child-50">50% of 120 = 60px tall (blue)</div>
+    </div>
+  </div>
+
+  <div class="section">
+    Row 3: .auto-parent .child { height: 50% } -- CSS spec: auto parent -> skip
+    <div class="auto-parent">
+      <div class="child-50">content height (orange, thin)</div>
+    </div>
+  </div>
+
+  <div class="section">
+    Row 4: .fixed-parent-max { height: 120px } .child { height: 500px; max-height: 30% }
+    <div class="fixed-parent-max">
+      <div class="child-tall-max30">30% of 120 = 36px (green, clamped)</div>
+    </div>
+  </div>
+</body>
+</html>

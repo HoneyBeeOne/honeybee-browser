@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <title>ADR-055: background: shorthand (color forms)</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; font-size: 14px; color: #333; }
+    .row { width: 280px; height: 48px; margin-bottom: 8px;
+           padding: 4px; color: #fff; }
+    .control      { background-color: #27ae60;
+                    border-width: 2px; border-style: solid; border-color: #333; }
+    .bg-only      { background: #2980b9;
+                    border-width: 2px; border-style: solid; border-color: #333; }
+    .border-only  { background-color: #d35400;
+                    border: 2px solid #333; }
+    .both         { background: #8e44ad;
+                    border: 2px solid #333; }
+    .none-row     { background: #c0392b;
+                    background: none;
+                    border: 2px solid #333;
+                    color: #333; }  /* readable on transparent white */
+  </style>
+</head>
+<body>
+  <div class="row control">control: longhand bg + longhand border -- GREEN</div>
+  <div class="row bg-only">shorthand bg + longhand border -- BLUE if bg works</div>
+  <div class="row border-only">longhand bg + shorthand border -- ORANGE if border works</div>
+  <div class="row both">both shorthand -- PURPLE if both work</div>
+  <div class="row none-row">none overrides previous -- RED if cascade order correct</div>
+</body>
+</html>

@@ -1,0 +1,1622 @@
+#include "renderer/css/stylesheet.hpp"
+#include "base/log.hpp"
+
+#include <string>
+#include <cctype>
+#include <algorithm>
+#include <unordered_set>
+#include <optional>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace honeybee::renderer::css {
+
+namespace {
+
+bool is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+std::string strip_comments(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        if (i + 1 < s.size() && s[i] == '/' && s[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < s.size() && !(s[i] == '*' && s[i + 1] == '/')) {
+                ++i;
+            }
+            if (i + 1 < s.size()) {
+                i += 2;
+            } else {
+                i = s.size();
+            }
+        } else {
+            out.push_back(s[i]);
+            ++i;
+        }
+    }
+    return out;
+}
+
+void skip_at_rule(std::string_view s, size_t& i) {
+    ++i;
+    int depth = 0;
+    while (i < s.size()) {
+        const char c = s[i];
+        if (c == ';' && depth == 0) { ++i; return; }
+        if (c == '{') {
+            ++depth;
+        } else if (c == '}') {
+            --depth;
+            if (depth <= 0) { ++i; return; }
+        }
+        ++i;
+    }
+}
+
+std::string trim(std::string_view s) {
+    size_t b = 0, e = s.size();
+    while (b < e && is_ws(s[b])) ++b;
+    while (e > b && is_ws(s[e - 1])) --e;
+    return std::string(s.substr(b, e - b));
+}
+
+// ADR-026: whole-value var() resolution.
+//
+// Given a declaration value, return one of three states:
+//   NotVar    -- value doesn't start with "var(...)", leave alone
+//   Resolved  -- value is whole-value var(), resolved to `result.value`
+//   Failed    -- value is whole-value var() that can't resolve
+//                (undefined, no fallback, or nested) -- declaration
+//                should be dropped per CSS computed-value-time semantics
+//
+// Whole-value only: partial substitutions (e.g. `1px solid var(--x)`)
+// return NotVar and are left unchanged. ADR-026's measurement showed
+// partial-value declarations target consumed properties only 20% of
+// the time; the 40-line whole-value resolver captures 89% of the
+// visible win at half the complexity of substitution + calc.
+struct VarResult {
+    enum Kind { NotVar, Resolved, Failed };
+    Kind kind;
+    std::string value;  // valid when kind == Resolved
+};
+
+VarResult resolve_var_whole(
+    std::string_view raw,
+    const std::unordered_map<std::string, std::string>& vars) {
+    const std::string value = trim(raw);
+
+    // ADR-037: scan for embedded var() -- not just whole-value.
+    // If the value contains no "var(" substring at all, it's not
+    // a var expression.
+    if (value.find("var(") == std::string::npos) {
+        return {VarResult::NotVar, {}};
+    }
+    // If the whole value IS a single var(...) with balanced parens
+    // closing at the end, use the fast whole-value path below.
+    // Otherwise, scan-and-splice each var() occurrence.
+    {
+        const bool starts_with_var = value.size() >= 5 &&
+            value.compare(0, 4, "var(") == 0;
+        const bool ends_with_paren = !value.empty() && value.back() == ')';
+        bool whole_var = false;
+        if (starts_with_var && ends_with_paren) {
+            // Check that the matching close-paren is the last char
+            int depth = 1;
+            size_t i = 4;
+            while (i < value.size() && depth > 0) {
+                if (value[i] == '(') ++depth;
+                else if (value[i] == ')') --depth;
+                ++i;
+            }
+            whole_var = (depth == 0 && i == value.size());
+        }
+        if (!whole_var) {
+            // Scan-and-splice path
+            std::string result = value;
+            size_t search_pos = 0;
+            while (true) {
+                size_t vs = result.find("var(", search_pos);
+                if (vs == std::string::npos) break;
+                int depth = 1;
+                size_t close = vs + 4;
+                while (close < result.size() && depth > 0) {
+                    if (result[close] == '(') ++depth;
+                    else if (result[close] == ')') --depth;
+                    close++;
+                }
+                if (depth != 0) return {VarResult::Failed, {}};
+                std::string ve = result.substr(vs, close - vs);
+                auto inner = resolve_var_whole(ve, vars);
+                if (inner.kind != VarResult::Resolved) {
+                    return inner;
+                }
+                result = result.substr(0, vs) + inner.value +
+                         result.substr(close);
+                search_pos = vs + inner.value.size();
+            }
+            return {VarResult::Resolved, result};
+        }
+    }
+
+    // Extract inside of var(...): strip "var(" prefix and ")" suffix.
+    const std::string inner_full =
+        trim(std::string_view(value).substr(4, value.size() - 5));
+
+    // Find first top-level comma (fallback separation). Commas can
+    // appear inside the fallback expression (e.g. rgb(0, 0, 0)) so
+    // we track paren depth.
+    std::size_t depth = 0;
+    std::size_t comma = std::string::npos;
+    for (std::size_t i = 0; i < inner_full.size(); ++i) {
+        const char c = inner_full[i];
+        if (c == '(') ++depth;
+        else if (c == ')' && depth > 0) --depth;
+        else if (c == ',' && depth == 0) { comma = i; break; }
+    }
+
+    std::string var_name;
+    std::string fallback;
+    bool has_fallback = false;
+    if (comma == std::string::npos) {
+        var_name = trim(inner_full);
+    } else {
+        var_name = trim(inner_full.substr(0, comma));
+        fallback = trim(inner_full.substr(comma + 1));
+        has_fallback = true;
+    }
+
+    // Malformed: name must start with "--".
+    if (var_name.size() < 2 ||
+        var_name[0] != '-' || var_name[1] != '-') {
+        return {VarResult::Failed, {}};
+    }
+
+    // Variable lookup.
+    auto it = vars.find(var_name);
+    if (it != vars.end()) {
+        // Nested var() in the variable's value: single-pass
+        // resolution can't follow it. If a fallback exists, use
+        // it; otherwise drop (same as unresolved).
+        if (it->second.find("var(") != std::string::npos) {
+            if (has_fallback) return {VarResult::Resolved, fallback};
+            return {VarResult::Failed, {}};
+        }
+        return {VarResult::Resolved, it->second};
+    }
+
+    // Variable not defined: use fallback, or fail.
+    if (has_fallback) return {VarResult::Resolved, fallback};
+    return {VarResult::Failed, {}};
+}
+
+bool strip_important(std::string& value) {
+    const size_t e = value.size();
+    size_t bang = std::string::npos;
+    for (size_t k = e; k > 0; --k) {
+        if (value[k - 1] == '!') { bang = k - 1; break; }
+    }
+    if (bang == std::string::npos) return false;
+
+    size_t j = bang + 1;
+    while (j < e && is_ws(value[j])) ++j;
+
+    constexpr const char* kTarget = "important";
+    constexpr size_t kLen = 9;
+    if (e - j != kLen) return false;
+
+    for (size_t k = 0; k < kLen; ++k) {
+        char c = value[j + k];
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        if (c != kTarget[k]) return false;
+    }
+
+    size_t new_e = bang;
+    while (new_e > 0 && is_ws(value[new_e - 1])) --new_e;
+    value.resize(new_e);
+    return true;
+}
+
+// Split on whitespace into tokens. Returns one token per
+// contiguous non-whitespace run.
+std::vector<std::string> split_tokens(std::string_view s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && is_ws(s[i])) ++i;
+        if (i >= s.size()) break;
+        const size_t start = i;
+        while (i < s.size() && !is_ws(s[i])) ++i;
+        out.emplace_back(s.substr(start, i - start));
+    }
+    return out;
+}
+
+bool is_box_shorthand(std::string_view prop) {
+    return prop == "margin" || prop == "padding" ||
+           prop == "border-width";
+}
+
+// Push one declaration, expanding if it's a box shorthand.
+// ADR-012: 1/2/3/4 tokens -> top/right/bottom/left longhands.
+// ADR-028: expand `grid-template: <rows> / <columns>` into two
+// longhand declarations (`grid-template-rows`, `grid-template-columns`).
+// Follows ADR-012's shorthand expansion pattern.
+//
+// Conservative scope:
+//   - No inline-areas form (`grid-template: 'a a' 1fr / 1fr 1fr`)
+//     -- that's deferred per ADR-028's Deferred section. Rules
+//     with quotes in the shorthand are dropped (safe).
+//   - Requires exactly one top-level `/` separator. Malformed
+//     input drops the declaration.
+//
+// The parser does NOT validate track syntax (e.g. `minmax(0, 1fr)`).
+// Track parsing happens at layout time; malformed tracks degrade
+// to auto-flow there. This keeps parse-time logic string-only,
+// matching how `margin`, `width`, etc. already work.
+// ADR-029: shared whitespace tokenizer for shorthand expansion.
+namespace {
+std::vector<std::string> split_ws(std::string_view s) {
+    std::vector<std::string> parts;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() &&
+               (s[i] == ' ' || s[i] == '\t' ||
+                s[i] == '\n' || s[i] == '\r')) ++i;
+        if (i >= s.size()) break;
+        const size_t start = i;
+        while (i < s.size() &&
+               s[i] != ' ' && s[i] != '\t' &&
+               s[i] != '\n' && s[i] != '\r') ++i;
+        parts.emplace_back(s.substr(start, i - start));
+    }
+    return parts;
+}
+}  // namespace
+
+// ADR-029: flex shorthand expansion.
+//
+//   flex: <number>                    -> grow=N, shrink=1, basis=0
+//   flex: <number> <number>           -> grow=A, shrink=B, basis=0
+//   flex: <number> <number> <length>  -> grow=A, shrink=B, basis=C
+//   flex: auto                        -> grow=1, shrink=1, basis=auto
+//   flex: none                        -> grow=0, shrink=0, basis=auto
+//   flex: initial                     -> grow=0, shrink=1, basis=auto
+bool try_expand_flex(std::string_view value, bool important,
+                     std::vector<Declaration>& out) {
+    const auto parts = split_ws(value);
+    if (parts.empty() || parts.size() > 3) return false;
+
+    if (parts.size() == 1) {
+        const auto& p = parts[0];
+        if (p == "auto") {
+            out.push_back({"flex-grow", "1", important});
+            out.push_back({"flex-shrink", "1", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+        if (p == "none") {
+            out.push_back({"flex-grow", "0", important});
+            out.push_back({"flex-shrink", "0", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+        if (p == "initial") {
+            out.push_back({"flex-grow", "0", important});
+            out.push_back({"flex-shrink", "1", important});
+            out.push_back({"flex-basis", "auto", important});
+            return true;
+        }
+    }
+
+    std::string grow, shrink, basis;
+    if (parts.size() == 1) {
+        grow = parts[0]; shrink = "1"; basis = "0";
+    } else if (parts.size() == 2) {
+        grow = parts[0]; shrink = parts[1]; basis = "0";
+    } else {
+        grow = parts[0]; shrink = parts[1]; basis = parts[2];
+    }
+    out.push_back({"flex-grow", grow, important});
+    out.push_back({"flex-shrink", shrink, important});
+    out.push_back({"flex-basis", basis, important});
+    return true;
+}
+
+// ADR-029: flex-flow shorthand expansion.
+//
+//   flex-flow: <direction>       -> direction only, wrap=nowrap
+//   flex-flow: <wrap>            -> wrap only, direction=row
+//   flex-flow: <a> <b>           -> both (either order per CSS spec)
+bool try_expand_flex_flow(std::string_view value, bool important,
+                          std::vector<Declaration>& out) {
+    const auto parts = split_ws(value);
+    if (parts.empty() || parts.size() > 2) return false;
+
+    auto is_direction = [](const std::string& s) {
+        return s == "row" || s == "row-reverse" ||
+               s == "column" || s == "column-reverse";
+    };
+    auto is_wrap = [](const std::string& s) {
+        return s == "nowrap" || s == "wrap" || s == "wrap-reverse";
+    };
+
+    if (parts.size() == 1) {
+        if (is_direction(parts[0])) {
+            out.push_back({"flex-direction", parts[0], important});
+            out.push_back({"flex-wrap", "nowrap", important});
+            return true;
+        }
+        if (is_wrap(parts[0])) {
+            out.push_back({"flex-direction", "row", important});
+            out.push_back({"flex-wrap", parts[0], important});
+            return true;
+        }
+        return false;
+    }
+
+    if (is_direction(parts[0]) && is_wrap(parts[1])) {
+        out.push_back({"flex-direction", parts[0], important});
+        out.push_back({"flex-wrap", parts[1], important});
+        return true;
+    }
+    if (is_wrap(parts[0]) && is_direction(parts[1])) {
+        out.push_back({"flex-direction", parts[1], important});
+        out.push_back({"flex-wrap", parts[0], important});
+        return true;
+    }
+    return false;
+}
+
+bool try_expand_grid_template(std::string_view value, bool important,
+                              std::vector<Declaration>& out) {
+    // Reject inline-areas form (quotes) -- deferred.
+    if (value.find('\'') != std::string_view::npos ||
+        value.find('"') != std::string_view::npos) {
+        return false;
+    }
+
+    // Find the first `/` outside any parens. Parenthesized values
+    // like minmax(0, 1fr) contain no `/` today, but tracking
+    // depth is ~3 lines and safe for future track functions.
+    std::size_t slash = std::string_view::npos;
+    int depth = 0;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const char c = value[i];
+        if (c == '(') ++depth;
+        else if (c == ')' && depth > 0) --depth;
+        else if (c == '/' && depth == 0) { slash = i; break; }
+    }
+    if (slash == std::string_view::npos) return false;
+
+    const std::string rows = trim(value.substr(0, slash));
+    const std::string cols = trim(value.substr(slash + 1));
+    if (rows.empty() || cols.empty()) return false;
+
+    Declaration d_rows;
+    d_rows.property = "grid-template-rows";
+    d_rows.value = rows;
+    d_rows.important = important;
+    out.push_back(std::move(d_rows));
+
+    Declaration d_cols;
+    d_cols.property = "grid-template-columns";
+    d_cols.value = cols;
+    d_cols.important = important;
+    out.push_back(std::move(d_cols));
+
+    return true;
+}
+
+// ADR-040: border shorthand helpers.
+bool is_border_width_token(std::string_view s) {
+    if (s.empty()) return false;
+    if (s == "0" || s == "thin" || s == "medium" || s == "thick") return true;
+    const char c = s[0];
+    return (c >= '0' && c <= '9') || c == '.';
+}
+
+bool is_border_style_keyword(std::string_view s) {
+    return s == "none" || s == "hidden" || s == "solid" ||
+           s == "dashed" || s == "dotted" || s == "double" ||
+           s == "groove" || s == "ridge" || s == "inset" ||
+           s == "outset";
+}
+
+struct BorderTriple {
+    std::string width;
+    std::string style;  // empty => don't emit border-style
+    std::string color;
+    bool has_color = false;
+};
+
+bool parse_border_tokens(const auto& tokens, BorderTriple& out) {
+    if (tokens.empty() || tokens.size() > 3) return false;
+
+    // Normalize to std::string once (few tokens; cheap copy).
+    std::vector<std::string> t;
+    t.reserve(tokens.size());
+    for (const auto& tok : tokens) t.emplace_back(tok);
+
+    if (t.size() == 1) {
+        const std::string& tok = t[0];
+        if (tok == "0" || tok == "none") {
+            out.width = "0";
+            return true;
+        }
+        if (!is_border_width_token(tok)) return false;
+        out.width = tok;
+        // Style left empty => paint draws solid (documented deviation).
+        return true;
+    }
+
+    if (t.size() == 2) {
+        if (!is_border_width_token(t[0])) return false;
+        out.width = t[0];
+        if (is_border_style_keyword(t[1])) {
+            out.style = t[1];
+        } else {
+            // 2-token width+color form.
+            out.color = t[1];
+            out.has_color = true;
+            // Style left empty => paint draws solid (documented deviation).
+        }
+        return true;
+    }
+
+    // 3-token: <width> <style> <color>
+    if (!is_border_width_token(t[0])) return false;
+    if (!is_border_style_keyword(t[1])) return false;
+    out.width = t[0];
+    out.style = t[1];
+    out.color = t[2];
+    out.has_color = true;
+    // CSS spec SS8.5.3: none/hidden => width 0 for rendering.
+    if (out.style == "none" || out.style == "hidden") {
+        out.width = "0";
+    }
+    return true;
+}
+
+bool try_expand_border(std::string_view value, bool important,
+                       std::vector<Declaration>& out) {
+    BorderTriple t;
+    if (!parse_border_tokens(split_tokens(value), t)) return false;
+    out.push_back({"border-width", t.width, important});
+    if (!t.style.empty()) {
+        out.push_back({"border-style", t.style, important});
+    }
+    if (t.has_color) {
+        out.push_back({"border-color", t.color, important});
+    }
+    return true;
+}
+
+bool try_expand_border_side(std::string_view property,
+                            std::string_view value, bool important,
+                            std::vector<Declaration>& out) {
+    std::string_view side;
+    if (property == "border-top") side = "top";
+    else if (property == "border-right") side = "right";
+    else if (property == "border-bottom") side = "bottom";
+    else if (property == "border-left") side = "left";
+    else return false;
+
+    BorderTriple t;
+    if (!parse_border_tokens(split_tokens(value), t)) return false;
+
+    const std::string prefix = "border-" + std::string(side) + "-";
+    out.push_back({prefix + "width", t.width, important});
+    if (!t.style.empty()) {
+        out.push_back({prefix + "style", t.style, important});
+    }
+    if (t.has_color) {
+        out.push_back({prefix + "color", t.color, important});
+    }
+    return true;
+}
+
+// ADR-055: background shorthand (color-only forms).
+// Defer url() / gradient() / multi-layer (comma) forms entirely --
+// half-parsing "background: #fff url(x)" by extracting just the
+// color produces a worse state than dropping (fill but no image,
+// vs. today: neither). Drop declaration consistently, like
+// border / grid-template / flex malformed handling.
+//
+// Like border-color, we store the raw color string here; layout's
+// parse_color resolves it at layout time. Malformed colors (e.g.
+// "background: garbage") produce "background-color: garbage" in
+// the cascade, which layout parses to transparent -- identical
+// observable behavior to longhand "background-color: garbage".
+// ADR-056: background shorthand token classifiers.
+// Mirrors layout::parse_color's named-color set; css/ cannot
+// include layout/ (layering), so the classifier is duplicated
+// here for parse-time token discrimination only.
+bool is_color_token(std::string_view t) {
+    if (t.empty()) return false;
+    if (t[0] == '#') return true;
+    static const std::unordered_set<std::string> named = {
+        "transparent", "black", "white", "red", "green", "blue",
+        "navy", "yellow", "orange", "purple", "gray", "grey",
+        "silver", "maroon", "teal", "aqua", "fuchsia", "lime", "olive",
+    };
+    return named.count(std::string(t)) > 0;
+}
+
+bool is_repeat_token(std::string_view t) {
+    return t == "no-repeat" || t == "repeat" || t == "repeat-x"
+        || t == "repeat-y" || t == "space" || t == "round";
+}
+
+bool is_position_token(std::string_view t) {
+    if (t == "left" || t == "right" || t == "center"
+        || t == "top" || t == "bottom") return true;
+    if (t.empty()) return false;
+    const char c = t[0];
+    return std::isdigit(static_cast<unsigned char>(c))
+        || c == '-' || c == '+' || c == '.';
+}
+
+bool is_url_token(std::string_view t) {
+    return t.rfind("url(", 0) == 0;
+}
+
+bool is_length_token(std::string_view t) {
+    if (t.empty()) return false;
+    const char c = t[0];
+    return std::isdigit(static_cast<unsigned char>(c))
+        || c == '-' || c == '+' || c == '.';
+}
+
+namespace bg_detail {
+struct BgTokens {
+    std::string color, image, repeat, position;
+    bool valid = true;
+    bool has_any() const {
+        return !color.empty() || !image.empty()
+            || !repeat.empty() || !position.empty();
+    }
+};
+
+void classify(const std::string& t, BgTokens& out) {
+    if (!out.valid) return;
+    if (is_url_token(t)) {
+        if (!out.image.empty()) { out.valid = false; return; }
+        out.image = t;
+    } else if (is_repeat_token(t)) {
+        if (!out.repeat.empty()) { out.valid = false; return; }
+        out.repeat = t;
+    } else if (is_color_token(t)) {
+        if (!out.color.empty()) { out.valid = false; return; }
+        out.color = t;
+    } else if (is_position_token(t)) {
+        if (!out.position.empty()) out.position += ' ';
+        out.position += t;
+    } else {
+        out.valid = false;
+    }
+}
+} // namespace bg_detail
+
+// ADR-056: full background shorthand grammar (color forms +
+// URL forms). Handles `[color || image || repeat || position
+// [/ size]]*` per CSS spec -- order-free.
+//
+// Deferred (drop entirely):
+//   - linear-gradient / radial-gradient
+//   - multi-layer (any unescaped comma outside url())
+//   - url() with embedded spaces (rare; tokenized as separate
+//     tokens and rejected as unknown)
+//
+// `%` background-size: parsed but skipped by layout_element
+// (needs element dims; see layout.cpp's background-size read).
+bool try_expand_background(std::string_view value, bool important,
+                           std::vector<Declaration>& out) {
+    // ADR-062: linear-gradient(...) preserved as background-image.
+    // Extract the full gradient token (respects nested parens for
+    // var()/rgba() inside stops); reject multi-layer (stray comma
+    // outside the gradient's parens). Other gradients (radial,
+    // conic, repeating) still drop entirely -- deferred.
+    if (value.find("linear-gradient(") != std::string_view::npos) {
+        const auto open = value.find("linear-gradient(");
+        int depth = 0;
+        std::string_view grad;
+        for (std::size_t i = open; i < value.size(); ++i) {
+            if (value[i] == '(') ++depth;
+            else if (value[i] == ')') {
+                if (--depth == 0) {
+                    grad = value.substr(open, i - open + 1);
+                    break;
+                }
+            }
+        }
+        if (grad.empty()) return false;
+        // Reject multi-layer: any comma outside the gradient token.
+        for (std::size_t i = 0; i < value.size(); ) {
+            if (i == open) { i += grad.size(); continue; }
+            if (value[i] == ',') return false;
+            ++i;
+        }
+        out.push_back({"background-image", std::string(grad), important});
+        return true;
+    }
+    if (value.find("gradient(") != std::string_view::npos) return false;
+    if (value.find(',') != std::string_view::npos) return false;
+
+    const std::string v = trim(value);
+    if (v.empty()) return false;
+
+    // ADR-055 preserved: `background: none` = transparent, no image.
+    if (v == "none") {
+        out.push_back({"background-color", "transparent", important});
+        return true;
+    }
+
+    // Split off /size part.
+    std::string_view before_slash = value;
+    std::string_view after_slash;
+    bool has_slash = false;
+    if (auto slash = value.find('/'); slash != std::string_view::npos) {
+        before_slash = value.substr(0, slash);
+        after_slash = value.substr(slash + 1);
+        has_slash = true;
+    }
+
+    bg_detail::BgTokens tokens;
+
+    for (const auto& t : split_tokens(before_slash)) {
+        bg_detail::classify(t, tokens);
+        if (!tokens.valid) return false;
+    }
+
+    std::string size;
+    if (has_slash) {
+        auto after = split_tokens(after_slash);
+        std::size_t start = 0;
+        if (!after.empty() && is_length_token(after[0])) {
+            size = after[0];
+            start = 1;
+        }
+        for (std::size_t i = start; i < after.size(); ++i) {
+            bg_detail::classify(after[i], tokens);
+            if (!tokens.valid) return false;
+        }
+    }
+
+    if (!tokens.has_any() && size.empty()) return false;
+
+    if (!tokens.color.empty())
+        out.push_back({"background-color", tokens.color, important});
+    if (!tokens.image.empty())
+        out.push_back({"background-image", tokens.image, important});
+    if (!tokens.repeat.empty())
+        out.push_back({"background-repeat", tokens.repeat, important});
+    if (!tokens.position.empty())
+        out.push_back({"background-position", tokens.position, important});
+    if (!size.empty())
+        out.push_back({"background-size", size, important});
+    return true;
+}
+
+void expand_shorthand(std::string_view property, std::string_view value,
+                      bool important, std::vector<Declaration>& out) {
+    // ADR-028: grid-template shorthand.
+    if (property == "grid-template") {
+        if (try_expand_grid_template(value, important, out)) return;
+        // Malformed or inline-areas form: drop declaration entirely.
+        return;
+    }
+
+    // ADR-029: flex shorthand.
+    if (property == "flex") {
+        if (try_expand_flex(value, important, out)) return;
+        // Malformed: drop declaration entirely (matching grid-template).
+        return;
+    }
+
+    // ADR-029: flex-flow shorthand.
+    if (property == "flex-flow") {
+        if (try_expand_flex_flow(value, important, out)) return;
+        // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-040: border shorthand (3 longhands).
+    if (property == "border") {
+        if (try_expand_border(value, important, out)) return;
+        // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-040: per-side border shorthands.
+    if (property == "border-top" || property == "border-right" ||
+        property == "border-bottom" || property == "border-left") {
+        if (try_expand_border_side(property, value, important, out)) return;
+        // Malformed: drop declaration entirely.
+        return;
+    }
+
+    // ADR-055: background shorthand (color-only forms).
+    if (property == "background") {
+        if (try_expand_background(value, important, out)) return;
+        // url / gradient / multi-layer: drop declaration entirely.
+        return;
+    }
+
+    if (!is_box_shorthand(property)) {
+        Declaration d;
+        d.property = std::string(property);
+        d.value = std::string(value);
+        d.important = important;
+        out.push_back(std::move(d));
+        return;
+    }
+
+    const auto tokens = split_tokens(value);
+    if (tokens.empty() || tokens.size() > 4) return;
+
+    std::string top, right, bottom, left;
+    switch (tokens.size()) {
+        case 1:
+            top = right = bottom = left = tokens[0];
+            break;
+        case 2:
+            top = bottom = tokens[0];
+            right = left = tokens[1];
+            break;
+        case 3:
+            top = tokens[0];
+            right = left = tokens[1];
+            bottom = tokens[2];
+            break;
+        case 4:
+            top = tokens[0];
+            right = tokens[1];
+            bottom = tokens[2];
+            left = tokens[3];
+            break;
+    }
+
+    const char* longhand_names[4] = {nullptr, nullptr, nullptr, nullptr};
+    if (property == "margin") {
+        longhand_names[0] = "margin-top";
+        longhand_names[1] = "margin-right";
+        longhand_names[2] = "margin-bottom";
+        longhand_names[3] = "margin-left";
+    } else if (property == "padding") {
+        longhand_names[0] = "padding-top";
+        longhand_names[1] = "padding-right";
+        longhand_names[2] = "padding-bottom";
+        longhand_names[3] = "padding-left";
+    } else if (property == "border-width") {
+        longhand_names[0] = "border-top-width";
+        longhand_names[1] = "border-right-width";
+        longhand_names[2] = "border-bottom-width";
+        longhand_names[3] = "border-left-width";
+    }
+
+    const std::string* values[4] = {&top, &right, &bottom, &left};
+    for (int k = 0; k < 4; ++k) {
+        Declaration d;
+        d.property = longhand_names[k];
+        d.value = *values[k];
+        d.important = important;
+        out.push_back(std::move(d));
+    }
+}
+
+void add_declaration(std::string_view raw, std::vector<Declaration>& out) {
+    const std::string trimmed = trim(raw);
+    if (trimmed.empty()) return;
+
+    const size_t colon = trimmed.find(':');
+    if (colon == std::string::npos) return;
+
+    std::string property = trim(trimmed.substr(0, colon));
+    std::string value = trim(trimmed.substr(colon + 1));
+
+    if (property.empty() || value.empty()) return;
+
+    const bool important = strip_important(value);
+    if (value.empty()) return;
+
+    expand_shorthand(property, value, important, out);
+}
+
+// Split a declaration block on top-level ';', respecting nested
+// parentheses/brackets and single/double quotes.
+// ADR-027: case-insensitive prefix check at position `i`.
+bool starts_with_ci(std::string_view s, std::size_t i, std::string_view prefix) {
+    if (i + prefix.size() > s.size()) return false;
+    for (std::size_t k = 0; k < prefix.size(); ++k) {
+        if (std::tolower(static_cast<unsigned char>(s[i + k])) !=
+            std::tolower(static_cast<unsigned char>(prefix[k]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// =============================================================
+// ADR-050: @supports feature-query evaluator + capability table
+// =============================================================
+
+const std::unordered_set<std::string>& supported_properties() {
+    static const std::unordered_set<std::string> s = {
+        "display", "visibility", "opacity",
+        "margin", "padding",
+        "margin-left", "margin-right", "margin-top", "margin-bottom",
+        "padding-left", "padding-right", "padding-top", "padding-bottom",
+        "border", "border-width", "border-style", "border-color",
+        "border-top", "border-right", "border-bottom", "border-left",
+        "border-radius", "border-top-left-radius", "border-top-right-radius",
+        "border-bottom-right-radius", "border-bottom-left-radius",
+        "box-shadow",
+        "width", "height", "min-width", "max-width",
+        "min-height", "max-height",
+        "color", "background", "background-image", "background-color",
+        "background-size", "background-position", "background-repeat",
+        "mask-image", "-webkit-mask-image",
+        "mask-size", "-webkit-mask-size",
+        "mask-position", "-webkit-mask-position",
+        "mask-repeat", "-webkit-mask-repeat",
+        "font", "font-size", "font-family", "font-weight", "font-style",
+        "line-height", "text-align", "text-decoration",
+        "overflow", "overflow-x", "overflow-y",
+        "position", "top", "right", "bottom", "left", "z-index",
+        "float", "clear",  // ADR-063
+        "list-style-type",  // ADR-080
+        "flex", "flex-grow", "flex-shrink", "flex-basis",
+        "flex-direction", "flex-wrap", "justify-content",
+        "align-items", "align-content",
+        "grid", "grid-template", "grid-template-columns",
+        "grid-template-rows", "grid-template-areas", "grid-area",
+        "gap", "column-gap", "row-gap",
+        "transform", "transform-origin",  // ADR-054
+    };
+    return s;
+}
+
+const std::unordered_set<std::string>& supported_pseudos() {
+    static const std::unordered_set<std::string> s = {
+        ":link", ":visited", ":hover", ":root",
+        ":first-child", ":last-child", ":only-child", ":empty",
+        ":first-of-type", ":last-of-type", ":only-of-type",
+        ":nth-child", ":nth-last-child", ":nth-of-type",
+        ":nth-last-of-type",
+        ":not", ":is", ":where", ":lang",
+    };
+    return s;
+}
+
+// Values whose syntax the engine does not support (drawn as if
+// supported would produce wrong output). Matches the deferral
+// lists in ADR-040 (dashed/dotted borders) and ADR-037 (round/
+// sqrt/sin/cos/tan math functions).
+bool unsupported_value(std::string_view val) {
+    static const char* kBad[] = {
+        "round(", "sqrt(", "sin(", "cos(", "tan(",
+        "dotted", "dashed",
+    };
+    for (const char* bad : kBad) {
+        if (val.find(bad) != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+// Evaluate a single "prop: value" feature test.
+bool feature_query_single(std::string_view s) {
+    int depth = 0;
+    std::size_t colon = std::string_view::npos;
+    for (std::size_t k = 0; k < s.size(); ++k) {
+        if (s[k] == '(') ++depth;
+        else if (s[k] == ')') { if (depth > 0) --depth; }
+        else if (s[k] == ':' && depth == 0) { colon = k; break; }
+    }
+    if (colon == std::string_view::npos) return false;
+    std::string prop = trim(s.substr(0, colon));
+    std::string val = trim(s.substr(colon + 1));
+    if (prop.empty()) return false;
+    if (!supported_properties().count(prop)) return false;
+    if (unsupported_value(val)) return false;
+    return true;
+}
+
+// Find a top-level " or " / " and " keyword (paren depth 0,
+// surrounded by whitespace).
+std::size_t find_top_level_kw(std::string_view s, std::string_view kw) {
+    int depth = 0;
+    for (std::size_t k = 0; k + kw.size() <= s.size(); ++k) {
+        char c = s[k];
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth > 0) --depth; continue; }
+        if (depth == 0 && s.substr(k, kw.size()) == kw) {
+            bool left_ok = (k == 0) ||
+                std::isspace(static_cast<unsigned char>(s[k - 1]));
+            bool right_ok = (k + kw.size() == s.size()) ||
+                std::isspace(static_cast<unsigned char>(s[k + kw.size()]));
+            if (left_ok && right_ok) return k;
+        }
+    }
+    return std::string_view::npos;
+}
+
+// Evaluate an @supports prelude: handles not / or / and /
+// selector(...) / (prop: value). Unsupported or malformed
+// conditions return false (block dropped, safe default).
+bool feature_query_supported(std::string_view prelude_view) {
+    std::string prelude = trim(prelude_view);
+    if (prelude.empty()) return false;
+
+    // "not X"
+    if (starts_with_ci(prelude, 0, "not ")) {
+        std::string rest =
+            trim(std::string_view(prelude).substr(4));
+        return !feature_query_supported(rest);
+    }
+
+    // Top-level " or "
+    if (std::size_t pos = find_top_level_kw(prelude, "or");
+        pos != std::string_view::npos) {
+        std::string left =
+            trim(std::string_view(prelude).substr(0, pos));
+        std::string right =
+            trim(std::string_view(prelude).substr(pos + 2));
+        return feature_query_supported(left)
+            || feature_query_supported(right);
+    }
+
+    // Top-level " and "
+    if (std::size_t pos = find_top_level_kw(prelude, "and");
+        pos != std::string_view::npos) {
+        std::string left =
+            trim(std::string_view(prelude).substr(0, pos));
+        std::string right =
+            trim(std::string_view(prelude).substr(pos + 3));
+        return feature_query_supported(left)
+            && feature_query_supported(right);
+    }
+
+    // selector(...)
+    if (starts_with_ci(prelude, 0, "selector(")) {
+        if (!prelude.empty() && prelude.back() == ')' &&
+            prelude.size() >= 10) {
+            std::string inner = trim(
+                std::string_view(prelude).substr(9, prelude.size() - 10));
+            if (!inner.empty() && inner[0] == ':') {
+                return supported_pseudos().count(inner) > 0;
+            }
+        }
+        return false;
+    }
+
+    // Single (prop: value) wrapped in parens: strip outer parens,
+    // then evaluate as feature.
+    if (!prelude.empty() && prelude.front() == '(' &&
+        prelude.back() == ')') {
+        int depth = 0;
+        std::size_t match_end = std::string_view::npos;
+        for (std::size_t k = 0; k < prelude.size(); ++k) {
+            if (prelude[k] == '(') ++depth;
+            else if (prelude[k] == ')') {
+                --depth;
+                if (depth == 0) { match_end = k; break; }
+            }
+        }
+        if (match_end == prelude.size() - 1) {
+            std::string inner = trim(
+                std::string_view(prelude).substr(1, prelude.size() - 2));
+            // Recurse (not single): inner may contain " or " /
+            // " and " at depth 0 after outer parens are stripped.
+            // Without this, `not ((A) or (B))` returns
+            // not(false)=true instead of not(true)=false, which
+            // would double-render icons (ADR-047 mask +
+            // fallback background-image).
+            return feature_query_supported(inner);
+        }
+    }
+
+    // Fallback: unparenthesized single feature.
+    return feature_query_single(prelude);
+}
+
+// ADR-027: parse a length that may be `Npx` or `calc(Npx +/- Mpx)`.
+// Returns nullopt on anything else (mixed units, more than one
+// operation, non-px units, malformed expressions). This narrower
+// parser is intentional: ADR-027 v1 supports exactly the calc
+// patterns Wikipedia uses (`calc(1120px - 1px)`, etc.). Broader
+// calc falls to unsupported -- safe drop, per CSS computed-value
+// semantics.
+std::optional<float> parse_length_px(std::string_view text) {
+    const std::string s = trim(text);
+    if (s.empty()) return std::nullopt;
+
+    if (s.rfind("calc(", 0) == 0 && s.back() == ')') {
+        const std::string inner = s.substr(5, s.size() - 6);
+        // Find first +/- that isn't the leading sign.
+        std::size_t op = std::string::npos;
+        char op_char = 0;
+        for (std::size_t k = 1; k < inner.size(); ++k) {
+            if (inner[k] == '-' || inner[k] == '+') {
+                op = k;
+                op_char = inner[k];
+                break;
+            }
+        }
+        if (op == std::string::npos) return std::nullopt;
+        const auto lhs = parse_length_px(inner.substr(0, op));
+        const auto rhs = parse_length_px(inner.substr(op + 1));
+        if (!lhs || !rhs) return std::nullopt;
+        return (op_char == '-') ? (*lhs - *rhs) : (*lhs + *rhs);
+    }
+
+    if (s.size() >= 3 &&
+        s[s.size() - 2] == 'p' && s[s.size() - 1] == 'x') {
+        const std::string num = s.substr(0, s.size() - 2);
+        try {
+            std::size_t idx = 0;
+            const float v = std::stof(num, &idx);
+            if (idx != num.size()) return std::nullopt;
+            return v;
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+
+    return std::nullopt;
+}
+
+// ADR-027: classify an @media prelude into width constraints.
+// Returns true for supported preludes (populating `out`);
+// returns false for unsupported ones, meaning their rules must
+// NOT enter the stylesheet (safe drop per CSS spec).
+//
+// Supported grammar (lowercased, whitespace tolerant):
+//   [screen|all] [and (min-width: LEN) | and (max-width: LEN)]*
+// where LEN is Npx or calc(Npx +/- Mpx).
+// Anything else -- print, prefers-*, aspect-ratio, orientation,
+// resolution, hover, pointer, range syntax, mixed-unit calc,
+// unsupported keywords -- returns false.
+bool parse_media_prelude(std::string_view prelude, MediaQuery& out) {
+    const bool trace_on = log_enabled(LogCategory::Css, LogLevel::Trace);
+    if (trace_on) {
+        HB_LOG(Css, Trace, "MEDIA prelude=%.120s",
+               std::string(prelude).c_str());
+    }
+    std::string lower;
+    lower.reserve(prelude.size());
+    for (char c : prelude) {
+        lower.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    // Whole-string unsupported keyword check (fast rejection).
+    // ADR-077: prefers-*, hover, pointer now handled by the
+    // feature-query parser below. Still unsupported: print
+    // (screen-only render), aspect-ratio, orientation,
+    // resolution (deferred), range syntax (">", "<").
+    static const char* kUnsupported[] = {
+        "print", "aspect-ratio", "orientation",
+        "resolution", ">", "<",
+    };
+    for (const char* kw : kUnsupported) {
+        if (lower.find(kw) != std::string::npos) {
+            if (trace_on) {
+                HB_LOG(Css, Trace, "MEDIA REJECTED kw='%s' prelude=%.120s",
+                       kw, std::string(prelude).c_str());
+            }
+            return false;
+        }
+    }
+
+    std::size_t i = 0;
+    while (i < lower.size()) {
+        while (i < lower.size() &&
+               std::isspace(static_cast<unsigned char>(lower[i]))) {
+            ++i;
+        }
+        if (i >= lower.size()) break;
+
+        if (lower[i] == '(') {
+            // Find the matching ')' at the same paren depth. Naive
+            // find(')') would hit the inner close of calc(...) and
+            // truncate the condition string.
+            std::size_t close = i + 1;
+            int paren_depth = 1;
+            while (close < lower.size() && paren_depth > 0) {
+                if (lower[close] == '(') ++paren_depth;
+                else if (lower[close] == ')') --paren_depth;
+                ++close;
+            }
+            if (paren_depth > 0) return false;
+            --close;  // back to the ')' character
+            const std::string cond =
+                trim(lower.substr(i + 1, close - i - 1));
+
+            if (cond.rfind("min-width:", 0) == 0) {
+                const auto px = parse_length_px(cond.substr(10));
+                if (!px) return false;
+                out.min_width_px = *px;
+            } else if (cond.rfind("max-width:", 0) == 0) {
+                const auto px = parse_length_px(cond.substr(10));
+                if (!px) return false;
+                out.max_width_px = *px;
+            }
+            // ADR-077: feature queries. Environment is fixed
+            // (desktop, light mode, no reduced motion).
+            else if (cond.rfind("hover:", 0) == 0) {
+                const std::string val = trim(cond.substr(6));
+                if (val == "hover")      out.q_hover_matches = true;
+                else if (val == "none")  out.q_hover_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("pointer:", 0) == 0) {
+                const std::string val = trim(cond.substr(8));
+                if (val == "fine")        out.q_pointer_matches = true;
+                else if (val == "coarse") out.q_pointer_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-color-scheme:", 0) == 0) {
+                const std::string val = trim(cond.substr(21));
+                if (val == "light")      out.q_light_matches = true;
+                else if (val == "dark")  out.q_light_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-reduced-motion:", 0) == 0) {
+                const std::string val = trim(cond.substr(23));
+                if (val == "no-preference") out.q_no_reduced_motion_matches = true;
+                else if (val == "reduce")   out.q_no_reduced_motion_matches = false;
+                else return false;
+            }
+            else if (cond.rfind("prefers-contrast:", 0) == 0) {
+                const std::string val = trim(cond.substr(17));
+                if (val == "no-preference")                out.q_no_high_contrast_matches = true;
+                else if (val == "more" || val == "less")   out.q_no_high_contrast_matches = false;
+                else return false;
+            }
+            else {
+                return false;
+            }
+            i = close + 1;
+        } else if (std::isalpha(static_cast<unsigned char>(lower[i]))) {
+            const std::size_t start = i;
+            while (i < lower.size() &&
+                   std::isalpha(static_cast<unsigned char>(lower[i]))) {
+                ++i;
+            }
+            const std::string word = lower.substr(start, i - start);
+            if (word != "screen" && word != "all" && word != "and" &&
+                word != "only") {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (trace_on) {
+        HB_LOG(Css, Trace, "MEDIA ACCEPTED min_w=%.1f max_w=%.1f prelude=%.120s",
+               out.min_width_px.value_or(-1.0f),
+               out.max_width_px.value_or(-1.0f),
+               std::string(prelude).c_str());
+    }
+    return true;
+}
+
+// Forward declaration: parse_media_block needs this, but
+// split_declarations is defined below it in the file.
+void split_declarations(std::string_view block,
+                        std::vector<Declaration>& out);
+
+// ADR-050: forward declaration. parse_media_block calls
+// parse_supports_block recursively for nested @supports; the
+// definition comes right after parse_media_block.
+void parse_supports_block(std::string_view stripped, std::size_t& i,
+                          Stylesheet& result,
+                          std::optional<MediaQuery> outer_media);
+
+// ADR-027: parse an @media block starting at `i` (which points at
+// '@'). Extracts its body as Rules with a MediaQuery attached. If
+// the prelude is unsupported, the whole block is dropped (no rules
+// added). Mirrors the top-level rule-parsing loop.
+void parse_media_block(std::string_view stripped, std::size_t& i,
+                       Stylesheet& result) {
+    // Skip "@media" (parse() already verified the prefix).
+    i += 6;
+
+    // Read prelude text up to '{'.
+    const std::size_t prelude_start = i;
+    while (i < stripped.size() && stripped[i] != '{') ++i;
+    if (i >= stripped.size()) return;  // malformed: no block
+    const std::string prelude =
+        trim(stripped.substr(prelude_start, i - prelude_start));
+    ++i;  // skip '{'
+
+    // Find the matching '}'.
+    const std::size_t body_start = i;
+    int depth = 1;
+    while (i < stripped.size() && depth > 0) {
+        if (stripped[i] == '{') ++depth;
+        else if (stripped[i] == '}') --depth;
+        ++i;
+    }
+    if (depth > 0) return;  // malformed: unmatched brace
+    const std::string_view body =
+        stripped.substr(body_start, i - 1 - body_start);
+
+    MediaQuery mq;
+    if (!parse_media_prelude(prelude, mq)) return;  // unsupported -> drop
+
+    // Parse rules inside the body.
+    std::size_t j = 0;
+    while (j < body.size()) {
+        while (j < body.size() && is_ws(body[j])) ++j;
+        if (j >= body.size()) break;
+
+        // Nested at-rule. ADR-050: @supports inside @media is
+        // recursively parsed with the surrounding MediaQuery
+        // propagated. Other nested at-rules (nested @media,
+        // @import, etc.) still skip.
+        if (body[j] == '@') {
+            if (starts_with_ci(body, j, "@supports")) {
+                parse_supports_block(body, j, result, mq);
+            } else {
+                std::size_t skip = j;
+                skip_at_rule(body, skip);
+                j = skip;
+            }
+            continue;
+        }
+
+        // Selector up to '{' or '}'.
+        const std::size_t selector_start = j;
+        while (j < body.size() && body[j] != '{' && body[j] != '}') ++j;
+        if (j >= body.size()) break;
+        if (body[j] == '}') { ++j; continue; }
+
+        const std::string selector_text =
+            trim(body.substr(selector_start, j - selector_start));
+        ++j;
+
+        // Declarations block.
+        const std::size_t decl_start = j;
+        int decl_depth = 1;
+        while (j < body.size() && decl_depth > 0) {
+            if (body[j] == '{') ++decl_depth;
+            else if (body[j] == '}') --decl_depth;
+            ++j;
+        }
+        if (decl_depth > 0) break;
+        const std::string_view decl_block =
+            body.substr(decl_start, j - 1 - decl_start);
+
+        if (selector_text.empty()) continue;
+        auto selectors = SelectorList::parse(selector_text);
+        if (!selectors) continue;
+
+        Rule rule;
+        rule.selectors = std::move(*selectors);
+        split_declarations(decl_block, rule.declarations);
+        rule.media = mq;
+        result.rules.push_back(std::move(rule));
+    }
+}
+
+// ADR-050: parse an @supports block starting at `i` (which points
+// at '@'). Evaluates the prelude's feature query; if true, parses
+// the block's rules with the supplied outer MediaQuery (nullopt
+// for top-level, populated when called recursively from
+// parse_media_block). If false, the whole block is dropped.
+void parse_supports_block(std::string_view stripped, std::size_t& i,
+                          Stylesheet& result,
+                          std::optional<MediaQuery> outer_media) {
+    // Skip "@supports" (9 chars).
+    i += 9;
+
+    // Read prelude text up to '{'.
+    const std::size_t prelude_start = i;
+    while (i < stripped.size() && stripped[i] != '{') ++i;
+    if (i >= stripped.size()) return;
+    const std::string prelude = trim(
+        stripped.substr(prelude_start, i - prelude_start));
+    ++i;  // skip '{'
+
+    // Find matching '}'.
+    const std::size_t body_start = i;
+    int depth = 1;
+    while (i < stripped.size() && depth > 0) {
+        if (stripped[i] == '{') ++depth;
+        else if (stripped[i] == '}') --depth;
+        ++i;
+    }
+    if (depth > 0) return;
+    const std::string_view body =
+        stripped.substr(body_start, i - 1 - body_start);
+
+    // Feature gate: drop the block entirely on false.
+    if (!feature_query_supported(prelude)) return;
+
+    // Parse rules inside the body.
+    std::size_t j = 0;
+    while (j < body.size()) {
+        while (j < body.size() && is_ws(body[j])) ++j;
+        if (j >= body.size()) break;
+
+        // Nested at-rule: nested @supports is deferred (0 uses);
+        // nested @media is unsupported. Skip.
+        if (body[j] == '@') {
+            std::size_t skip = j;
+            skip_at_rule(body, skip);
+            j = skip;
+            continue;
+        }
+
+        const std::size_t selector_start = j;
+        while (j < body.size() && body[j] != '{' && body[j] != '}') ++j;
+        if (j >= body.size()) break;
+        if (body[j] == '}') { ++j; continue; }
+
+        const std::string selector_text = trim(
+            body.substr(selector_start, j - selector_start));
+        ++j;
+
+        const std::size_t decl_start = j;
+        int decl_depth = 1;
+        while (j < body.size() && decl_depth > 0) {
+            if (body[j] == '{') ++decl_depth;
+            else if (body[j] == '}') --decl_depth;
+            ++j;
+        }
+        if (decl_depth > 0) break;
+        const std::string_view decl_block =
+            body.substr(decl_start, j - 1 - decl_start);
+
+        if (selector_text.empty()) continue;
+        auto selectors = SelectorList::parse(selector_text);
+        if (!selectors) continue;
+
+        Rule rule;
+        rule.selectors = std::move(*selectors);
+        split_declarations(decl_block, rule.declarations);
+        rule.media = outer_media;
+        result.rules.push_back(std::move(rule));
+    }
+}
+
+void split_declarations(std::string_view block, std::vector<Declaration>& out) {
+    size_t start = 0;
+    int depth = 0;
+    char quote = 0;
+    for (size_t i = 0; i <= block.size(); ++i) {
+        if (i == block.size()) {
+            add_declaration(block.substr(start), out);
+            break;
+        }
+        const char c = block[i];
+        if (quote) {
+            if (c == quote) quote = 0;
+        } else if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '(' || c == '[') {
+            ++depth;
+        } else if (c == ')' || c == ']') {
+            if (depth > 0) --depth;
+        } else if (c == ';' && depth == 0) {
+            add_declaration(block.substr(start, i - start), out);
+            start = i + 1;
+        }
+    }
+}
+
+} // namespace
+
+Stylesheet Stylesheet::parse(std::string_view text) {
+    Stylesheet result;
+    const std::string stripped = strip_comments(text);
+
+    size_t i = 0;
+    while (i < stripped.size()) {
+        while (i < stripped.size() && is_ws(stripped[i])) ++i;
+        if (i >= stripped.size()) break;
+
+        if (stripped[i] == '@') {
+            // ADR-027: @media blocks are extracted with a MediaQuery.
+            // ADR-050: @supports blocks are gated on feature-query
+            // evaluation. Other at-rules (@import, @charset, etc.)
+            // still skip.
+            if (starts_with_ci(stripped, i, "@media")) {
+                parse_media_block(stripped, i, result);
+            } else if (starts_with_ci(stripped, i, "@supports")) {
+                parse_supports_block(stripped, i, result, std::nullopt);
+            } else {
+                skip_at_rule(stripped, i);
+            }
+            continue;
+        }
+
+        const size_t selector_start = i;
+        while (i < stripped.size() &&
+               stripped[i] != '{' && stripped[i] != '}') {
+            ++i;
+        }
+
+        if (i >= stripped.size()) break;
+
+        if (stripped[i] == '}') {
+            ++i;
+            continue;
+        }
+
+        const std::string selector_text =
+            trim(stripped.substr(selector_start, i - selector_start));
+        ++i;
+
+        const size_t block_start = i;
+        int depth = 1;
+        while (i < stripped.size() && depth > 0) {
+            if (stripped[i] == '{') {
+                ++depth;
+                ++i;
+            } else if (stripped[i] == '}') {
+                --depth;
+                if (depth > 0) ++i;
+            } else {
+                ++i;
+            }
+        }
+
+        if (depth > 0) break;
+
+        const std::string_view block =
+            std::string_view(stripped).substr(block_start, i - block_start);
+        ++i;
+
+        if (selector_text.empty()) continue;
+
+        auto selectors = SelectorList::parse(selector_text);
+        if (!selectors) continue;
+
+        Rule rule;
+        rule.selectors = std::move(*selectors);
+        split_declarations(block, rule.declarations);
+        result.rules.push_back(std::move(rule));
+    }
+
+    // ADR-078: extract custom properties from ALL rules (post-pass).
+    // Supersedes the ADR-026 inline extractor which only handled
+    // single-selector `:root { ... }` at top-level. This pass covers:
+    // - Multi-selector rules containing :root (`:root, .foo { ... }`)
+    // - Rules inside @media blocks (parse_media_block adds to
+    //   result.rules but doesn't extract vars)
+    // - Rules inside @supports blocks (parse_supports_block)
+    //
+    // Only collect from rules that would apply under our environment
+    // at any width. Width-constrained @media rules are deferred —
+    // parse time doesn't know the viewport, so collecting their vars
+    // would give wrong values at other widths.
+    //
+    // Feature-constrained @media rules: use the resolved q_* flags
+    // (from ADR-077) to decide. `prefers-color-scheme: dark` skipped
+    // (our env is light), `prefers-color-scheme: light` collected.
+    for (const auto& rule : result.rules) {
+        bool has_root_selector = false;
+        for (const auto& sel : rule.selectors.selectors) {
+            if (sel.parts.size() == 1 &&
+                sel.parts[0].compound.simples.size() == 1 &&
+                sel.parts[0].compound.simples[0].kind ==
+                    SimpleKind::PseudoRoot) {
+                has_root_selector = true;
+                break;
+            }
+        }
+        if (!has_root_selector) continue;
+
+        if (rule.media.has_value()) {
+            const auto& mq = *rule.media;
+            if (mq.min_width_px || mq.max_width_px) continue;
+            if (mq.q_hover_matches && !*mq.q_hover_matches) continue;
+            if (mq.q_pointer_matches && !*mq.q_pointer_matches) continue;
+            if (mq.q_light_matches && !*mq.q_light_matches) continue;
+            if (mq.q_no_reduced_motion_matches &&
+                !*mq.q_no_reduced_motion_matches) continue;
+            if (mq.q_no_high_contrast_matches &&
+                !*mq.q_no_high_contrast_matches) continue;
+        }
+
+        for (const auto& decl : rule.declarations) {
+            if (decl.property.size() >= 2 &&
+                decl.property[0] == '-' &&
+                decl.property[1] == '-') {
+                result.variables[decl.property] = decl.value;
+            }
+        }
+    }
+
+    // ADR-026: resolve var() in all declarations using the
+    // collected variable map. Runs once, after all rules have
+    // been parsed (variables need to be complete).
+    //
+    // Skips custom-property declarations themselves (--x: val);
+    // their values may be recursive or refer to variables defined
+    // later, and single-pass resolution would either miss or
+    // misinterpret. Deferred recursive resolution (ADR-026
+    // Deferred).
+    for (auto& rule : result.rules) {
+        auto decl_it = rule.declarations.begin();
+        while (decl_it != rule.declarations.end()) {
+            const auto& prop = decl_it->property;
+            const bool is_custom_property =
+                prop.size() >= 2 && prop[0] == '-' && prop[1] == '-';
+            if (is_custom_property) {
+                ++decl_it;
+                continue;
+            }
+            auto vr = resolve_var_whole(decl_it->value, result.variables);
+            switch (vr.kind) {
+                case VarResult::NotVar:
+                    ++decl_it;
+                    break;
+                case VarResult::Resolved:
+                    decl_it->value = std::move(vr.value);
+                    ++decl_it;
+                    break;
+                case VarResult::Failed:
+                    decl_it = rule.declarations.erase(decl_it);
+                    break;
+            }
+        }
+    }
+
+    result.build_index();
+    return result;
+}
+
+// ADR-059: build the rightmost-simple anchor index.
+void Stylesheet::build_index() {
+    index = RuleIndex{};
+    for (std::size_t i = 0; i < rules.size(); ++i) {
+        for (const auto& sel : rules[i].selectors.selectors) {
+            Anchor a = anchor_for(sel);
+            switch (a.bucket) {
+                case AnchorBucket::Id:
+                    index.by_id[a.key].push_back(i); break;
+                case AnchorBucket::Class:
+                    index.by_class[a.key].push_back(i); break;
+                case AnchorBucket::Type:
+                    index.by_type[a.key].push_back(i); break;
+                case AnchorBucket::Universal:
+                    index.universal.push_back(i); break;
+            }
+        }
+    }
+}
+
+std::vector<std::size_t> RuleIndex::candidates_for(
+    const std::string& id,
+    const std::vector<std::string>& classes,
+    const std::string& tag) const {
+    std::vector<std::size_t> out;
+    if (!id.empty()) {
+        auto it = by_id.find(id);
+        if (it != by_id.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    for (const auto& c : classes) {
+        auto it = by_class.find(c);
+        if (it != by_class.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    if (!tag.empty()) {
+        auto it = by_type.find(tag);
+        if (it != by_type.end())
+            out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    out.insert(out.end(), universal.begin(), universal.end());
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+} // namespace honeybee::renderer::css

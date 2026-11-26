@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <title>ADR-067: JPEG decode</title>
+  <style>
+    body { margin: 20px; font-family: sans-serif; font-size: 14px;
+           color: #333; }
+    .row { margin-bottom: 20px; }
+    .label { color: #666; margin-bottom: 6px; }
+    img { display: block; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <div class="label">Row 1: JPEG (Wikimedia Tim Berners-Lee photo).
+  Should render, no red/blue color swap.</div>
+  <div class="row">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Tim_Berners-Lee_April_2009.jpg/250px-Tim_Berners-Lee_April_2009.jpg" width="250">
+  </div>
+
+  <div class="label">Row 2: PNG (Wikipedia HTML5 logo thumbnail).
+  Should render (existing decoder, regression check).</div>
+  <div class="row">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/HTML5_logo_and_wordmark.svg/250px-HTML5_logo_and_wordmark.svg.png" width="250">
+  </div>
+
+  <div class="label">Row 3: SVG (Wikipedia wordmark).
+  Should render (existing decoder, regression check).</div>
+  <div class="row">
+    <img src="https://en.wikipedia.org/static/images/mobile/copyright/wikipedia-wordmark-en-25.svg" width="200">
+  </div>
+
+  <div class="label">Row 4: JPEG with explicit width 100px (scale check).
+  Tim photo should render at 100px wide (not 250) -- paint scale works.</div>
+  <div class="row">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c8/Tim_Berners-Lee_April_2009.jpg/250px-Tim_Berners-Lee_April_2009.jpg" width="100">
+  </div>
+</body>
+</html>

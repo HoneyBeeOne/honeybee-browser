@@ -1,0 +1,38 @@
+add_executable(honeybee_tests
+  test_cli.cpp
+  test_pango_text.cpp
+  test_version.cpp
+  test_url.cpp
+  test_log.cpp
+  test_navigation_history.cpp
+  test_page_cache.cpp
+  test_net.cpp
+  test_dom.cpp
+  test_selectors.cpp
+  test_stylesheet.cpp
+    test_calc.cpp
+    test_pseudos.cpp
+    test_box_model.cpp
+  test_cascade.cpp
+  test_pseudo_elements.cpp
+  test_pseudo_layout.cpp
+  test_hover_sensitivity.cpp
+  test_ua_stylesheet.cpp
+  test_grid_layout.cpp
+  test_layout.cpp
+  test_paint.cpp
+  test_float_wrap.cpp   # ADR-079
+  test_inline_baseline_paint.cpp   # ADR-082 pixel tests
+  test_lexbor_smoke.cpp
+  test_convert.cpp
+  test_css_sources.cpp
+  test_preview.cpp
+)
+
+target_link_libraries(honeybee_tests PRIVATE
+  honeybee_lib
+  lexbor_static
+  Catch2::Catch2WithMain
+)
+
+add_test(NAME honeybee_tests COMMAND honeybee_tests)

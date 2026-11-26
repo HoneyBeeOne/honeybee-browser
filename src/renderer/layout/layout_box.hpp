@@ -1,0 +1,352 @@
+// =============================================================
+// File: layout_box.hpp
+// Purpose: Layout tree types (ADR-011, ADR-015, ADR-016).
+//
+// LayoutNode is an abstract base; LayoutBox, LayoutText,
+// LayoutInline, and LayoutInlineContext derive from it.
+// LayoutText holds a vector of LineFragment (ADR-015) for
+// line-broken text. LayoutInline and LayoutInlineContext are
+// introduced in ADR-016 for inline formatting.
+// =============================================================
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace honeybee::renderer::dom { class Element; }
+
+namespace honeybee::renderer::layout {
+
+struct Color {
+    float r = 0.0f;
+    float g = 0.0f;
+    float b = 0.0f;
+    float a = 0.0f;
+
+    static Color black() { return {0.0f, 0.0f, 0.0f, 1.0f}; }
+    static Color transparent() { return {0.0f, 0.0f, 0.0f, 0.0f}; }
+
+    bool operator==(const Color&) const = default;
+};
+
+// CSS display value (ADR-016). None and the layout modes
+// (flex/grid/table) are deferred; v1 has Block and Inline.
+// ADR-028: Grid added. `display: grid` parses to this value and
+// is dispatched to layout_grid in Commit 2. In Commit 1 (this
+// commit), Grid still falls through to block layout --
+// behavior-neutral. Same isolation discipline as ADR-025/026/027's
+// Commit 1.
+enum class Display : std::uint8_t {
+    Block, Inline, None, Grid,
+    Flex, InlineFlex,       // ADR-029: CSS flex layout
+    ListItem,               // ADR-080: display:list-item
+    InlineBlock             // ADR-081: display:inline-block (atomic inline box)
+};
+
+// Text direction for a block container (ADR-016). Resolved from
+// the dir attribute on the element or its ancestors; defaults to
+// Ltr at <html>.
+enum class Direction : std::uint8_t { Ltr, Rtl };
+
+enum class LayoutKind {
+    Box,
+    Text,
+    Inline,
+    InlineContext,
+};
+
+struct LayoutNode {
+    LayoutKind kind;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+
+    virtual ~LayoutNode() = default;
+
+    LayoutNode(const LayoutNode&) = delete;
+    LayoutNode& operator=(const LayoutNode&) = delete;
+    LayoutNode(LayoutNode&&) = default;
+    LayoutNode& operator=(LayoutNode&&) = default;
+
+protected:
+    explicit LayoutNode(LayoutKind k) : kind(k) {}
+};
+
+// ADR-033: CSS position value. Determines flow participation.
+//   Static:    default; in-flow block
+//   Relative:  in-flow; positioning context for future absolute
+//              children (no visible effect in v1; offsets ignored)
+//   Absolute:  stored, but treated as Static in v1 (needs
+//              containing-block tracking; ADR-034)
+//   Fixed:     out-of-flow; viewport-anchored at (top, left)
+//   Sticky:    stored, but treated as Static in v1 (needs
+//              scroll-aware layout; ADR-034+)
+enum class Position : std::uint8_t {
+    Static, Relative, Absolute, Fixed, Sticky
+};
+
+// ADR-045/047: keyword-based background/mask-position.
+// Resolved in paint against loaded icon dimensions (layout
+// can't load images). Declared before LayoutBox because both
+// LayoutBox (mask fields) and LineFragment (bg fields) use them.
+enum class BgPosX : std::uint8_t { Left, Center, Right };
+enum class BgPosY : std::uint8_t { Top, Center, Bottom };
+
+struct LayoutBox final : LayoutNode {
+    float margin[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float border[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float padding[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    Color background = Color::transparent();
+    Color border_color = Color::transparent();
+
+    // ADR-044: border-radius per corner (TL, TR, BR, BL).
+    // 0 = no rounding on that corner. Any value > 0 triggers
+    // the rounded paint path in Commit 2.
+    float border_radius[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // ADR-043: parsed box-shadow (non-inset, non-blurred
+    // rendered in v1; inset / blur / multi parsed and stored
+    // but skipped at paint). `box_shadow_has` gates painting.
+    float box_shadow_ox = 0.0f;
+    float box_shadow_oy = 0.0f;
+    float box_shadow_blur = 0.0f;
+    float box_shadow_spread = 0.0f;
+    Color box_shadow_color = Color::transparent();
+    bool  box_shadow_inset = false;
+    bool  box_shadow_has = false;
+
+    // ADR-032: paint-authoritative culling signal. Set during
+    // layout from ComputedStyle's visibility/opacity. When false,
+    // paint skips this box and its entire subtree. Layout does
+    // not skip it (visibility:hidden, unlike display:none, still
+    // occupies space).
+    bool visible = true;
+
+    // ADR-080: list-style-type value (empty = not a list item).
+    // Set in layout_element only when this box's own display is
+    // list-item. Paint draws the marker using this value.
+    std::string list_style_type;
+
+    // ADR-033: parsed position. Fixed is honored by layout
+    // (out-of-flow + viewport anchor); Relative/Absolute/Sticky
+    // are stored but treated as Static in v1 (ADR-042 extends
+    // this: relative becomes a containing block marker;
+    // absolute becomes out-of-flow + positioned).
+    Position position = Position::Static;
+
+    // ADR-042: containing block marker. Set when position !=
+    // Static (matches CSS: relative/absolute/fixed/sticky all
+    // establish containing blocks for absolute descendants).
+    // Layout uses this to decide whether absolute children are
+    // positioned against this element or fall back to static.
+    bool is_containing_block = false;
+
+    // ADR-034: background-image url() extracted from CSS during
+    // layout. Empty when no background-image. Paint fetches +
+    // decodes (PNG via Cairo, SVG via librsvg) and draws at box
+    // rect. Handles data: URLs (search icon).
+    std::string background_image_url;
+
+    // ADR-056: background-image size/position/repeat (mirror
+    // ADR-047's mask pattern). Set during layout from
+    // background-size / -position / -repeat. Paint uses a Cairo
+    // pattern matrix to place the image at the resolved size/
+    // position; repeat via CAIRO_EXTEND_REPEAT clipped to box.
+    float background_size_w = 0.0f;    // 0 = auto (intrinsic)
+    float background_size_h = 0.0f;    // 0 = auto (aspect from _w if _w > 0)
+    BgPosX background_pos_x = BgPosX::Left;
+    BgPosY background_pos_y = BgPosY::Top;
+    bool background_no_repeat = false;  // false = repeat
+
+    // ADR-062: linear-gradient background. Parsed from the raw
+    // background-image string during layout_element. Paint uses
+    // Cairo linear pattern with per-stop color stops.
+    struct BackgroundGradientStop {
+        Color color;
+        float position;  // 0.0 .. 1.0
+    };
+    bool background_is_gradient = false;
+    float background_gradient_angle_deg = 180.0f;  // default: top -> bottom
+    std::vector<BackgroundGradientStop> background_gradient_stops;
+
+    // ADR-039: paint clips children to box content bounds when
+    // true. Set during layout from `overflow: hidden`. Children
+    // render normally (positions computed as if not clipped);
+    // paint wraps their draw in a Cairo clip rectangle.
+    bool clip_children = false;
+
+    // ADR-054: rotate transform in degrees. Set by
+    // layout_element when the computed style's transform
+    // contains rotate(<angle>). 0 = no rotation. Painted by
+    // wrapping paint_box's body in cairo save/translate/
+    // rotate/translate/restore around the box center.
+    float transform_rotate_deg = 0.0f;
+
+    // ADR-058: translateY transform in px. Resolved during
+    // layout_element after box.height is known (% relative to
+    // own height). Painted as cairo_translate(cr, 0, ty) inside
+    // the same save/restore wrapper as rotate.
+    float transform_translate_y = 0.0f;
+
+    // ADR-047: CSS mask (alpha channel from image, fill =
+    // background-color). Painted via cairo_mask_surface after
+    // background fill, before border. Both mask-image AND
+    // background-image can be present (different subsystems --
+    // both render).
+    std::string mask_image_url;    // empty = no mask
+    float mask_size_w = 0.0f;      // 0 = auto (intrinsic)
+    float mask_size_h = 0.0f;      // 0 = auto (aspect from width)
+    BgPosX mask_pos_x = BgPosX::Left;
+    BgPosY mask_pos_y = BgPosY::Top;
+    bool mask_no_repeat = false;
+    bool mask_has = false;         // gates paint
+
+    const dom::Element* element = nullptr;
+    std::vector<std::unique_ptr<LayoutNode>> children;
+
+    LayoutBox() : LayoutNode(LayoutKind::Box) {}
+};
+
+// One rendered line of a text node (ADR-015). Style fields
+// added in ADR-016 so fragments derived from an <em> or a
+// <span style="color:red"> carry their own font and color.
+struct LineFragment {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    std::string text;
+    std::string font_family;
+    float font_size = 16.0f;
+    Color color = Color::black();
+
+    // ADR-045: inline-element background-image. Populated during
+    // layout for fragments whose source element has a
+    // background-image rule. Empty/default = no background
+    // (paint skips).
+    std::string bg_image_url;
+    float bg_size_w = 0.0f;    // 0 = auto (intrinsic)
+    float bg_size_h = 0.0f;    // 0 = auto (aspect-derived if bg_size_w > 0)
+    BgPosX bg_pos_x = BgPosX::Left;
+    BgPosY bg_pos_y = BgPosY::Top;
+    bool bg_no_repeat = false;
+
+    // ADR-018 Commit 4b: source element for hit-testing. Text
+    // directly inside a block gets the block element; text
+    // inside an inline element (e.g. <a>) gets the inline
+    // element. Nullptr for legacy fragments created before
+    // this field existed (tests, future code paths).
+    const dom::Element* element = nullptr;
+
+    // ADR-081: when non-null, this fragment represents an atomic
+    // inline-block unit. `text` is empty, `width`/`height` reflect
+    // the child's box dimensions plus margins. Paint places its
+    // border box at (frag.x + margin-left, frag.y + margin-top)
+    // and recursively paints the subtree. Non-null implies
+    // this fragment is NOT rendered via Pango text drawing.
+    std::shared_ptr<LayoutBox> inline_block_child;
+
+    // ADR-082: Pango baseline measured from the top of the text
+    // layout, in CSS pixels. Used by baseline-aware inline layout.
+    float baseline = 0.0f;
+
+    // ADR-082: stable top coordinate of the containing line box.
+    // Unlike y, this does not change when a fragment is baseline-aligned.
+    float line_top = 0.0f;
+
+    // ADR-082: nested inline ancestry, outermost to innermost.
+    // Used to resolve inline-box properties such as vertical-align.
+    std::vector<const dom::Element*> inline_ancestors;
+
+    // ADR-082: deferred vertical-align line-edge targets.
+    // The line breaker resolves these after baseline layout.
+    std::vector<const dom::Element*> top_aligned_ancestors;
+    std::vector<const dom::Element*> bottom_aligned_ancestors;
+
+    // ADR-079: left indent for the line this fragment lives on,
+    // from the LineWidthProvider. Callers add this to content_x
+    // when computing frag.x. Always 0 in non-float contexts.
+    float x_offset = 0.0f;
+};
+
+struct LayoutText final : LayoutNode {
+    std::string text;
+    std::string font_family;
+    float font_size = 16.0f;
+    Color color = Color::black();
+    std::vector<LineFragment> lines;
+    bool rtl = false;
+
+    LayoutText() : LayoutNode(LayoutKind::Text) {}
+};
+
+// Structural inline element (ADR-016). Its children are the
+// element's inline descendants (LayoutText and nested
+// LayoutInline). Flattened during inline context construction;
+// not painted directly.
+struct LayoutInline : LayoutNode {
+    const dom::Element* element = nullptr;
+    std::vector<std::unique_ptr<LayoutNode>> children;
+    std::string font_family;
+    float font_size = 16.0f;
+    Color color = Color::black();
+    Display display = Display::Inline;
+
+    LayoutInline() : LayoutNode(LayoutKind::Inline) {}
+};
+
+// A block container's inline run (ADR-016). Collects inline
+// items, flattens them, runs line breaking across the whole
+// sequence, and holds the resulting line fragments.
+struct LayoutInlineContext : LayoutNode {
+    std::vector<std::unique_ptr<LayoutNode>> children;
+    std::vector<LineFragment> lines;
+
+    // ADR-082: line-box baselines in the containing LayoutBox
+    // coordinate system. These are independent of fragment-level
+    // vertical-align adjustments.
+    std::vector<float> line_baselines;
+
+    bool rtl = false;
+
+    LayoutInlineContext() : LayoutNode(LayoutKind::InlineContext) {}
+};
+
+// Text dimensions and baseline measured for a single font run (ADR-082).
+// Baseline is the distance from the top of the measured text layout
+// to its baseline, in CSS pixels.
+struct TextMetrics {
+    float width = 0.0f;
+    float height = 0.0f;
+    float baseline = 0.0f;
+};
+
+// Measures a single string at a given font (ADR-015, ADR-082).
+using TextMeasurer = std::function<TextMetrics(
+    std::string_view text,
+    std::string_view font_family,
+    float font_size)>;
+
+// Font-wide metrics used for baseline-aware inline layout (ADR-082).
+// All dimensions are in CSS pixels.
+struct FontMetrics {
+    float ascent = 0.0f;
+    float descent = 0.0f;
+    float x_height = 0.0f;
+    float normal_line_height = 0.0f;
+};
+
+using FontMetricsProvider = std::function<FontMetrics(
+    std::string_view font_family,
+    float font_size)>;
+
+} // namespace honeybee::renderer::layout

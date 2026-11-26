@@ -1,20 +1,253 @@
 #pragma once
 
+// =============================================================
+// الملف: تعريف نافذة هَني بي
+// الغرض: إعلان الصنف الرئيسي للنافذة.
+//
+// ما وظيفة هذا الصنف؟
+// الصنف الرئيسي للنافذة. يرث من نافذة الواجهة، ويحتوي
+// على كل عناصرها: شريط الأدوات، وشريط العنوان، ومنطقة
+// العرض، وشريط الحالة.
+//
+// ما مسؤوليته؟
+// بناء الواجهة في المُنشئ.
+// ربط الإشارات بالمعالجات.
+// تحديث الواجهة عند وصول نتائج من الشبكة.
+//
+// علاقته بباقي المكونات:
+// يستخدم دالة التحقق من الرابط.
+// يستخدم الجالب اللاتزامني للجلب من الشبكة.
+// يستخدم دالة الإصدار لطباعة رقم الإصدار.
+// =============================================================
+
+// استيراد مكتبة الواجهة، وهي غلاف سي بلس بلس
+// لمكتبة جي تي كي. توفّر كل عناصر الواجهة التي
+// نستخدمها: النافذة، والحاوية، والزر، وحقل الإدخال،
+// والنص، وغيرها.
 #include <gtkmm.h>
 
+// استيراد نوع النص المعياري، لتخزين الرابط الحالي.
+#include <memory>
+#include <string>
+
+// استيراد إعلان الجالب اللاتزامني، لأن النافذة
+// تحتوي عليه كعضو.
+#include "browser/async_fetcher.hpp"
+#include "browser/navigation_history.hpp"
+#include "browser/page_cache.hpp"
+#include "browser/render_pipeline.hpp"
+
+namespace honeybee::browser {
+
+// ADR-019: discriminator for navigate_to. Each kind has
+// different history semantics -- see window.cpp::navigate_to.
+enum class NavKind {
+    New,      // push on success (URL bar, link click)
+    Back,     // cursor already moved by caller; rollback on failure
+    Forward,  // cursor already moved by caller; rollback on failure
+    Reload,   // never touch history
+};
+
+} // namespace honeybee::browser
+
+// الصنف: نافذة هَني بي.
+// يرث من نافذة الواجهة، فيرث كل خصائص النافذة العادية:
+// العنوان، والحجم، والإغلاق، وغيرها.
 class HoneyBeeWindow : public Gtk::Window {
 public:
+    // المُنشئ: يبني كل عناصر الواجهة ويربط الإشارات.
     HoneyBeeWindow();
 
 private:
-    Gtk::Box m_root_box;            // الحاوية الرئيسية: تخطيط عمودي
-    Gtk::Box m_toolbar_box;         // شريط الأدوات: تخطيط أفقي
-    Gtk::Button m_back_button;      // زر الرجوع
-    Gtk::Button m_forward_button;   // زر التقدم
-    Gtk::Button m_reload_button;    // زر إعادة التحميل
-    Gtk::Entry m_url_bar;           // شريط العنوان
-    Gtk::Label m_label;             // النص المؤقت في وسط النافذة
-    Gtk::Box m_status_bar;          // شريط الحالة: تخطيط أفقي
-    Gtk::Label m_status_label;      // نص الحالة
-    Gtk::Label m_version_label;     // رقم الإصدار
+    // ----------------------------------------------------------
+    // المعالجات
+    // ----------------------------------------------------------
+
+    // معالجة ضغط مفتاح الإدخال في شريط العنوان.
+    // تتحقق من الرابط أولاً.
+    // فإن كان صحيحاً، تبدأ جلبه عبر الجالب اللاتزامني.
+    // وإن كان خاطئاً، تُحدّث شريط الحالة برسالة رفض.
+    void on_url_activated();
+
+    // معالجة الضغط على زر الرجوع.
+    // في المرحلة الحالية، تعرض رسالة في شريط الحالة.
+    // أما سجل التنقل الحقيقي، فمهمة لاحقة.
+    void on_back_clicked();
+
+    // معالجة الضغط على زر التقدم.
+    // في المرحلة الحالية، تعرض رسالة في شريط الحالة.
+    // أما سجل التنقل الحقيقي، فمهمة لاحقة.
+    void on_forward_clicked();
+
+    // معالجة الضغط على زر إعادة التحميل.
+    // إن كان هناك رابط محفوظ، تعيد معالجته (تحقّقاً وجلباً).
+    // وإن لم يكن هناك رابط، تعرض رسالة في شريط الحالة.
+    void on_reload_clicked();
+
+    // ----------------------------------------------------------
+    // أعضاء الواجهة
+    // ----------------------------------------------------------
+
+    // الحاوية الرئيسية: تخطيط عمودي.
+    // تحتوي على ثلاثة عناصر من الأعلى إلى الأسفل:
+    // شريط الأدوات.
+    // منطقة العرض.
+    // شريط الحالة.
+    Gtk::Box m_root_box;
+
+    // شريط الأدوات: تخطيط أفقي.
+    // يحتوي على أزرار التنقل وشريط العنوان.
+    Gtk::Box m_toolbar_box;
+
+    // زر الرجوع.
+    // مُفعَّل الآن، لكنه يعرض رسالة فقط، لأن سجل
+    // التنقل لم يُبنَ بعد.
+    Gtk::Button m_back_button;
+
+    // زر التقدم.
+    // مُفعَّل الآن، لكنه يعرض رسالة فقط، لأن سجل
+    // التنقل لم يُبنَ بعد.
+    Gtk::Button m_forward_button;
+
+    // زر إعادة التحميل.
+    // مُفعَّل ويعمل فعلياً: يعيد جلب الرابط الحالي.
+    Gtk::Button m_reload_button;
+
+    // شريط العنوان: حقل نص أحادي السطر.
+    // عند ضغط مفتاح الإدخال، تُطلق إشارة التنشيط
+    // المرتبطة بمعالج ضغط الإدخال.
+    Gtk::Entry m_url_bar;
+
+    // منطقة العرض: نص مؤقت لعرض محتوى الصفحة.
+    // في المرحلة الحالية، نعرض أول خمس مئة حرف من
+    // المحتوى. وفي المراحل التالية، سيُستبدَل بمحرك
+    // عرض حقيقي.
+    Gtk::DrawingArea m_drawing_area;
+
+    // ADR-021: wraps m_drawing_area so content taller than the
+    // viewport is scrollable. Set vexpand on this widget instead
+    // of m_drawing_area; the DrawingArea's size request grows to
+    // layout height, and the ScrolledWindow provides the vertical
+    // scrollbar.
+    Gtk::ScrolledWindow m_scroll_window;
+
+    // ADR-069: viewport-clipped paint architecture.
+    // ScrolledWindow's child is m_content_box, which stacks:
+    //   [m_top_spacer    (height = m_scroll_y)]
+    //   [m_drawing_area  (height = viewport height)]
+    //   [m_bottom_spacer (height = content_h - scroll_y - viewport_h)]
+    // DrawingArea is always viewport-sized so GSK never sees a
+    // >25,000px surface (the trigger for ADR-068's GSK GPU crash).
+    // ScrolledWindow still provides scrollbar, wheel, keyboard.
+    Gtk::Box m_content_box{Gtk::Orientation::VERTICAL};
+    Gtk::Box m_top_spacer{Gtk::Orientation::VERTICAL};
+    Gtk::Box m_bottom_spacer{Gtk::Orientation::VERTICAL};
+
+    // ADR-069: ScrolledWindow's vertical adjustment; drives
+    // m_scroll_y and repaints on scroll.
+    Glib::RefPtr<Gtk::Adjustment> m_vadjustment;
+
+    // ADR-069: current scroll position in layout (CSS) pixels.
+    // Sources from m_vadjustment->get_value() on every change.
+    double m_scroll_y = 0.0;
+
+    // شريط الحالة: تخطيط أفقي.
+    // يحتوي على رسالة الحالة ورقم الإصدار.
+    Gtk::Box m_status_bar;
+
+    // نص الحالة: يُحدَّث عند كل تغيير، مثل:
+    // جارٍ الجلب، أو تم الجلب، أو فشل الجلب.
+    Gtk::Label m_status_label;
+
+    // رقم الإصدار: يُعرض في يمين شريط الحالة. ثابت.
+    Gtk::Label m_version_label;
+
+    // ----------------------------------------------------------
+    // أعضاء المنطق
+    // ----------------------------------------------------------
+
+    // الرابط الحالي: آخر رابط تم قبوله وجلبه بنجاح.
+    // يُستخدم في إعادة التحميل.
+    // يبدأ فارغاً، ويُحدَّث بعد كل جلب ناجح.
+    std::string m_current_url;
+
+    // ADR-019: session-scoped back/forward history.
+    honeybee::browser::NavigationHistory m_history;
+
+    // ADR-020: session-scoped URL -> HTML cache. Populated on
+    // every successful fetch; consulted for Back/Forward only.
+    honeybee::browser::PageCache m_cache;
+
+    // الجالب اللاتزامني: يُشغّل جلب الشبكة في خيط منفصل،
+    // ويُبلِّغ الخيط الرئيسي عند الانتهاء.
+    // هذا يمنع تجمّد الواجهة أثناء الجلب.
+    AsyncFetcher m_async_fetcher;
+
+    // Pipeline: HTML -> layout tree (owns the parsed DOM).
+    honeybee::browser::RenderPipeline m_pipeline;
+
+    // ADR-018 Commit 4b: mouse motion controller. Attached to
+    // m_drawing_area; drives RenderState::hovered_element so
+    // the :hover pseudo-class updates as the cursor moves.
+    Glib::RefPtr<Gtk::EventControllerMotion> m_motion_controller;
+
+    // ADR-018 Commit 5: click controller. Attached to
+    // m_drawing_area; turns single-clicks on <a href> into
+    // navigations via on_link_clicked.
+    Glib::RefPtr<Gtk::GestureClick> m_click_controller;
+
+    // Width used in the last layout pass. -1 forces relayout.
+    int m_last_width = -1;
+
+    // ADR-052: height used in the last layout pass. Sourced from
+    // m_scroll_window.get_height() (visible viewport, not DrawingArea
+    // content height). -1 forces relayout on first draw.
+    int m_last_height = -1;
+
+    // Draw handler for the view area (Gtk::DrawingArea).
+    void on_draw(const Cairo::RefPtr<Cairo::Context>& cr, int width, int height);
+
+    // ADR-018 Commit 4b: mouse motion handlers. on_mouse_motion
+    // hit-tests the cursor position, updates the pipeline's
+    // hovered_element, and re-styles; on_mouse_leave clears it.
+    void on_mouse_motion(double x, double y);
+    void on_mouse_leave();
+
+    // ADR-018 Commit 5: click handler. Hit-tests the click,
+    // walks to the nearest <a> ancestor, resolves its href,
+    // and calls navigate_to.
+    void on_link_clicked(double x, double y);
+
+    // Shared fetch path. Called by on_url_activated (URL bar)
+    // and on_link_clicked (link click). Validates, updates
+    // status and URL bar, disables the bar during fetch, and
+    // records the visit on success.
+    void navigate_to(const std::string& url,
+                     honeybee::browser::NavKind kind =
+                         honeybee::browser::NavKind::New);
+
+    // ADR-019: sync Back/Forward button sensitivity to history.
+    void update_nav_buttons();
+
+    // ADR-021: after any layout change, set the DrawingArea's
+    // size request to the current layout height so ScrolledWindow
+    // shows a scrollbar when content overflows the viewport.
+    void sync_drawing_area_size();
+
+    // Run the full pipeline and repaint.
+    void render_html(const std::string& html);
+
+    // ADR-025: render a pre-parsed DOM with pre-fetched merged CSS.
+    // Used by the navigation callback after fetching external
+    // stylesheets, and by the Back/Forward cache-hit path.
+    void render_with_preparsed_doc(
+        std::unique_ptr<honeybee::renderer::dom::Document> doc,
+        std::string merged_css);
+
+    // ADR-025: collect and fetch external CSS referenced by `doc`,
+    // merging with inline <style> content. Applies caps: max 10
+    // stylesheets, 5s total. Failures are skipped.
+    std::string collect_and_fetch_css(
+        const honeybee::renderer::dom::Document& doc,
+        const std::string& base_url);
 };

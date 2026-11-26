@@ -1,48 +1,159 @@
+// =============================================================
+// الملف: تنفيذ نافذة هَني بي
+// الغرض: تنفيذ الصنف الرئيسي للنافذة.
+//
+// هذا الملف يحتوي على خمس دوال:
+// المُنشئ: يبني الواجهة كاملة ويربط الإشارات.
+// معالج ضغط الإدخال: عند ضغط مفتاح الإدخال في شريط العنوان.
+// معالج الرجوع: عند الضغط على زر الرجوع.
+// معالج التقدم: عند الضغط على زر التقدم.
+// معالج إعادة التحميل: عند الضغط على زر إعادة التحميل.
+// =============================================================
+
+// استيراد إعلان الصنف نفسه.
+#include <cstdlib>
+#include <algorithm>
+#include "base/log.hpp"
 #include "window.hpp"
+
+#include <cmath>
+#include <chrono>
+
+#include "net/client.hpp"
+#include "renderer/html/convert.hpp"
+#include "renderer/html/css_sources.hpp"
+
+// استيراد دالة الإصدار لعرض رقم الإصدار.
+#include "base/version.hpp"
+
+// استيراد دالة التحقق من الرابط.
+#include "base/url.hpp"
+#include "renderer/html/preview.hpp"
+
+namespace dom = honeybee::renderer::dom;
+using honeybee::browser::NavKind;
+
+// =============================================================
+// المُنشئ: بناء الواجهة
+//
+// المُنشئ مسؤول عن:
+// ضبط خصائص النافذة، مثل العنوان والحجم.
+// بناء كل عناصر الواجهة.
+// ربط الإشارات بالمعالجات.
+// تجميع العناصر في شجرة التخطيط.
+//
+// قائمة التهيئة ضرورية لأن بعض الأعضاء تحتاج معاملات
+// في المُنشئ، مثل اتجاه الحاوية.
+// =============================================================
 
 HoneyBeeWindow::HoneyBeeWindow()
     : m_root_box(Gtk::Orientation::VERTICAL),
       m_toolbar_box(Gtk::Orientation::HORIZONTAL),
       m_status_bar(Gtk::Orientation::HORIZONTAL) {
+
+    // ---------------------------------------------------------
+    // الخطوة الأولى: ضبط خصائص النافذة
+    // ---------------------------------------------------------
     set_title("HoneyBee Browser — متصفح");
     set_default_size(1024, 768);
 
-    // إعداد أزرار التنقل: رجوع، تقدم، إعادة التحميل
+    // ---------------------------------------------------------
+    // الخطوة الثانية: إعداد أزرار التنقل
+    //
+    // كل زر له ثلاثة إعدادات:
+    // التسمية، وهي رمز يمثل الوظيفة.
+    // التلميح، وهو نص يظهر عند المرور بالماوس.
+    // الإشارة، وهي الدالة التي تُستدعى عند الضغط.
+    // ---------------------------------------------------------
+
     m_back_button.set_label("←");
     m_forward_button.set_label("→");
     m_reload_button.set_label("↻");
 
-    // تلميحات توضيحية تظهر عند المرور بالماوس
     m_back_button.set_tooltip_text("رجوع");
     m_forward_button.set_tooltip_text("تقدم");
     m_reload_button.set_tooltip_text("إعادة التحميل");
 
-    // تعطيل الأزرار مؤقتاً لأن التنقل لم يُفعَّل بعد
+    // الأزرار الثلاثة مُفعَّلة الآن.
+    // إعادة التحميل تعمل فعلياً.
+    // أما الرجوع والتقدم، فيعرضان رسالة فقط، حتى
+    // يُبنى سجل التنقل في مهمة لاحقة.
+    // ADR-019: Back/Forward start disabled -- history empty.
+    // Reload stays enabled but shows a status message if no URL
+    // has been loaded yet.
     m_back_button.set_sensitive(false);
     m_forward_button.set_sensitive(false);
-    m_reload_button.set_sensitive(false);
+    m_reload_button.set_sensitive(true);
 
-    // شريط العنوان: حقل نص أحادي السطر
+    // ربط إشارة الضغط بمعالج كل زر.
+    // الدالة الداخلية تلتقط هذا الكائن، للوصول إلى
+    // الدالة العضو المناسبة.
+    m_back_button.signal_clicked().connect(
+        [this]() { on_back_clicked(); });
+
+    m_forward_button.signal_clicked().connect(
+        [this]() { on_forward_clicked(); });
+
+    m_reload_button.signal_clicked().connect(
+        [this]() { on_reload_clicked(); });
+
+    // ---------------------------------------------------------
+    // الخطوة الثالثة: إعداد شريط العنوان
+    // ---------------------------------------------------------
+
+    // نص مؤقت يظهر عندما يكون الحقل فارغاً.
     m_url_bar.set_placeholder_text("أدخل عنوان الموقع");
-    m_url_bar.set_hexpand(true);    // يمتد أفقياً ليملأ المساحة المتبقية
 
-    // تجميع الأزرار وشريط العنوان في صف أفقي واحد
+    // يمتد أفقياً ليملأ المساحة المتبقية من شريط الأدوات.
+    m_url_bar.set_hexpand(true);
+
+    // ربط إشارة التنشيط، التي تُطلَق عند ضغط مفتاح
+    // الإدخال، بالمعالج الخاص بنا.
+    m_url_bar.signal_activate().connect(
+        [this]() { on_url_activated(); });
+
+    // ---------------------------------------------------------
+    // الخطوة الرابعة: تجميع شريط الأدوات
+    //
+    // نستخدم حاوية أفقية لتجميع العناصر بجانب بعضها:
+    // زر الرجوع، ثم التقدم، ثم إعادة التحميل، ثم شريط
+    // العنوان الذي يمتد ليملأ ما تبقى.
+    // ---------------------------------------------------------
+
     m_toolbar_box.set_spacing(6);   // مسافة بين العناصر
-    m_toolbar_box.set_margin(6);    // هامش خارجي حول الشريط
+    m_toolbar_box.set_margin(6);    // هامش خارجي
+
     m_toolbar_box.append(m_back_button);
     m_toolbar_box.append(m_forward_button);
     m_toolbar_box.append(m_reload_button);
     m_toolbar_box.append(m_url_bar);
 
-    // النص المؤقت أسفل شريط الأدوات
-    m_label.set_text("HoneyBee Browser\n\nالمرحلة صفر — الإصدار 0.1.0\n\nسيُعرض محتوى الصفحة هنا");
-    m_label.set_justify(Gtk::Justification::CENTER);
-    m_label.set_margin(24);
-    m_label.set_vexpand(true);      // يمتد رأسياً ليملأ المساحة المتبقية
+    // ---------------------------------------------------------
+    // الخطوة الخامسة: إعداد منطقة العرض
+    //
+    // في المرحلة الحالية، نستخدم نصاً لعرض محتوى
+    // الصفحة. ولاحقاً، سيُستبدَل بمحرك عرض حقيقي.
+    //
+    // نبني النص الافتراضي بإضافة رقم الإصدار من الدالة،
+    // وهذا يضمن وجود الإصدار في مكان واحد فقط.
+    // ---------------------------------------------------------
 
-    // إعداد شريط الحالة في الأسفل
+    // ---------------------------------------------------------
+    // الخطوة السادسة: إعداد شريط الحالة
+    //
+    // الشريط يتكون من عنصرين:
+    // نص الحالة، وهو على اليسار.
+    // رقم الإصدار، وهو على اليمين.
+    // ---------------------------------------------------------
+
     m_status_label.set_text("جاهز");
-    m_version_label.set_text("v0.1.0");
+
+    // نستخدم نفس دالة الإصدار، بادئة بحرف الفاء اللاتيني
+    // الصغير للإشارة إلى الإصدار.
+    m_version_label.set_text("v" + honeybee::version_string());
+
+    // الامتداد الأفقي والمحاذاة إلى النهاية يدفعان
+    // الإصدار إلى أقصى اليمين.
     m_version_label.set_hexpand(true);
     m_version_label.set_halign(Gtk::Align::END);
 
@@ -50,10 +161,590 @@ HoneyBeeWindow::HoneyBeeWindow()
     m_status_bar.append(m_status_label);
     m_status_bar.append(m_version_label);
 
-    // التخطيط العمودي: شريط الأدوات في الأعلى، النص في الوسط، وشريط الحالة في الأسفل
+    // ---------------------------------------------------------
+    // الخطوة السابعة: التجميع النهائي
+    //
+    // نُضيف العناصر الثلاثة إلى الحاوية الرئيسية من
+    // الأعلى إلى الأسفل:
+    // شريط الأدوات.
+    // منطقة العرض.
+    // شريط الحالة.
+    // ---------------------------------------------------------
+
     m_root_box.append(m_toolbar_box);
-    m_root_box.append(m_label);
+
+    // ADR-021: wrap the drawing area in a ScrolledWindow so
+    // content taller than the viewport is scrollable. The
+    // DrawingArea's size request grows to the full layout
+    // height (set by sync_drawing_area_size after every
+    // relayout); ScrolledWindow then provides vertical scroll.
+    // Horizontal scroll is disabled -- v1 lays out at viewport
+    // width, no horizontal overflow.
+    // Pointer coordinates remain in layout space: GDK
+    // translates via the widget hierarchy, so hit-test and
+    // hover from ADR-018/019/020 need no changes.
+    // ADR-069: spacer-tetris. DrawingArea stays viewport-sized;
+    // spacers above/below provide the scrollable content height.
+    m_content_box.append(m_top_spacer);
+    m_content_box.append(m_drawing_area);
+    m_content_box.append(m_bottom_spacer);
+    m_scroll_window.set_child(m_content_box);
+    m_scroll_window.set_policy(Gtk::PolicyType::NEVER,
+                               Gtk::PolicyType::AUTOMATIC);
+    // ADR-021: non-overlay scrollbar takes real space on the
+    // right and is visibly present when content overflows.
+    // Overlay scrollbars are ~4px semi-transparent and auto-hide
+    // between gestures -- easy to miss, and harder to drag.
+    m_scroll_window.set_overlay_scrolling(false);
+    m_scroll_window.set_vexpand(true);
+
+    // ADR-069: listen to ScrolledWindow's vadjustment.
+    // value_changed fires on every scroll position change; the
+    // handler updates m_scroll_y, resizes the tetris so the
+    // DrawingArea stays anchored to the viewport, and queues
+    // a repaint at the new content offset.
+    m_vadjustment = m_scroll_window.get_vadjustment();
+
+    if (m_vadjustment) {
+        m_vadjustment->signal_value_changed().connect([this]() {
+            m_scroll_y = m_vadjustment->get_value();
+            HB_LOG(Paint, Trace, "SCROLL: m_scroll_y=%.2f", m_scroll_y);
+            sync_drawing_area_size();
+            m_drawing_area.queue_draw();
+        });
+    }
+    m_root_box.append(m_scroll_window);
+
     m_root_box.append(m_status_bar);
 
+    // نُعيّن الحاوية الرئيسية كالابن الوحيد للنافذة.
+    // View area setup: draw callback and welcome page.
+    m_drawing_area.set_hexpand(true);
+    // ADR-069: vexpand must be false -- DrawingArea's height is
+    // exactly viewport_h via size_request, set by tetris logic.
+    m_drawing_area.set_vexpand(false);
+    m_drawing_area.set_draw_func(
+        [this](const Cairo::RefPtr<Cairo::Context>& cr, int w, int h) {
+            on_draw(cr, w, h);
+        });
+
+    // ADR-018 Commit 4b: mouse motion drives :hover. GTK4
+    // reports motion events in logical pixels, same units the
+    // layout tree uses, so no scale-factor conversion needed.
+    m_motion_controller = Gtk::EventControllerMotion::create();
+    m_motion_controller->signal_motion().connect(
+        [this](double x, double y) { on_mouse_motion(x, y); });
+    m_motion_controller->signal_leave().connect(
+        [this]() { on_mouse_leave(); });
+    m_drawing_area.add_controller(m_motion_controller);
+
+    // ADR-018 Commit 5: click navigation. A GestureClick on the
+    // drawing area navigates when the release point is over an
+    // <a href>. n_press == 1 skips the second release of a
+    // double-click (which fires n_press == 2).
+    m_click_controller = Gtk::GestureClick::create();
+    m_click_controller->signal_released().connect(
+        [this](int n_press, double x, double y) {
+            if (n_press == 1) on_link_clicked(x, y);
+        });
+    m_drawing_area.add_controller(m_click_controller);
+
+    const std::string welcome =
+        "<html><head><title>HoneyBee Browser</title>"
+        "<style>"
+        "body { margin: 20px; }"
+        "h1 { font-size: 32px; color: #d35400; }"
+        "p { font-size: 16px; color: #333; padding: 4px; }"
+        "</style></head><body>"
+        "<h1>HoneyBee Browser</h1>"
+        "<p>Version " + honeybee::version_string() + "</p>"
+        "<p>Type a URL above and press Enter to load a page.</p>"
+        "<p>هذا نص عربي. Rendered via Pango for correct shaping.</p>"
+        "</body></html>";
+    render_html(welcome);
+
     set_child(m_root_box);
+}
+
+// =============================================================
+// معالج ضغط الإدخال: معالجة ضغط مفتاح الإدخال في شريط
+// العنوان
+//
+// المنطق:
+// نأخذ النص من شريط العنوان.
+// نتحقق من صحته بدالة التحقق.
+// فإن كان خاطئاً، نُحدّث شريط الحالة فوراً ونخرج.
+// وإن كان صحيحاً:
+// نُحدّث شريط الحالة برسالة جارٍ الجلب.
+// نُعطّل حقل الإدخال، لمنع جلبتين متزامنتين.
+// نبدأ الجلب في الخيط الخلفي.
+// وفي رد النداء، الذي يُنفَّذ في الخيط الرئيسي:
+// نُعيد تفعيل حقل الإدخال.
+// فإن فشل الجلب، نعرض رسالة فشل.
+// وإن نجح، نعرض أول خمس مئة حرف من المحتوى،
+// ونحفظ الرابط في العضو المخصص لسجل التنقل.
+// =============================================================
+
+void HoneyBeeWindow::on_url_activated() {
+    // Delegate to navigate_to so the fetch path is shared with
+    // on_link_clicked (Commit 5, ADR-018).
+    navigate_to(m_url_bar.get_text(), NavKind::New);
+}
+
+void HoneyBeeWindow::navigate_to(const std::string& url, NavKind kind) {
+
+    // الخطوة الثانية: التحقق من الرابط.
+    if (!honeybee::is_valid_url(url)) {
+        // رابط خاطئ. نُحدّث الشريط ونخرج. لا جلب.
+        m_status_label.set_text("رابط غير صالح");
+        return;
+    }
+
+    // ADR-020: cache short-circuit for Back/Forward. On a hit,
+    // we bypass the fetch entirely -- no "جارٍ الجلب..." state,
+    // no button disable. Back feels instant because it is.
+    // New and Reload always fetch (see the ADR: without HTTP
+    // cache headers, serving stale content on an explicit
+    // navigation would be surprising).
+    if (kind == NavKind::Back || kind == NavKind::Forward) {
+        if (auto entry = m_cache.get_entry(url)) {
+            m_current_url = url;
+            m_url_bar.set_text(url);
+            // record_visit must still fire: RenderState::base_url
+            // is used for relative-href resolution during cascade,
+            // and visited_urls re-insertion is idempotent.
+            m_pipeline.record_visit(url);
+            update_nav_buttons();
+            // ADR-025: re-render from cache with both HTML and
+            // external CSS -- no re-fetch. Both fields were stored
+            // together on the original successful load.
+            auto doc = honeybee::renderer::html::parse(entry->html);
+            render_with_preparsed_doc(std::move(doc),
+                                      entry->external_css);
+            m_status_label.set_text(
+                "من الذاكرة، الحجم: " +
+                std::to_string(entry->html.size() +
+                               entry->external_css.size()) +
+                " بايت");
+            return;
+        }
+    }
+
+    // الخطوة الثالثة: تجهيز الواجهة للجلب.
+    // When called from on_link_clicked, the URL bar hasn't been
+    // updated -- show the destination. When called from
+    // on_url_activated, this is a no-op (same text).
+    m_url_bar.set_text(url);
+    m_status_label.set_text("جارٍ الجلب...");
+
+    // تعطيل الحقل، لأن الجالب اللاتزامني لا يدعم
+    // جلبتين متزامنتين.
+    m_url_bar.set_sensitive(false);
+
+    // ADR-019: disable nav buttons during in-flight fetch to
+    // prevent racing with the async navigation. update_nav_buttons()
+    // restores them in the fetch callback.
+    m_back_button.set_sensitive(false);
+    m_forward_button.set_sensitive(false);
+
+    // الخطوة الرابعة: بدء الجلب في الخيط الخلفي.
+    //
+    // الدالة الداخلية تلتقط هذا الكائن، للوصول إلى
+    // أعضاء النافذة. والمعامل يُمرَّر بالقيمة، لأنه
+    // نتيجة جلب واحدة.
+    //
+    // ملاحظة مهمة: هذا الرد يُنفَّذ في الخيط الرئيسي،
+    // بفضل الموزِّع داخل الجالب اللاتزامني. لذا تحديث
+    // الواجهة هنا آمن تماماً.
+    m_async_fetcher.fetch(url, [this, url, kind](honeybee::net::Response r) {
+
+        // إعادة تفعيل حقل الإدخال، لتمكين جلب جديد.
+        m_url_bar.set_sensitive(true);
+
+        // الخطوة الخامسة: معالجة نتيجة الجلب.
+
+        // حالة الفشل: رمز الحالة ليس في نطاق النجاح.
+        if (!r.success()) {
+            // ADR-019: on Back/Forward failure, roll the cursor
+            // back so the user isn't stranded on a page they
+            // didn't navigate to. New failures don't touch
+            // history (push is deferred to success). Reload
+            // never touched history in the first place.
+            if (kind == NavKind::Back)    (void)m_history.forward();
+            if (kind == NavKind::Forward) (void)m_history.back();
+
+            // Restore the URL bar to the current (unchanged)
+            // URL -- the user is still on the previous page.
+            if (!m_current_url.empty()) {
+                m_url_bar.set_text(m_current_url);
+            }
+            m_status_label.set_text(
+                "فشل الجلب، رمز الحالة: " +
+                std::to_string(r.status_code));
+            update_nav_buttons();
+            return;
+        }
+
+        // حالة النجاح: نحفظ الرابط في العضو المخصص،
+        // لاستخدامه في إعادة التحميل لاحقاً.
+        m_current_url = url;
+
+        // ADR-018: mark this URL as visited and set it as the
+        // base URL for the page about to be rendered. This
+        // makes :visited match correctly during cascade, and
+        // resolves the page's relative hrefs against the page
+        // URL rather than against an empty base.
+        m_pipeline.record_visit(url);
+
+        // ADR-025: parse HTML once, then collect + fetch external
+        // CSS. parse() is reused for the subsequent render, so we
+        // don't pay double-parse cost.
+        auto doc = honeybee::renderer::html::parse(r.body);
+        std::string merged_css;
+        if (doc) {
+            merged_css = collect_and_fetch_css(*doc, url);
+        }
+
+        // ADR-025: cache HTML + external CSS together. Back/Forward
+        // re-renders from cache without re-fetching either.
+        m_cache.put(url, r.body, merged_css);
+
+        // ADR-019: history bookkeeping. New pushes; Back/Forward
+        // cursor was already moved by the caller; Reload doesn't
+        // touch history. update_nav_buttons() runs after to
+        // reflect the new can_back/can_forward state.
+        if (kind == NavKind::New) {
+            m_history.push(url);
+        }
+        update_nav_buttons();
+
+        // Run the full render pipeline with merged CSS.
+        render_with_preparsed_doc(std::move(doc), std::move(merged_css));
+
+        // تحديث شريط الحالة بحجم المحتوى الكامل.
+        m_status_label.set_text(
+            "تم الجلب، الحجم: " +
+            std::to_string(r.body.size()) + " بايت");
+    });
+}
+
+// =============================================================
+// معالج الرجوع: عند الضغط على زر الرجوع
+//
+// في المرحلة الحالية، لا يوجد سجل تنقل حقيقي.
+// لذا نعرض رسالة فقط في شريط الحالة.
+// سجل التنقل الحقيقي مهمة لاحقة.
+// =============================================================
+
+void HoneyBeeWindow::on_back_clicked() {
+    auto target = m_history.back();
+    if (!target) return;  // button should be disabled if !can_back
+    navigate_to(*target, NavKind::Back);
+}
+
+// =============================================================
+// معالج التقدم: عند الضغط على زر التقدم
+//
+// في المرحلة الحالية، لا يوجد سجل تنقل حقيقي.
+// لذا نعرض رسالة فقط في شريط الحالة.
+// سجل التنقل الحقيقي مهمة لاحقة.
+// =============================================================
+
+void HoneyBeeWindow::on_forward_clicked() {
+    auto target = m_history.forward();
+    if (!target) return;  // button should be disabled if !can_forward
+    navigate_to(*target, NavKind::Forward);
+}
+
+// =============================================================
+// معالج إعادة التحميل: عند الضغط على زر إعادة التحميل
+//
+// المنطق:
+// إن كان هناك رابط محفوظ، نضعه في شريط العنوان،
+// ثم نعيد معالجة الرابط، فيبدأ الجلب من جديد.
+// وإن لم يكن هناك رابط محفوظ، نعرض رسالة قصيرة.
+// =============================================================
+
+void HoneyBeeWindow::on_reload_clicked() {
+    if (m_current_url.empty()) {
+        m_status_label.set_text("لا يوجد رابط لإعادة تحميله");
+        return;
+    }
+    // ADR-019: NavKind::Reload so history is untouched -- pressing
+    // Reload N times must not create N history entries.
+    navigate_to(m_current_url, NavKind::Reload);
+}
+
+void HoneyBeeWindow::update_nav_buttons() {
+    m_back_button.set_sensitive(m_history.can_back());
+    m_forward_button.set_sensitive(m_history.can_forward());
+}
+
+// =============================================================
+// render_html: run the full pipeline and repaint.
+// Called on successful fetch and at startup.
+// =============================================================
+
+void HoneyBeeWindow::render_html(const std::string& html) {
+    // ADR-052: pass m_scroll_window.get_height() (visible viewport)
+    // alongside the DrawingArea width.
+    m_pipeline.render(html,
+                      static_cast<float>(m_drawing_area.get_width()),
+                      static_cast<float>(m_scroll_window.get_height()));
+    sync_drawing_area_size();
+
+    const std::string title = m_pipeline.title();
+    if (!title.empty()) {
+        set_title(title + " — HoneyBee");
+    }
+    m_drawing_area.queue_draw();
+
+}
+
+// =============================================================
+// ADR-025: render_with_preparsed_doc -- renders a pre-parsed
+// document with pre-fetched merged CSS. Symmetric to render_html;
+// handles the status/title/draw updates that render_html does.
+// =============================================================
+
+void HoneyBeeWindow::render_with_preparsed_doc(
+    std::unique_ptr<honeybee::renderer::dom::Document> doc,
+    std::string merged_css) {
+    // ADR-052: pass m_scroll_window.get_height() alongside width.
+    m_pipeline.render_with_css(
+        std::move(doc), std::move(merged_css),
+        static_cast<float>(m_drawing_area.get_width()),
+        static_cast<float>(m_scroll_window.get_height()));
+    sync_drawing_area_size();
+    const std::string title = m_pipeline.title();
+    if (!title.empty()) {
+        set_title(title + " — HoneyBee");
+    }
+    m_drawing_area.queue_draw();
+
+}
+
+// =============================================================
+// ADR-025: collect_and_fetch_css -- walk the document, extract
+// inline <style> and external <link rel=stylesheet>, fetch the
+// external ones, concatenate everything into a single CSS string.
+//
+// Caps: max 10 external stylesheets, 5s total. Failures are
+// skipped (a page with some CSS is better than a blank page).
+//
+// Known v1 limitation: this blocks the main thread during the
+// synchronous CSS fetches (~200-500ms on Wikipedia). See ADR-025
+// Design Decisions.
+// =============================================================
+
+std::string HoneyBeeWindow::collect_and_fetch_css(
+    const honeybee::renderer::dom::Document& doc,
+    const std::string& base_url) {
+    constexpr std::size_t kMaxCssSources = 10;
+    constexpr auto kTimeout = std::chrono::seconds(5);
+
+    std::string merged_css;
+    std::size_t fetched_count = 0;
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+
+    for (const auto& src :
+         honeybee::renderer::html::collect_css_sources(doc)) {
+        if (src.inline_style) {
+            merged_css += src.content;
+            merged_css += "\n";
+            continue;
+        }
+        if (fetched_count >= kMaxCssSources) continue;
+        if (std::chrono::steady_clock::now() > deadline) continue;
+
+        // ADR-025: resolve protocol-relative URLs (//host/path)
+        // by inheriting the scheme from base_url; everything else
+        // goes through honeybee::resolve_url.
+        std::string css_url = src.content;
+        if (css_url.size() >= 2 && css_url[0] == '/' &&
+            css_url[1] == '/') {
+            const auto scheme_end = base_url.find("://");
+            if (scheme_end != std::string::npos) {
+                css_url = base_url.substr(0, scheme_end + 1) + css_url;
+            }
+        } else {
+            css_url = honeybee::resolve_url(css_url, base_url);
+        }
+
+        if (!honeybee::is_valid_url(css_url)) continue;
+
+        const auto css_resp = honeybee::net::fetch(css_url);
+        if (css_resp.success()) {
+            merged_css += css_resp.body;
+            merged_css += "\n";
+            ++fetched_count;
+        }
+    }
+    return merged_css;
+}
+
+// =============================================================
+// on_draw: paint the layout tree on the DrawingArea.
+// Relayouts if the viewport width has changed since the last draw.
+// =============================================================
+
+void HoneyBeeWindow::on_draw(const Cairo::RefPtr<Cairo::Context>& cr,
+                             int width, int /*height*/) {
+    // ADR-021: width is the DrawingArea's allocated width (which
+    // shrinks if a vertical scrollbar appears); height is the
+    // full DrawingArea height (= layout height), not the
+    // viewport. We paint the entire layout tree; Cairo clips to
+    // the visible viewport region automatically.
+    //
+    // ADR-052: viewport height is m_scroll_window.get_height()
+    // (visible viewport), NOT the DrawingArea's height parameter
+    // (which is content height). Relayout on EITHER width or
+    // height change.
+    const int viewport_h = m_scroll_window.get_height();
+    
+    // ADR-071: If viewport is not yet allocated, skip layout and drawing.
+    // Waiting for the first valid allocation prevents the layout tree from
+    // collapsing to 0-height, which would break culling during scroll.
+    if (width <= 0 || viewport_h <= 0) {
+        return;
+    }
+
+    if (width != m_last_width || viewport_h != m_last_height) {
+        m_last_width = width;
+        m_last_height = viewport_h;
+        m_pipeline.relayout(static_cast<float>(width),
+                            static_cast<float>(viewport_h));
+        sync_drawing_area_size();
+    }
+
+    // White background.
+    cr->set_source_rgb(1.0, 1.0, 1.0);
+    cr->paint();
+
+    // ADR-069: translate by -scroll_y so layout y=scroll_y maps
+    // to DrawingArea y=0. Pass visible range so paint() culls
+    // off-screen subtrees (avoids walking the full 30,000px tree
+    // every frame).
+    cr->save();
+    cr->translate(0.0, -m_scroll_y);
+    const float visible_top = static_cast<float>(m_scroll_y);
+    const float visible_bottom =
+        static_cast<float>(m_scroll_y + viewport_h);
+    m_pipeline.paint(cr->cobj(), visible_top, visible_bottom);
+    cr->restore();
+}
+
+void HoneyBeeWindow::sync_drawing_area_size() {
+    if (!m_pipeline.has_page()) return;
+    // ADR-069: use ScrolledWindow height (always allocated) as
+    // the viewport anchor. m_last_width would be -1 until the
+    // first on_draw, but sync must run from render_html to give
+    // DrawingArea nonzero height so on_draw can fire at all.
+    // ADR-073 (extended): h_px is a const getter -- safe to call
+    // before early returns so the trace always shows the numbers
+    // that would have been used, even when we bail.
+    const int viewport_h = m_scroll_window.get_height();
+    const float h = m_pipeline.layout_height();
+    const int h_px = static_cast<int>(std::ceil(h));
+    const int t_top  = static_cast<int>(m_scroll_y);
+    const int t_draw = std::min(viewport_h, h_px);
+    const int t_bot  = std::max(0, h_px - t_top - t_draw);
+    HB_LOG(Layout, Trace,
+        "sync: viewport_h=%d h_px=%d scroll_y=%.2f tetris=(%d,%d,%d)",
+        viewport_h, h_px, m_scroll_y, t_top, t_draw, t_bot);
+    if (viewport_h <= 0) return;
+    if (h <= 0.0f) return;
+
+    // ADR-069: spacer-tetris. sum = top + viewport + bottom
+    // = h_px (content height). DrawingArea always occupies the
+    // visible slice at scroll_y in box coords.
+    const int scroll_y_px = static_cast<int>(m_scroll_y);
+    const int drawing_area_h = std::min(viewport_h, h_px);
+    const int bottom_h =
+        std::max(0, h_px - scroll_y_px - drawing_area_h);
+    m_top_spacer.set_size_request(-1, scroll_y_px);
+    m_drawing_area.set_size_request(-1, drawing_area_h);
+    m_bottom_spacer.set_size_request(-1, bottom_h);
+}
+
+// =============================================================
+// ADR-018 Commit 4b: mouse motion handlers.
+//
+// On every motion event, hit-test the cursor position, compare
+// against the current hovered_element, and if it changed:
+// update the pipeline's RenderState, re-run cascade + layout
+// (v1 cost — a restyle-only path is a future optimization),
+// and queue a repaint.
+//
+// on_mouse_leave fires when the cursor exits the drawing area.
+// =============================================================
+
+void HoneyBeeWindow::on_mouse_motion(double x, double y) {
+    // ADR-069: DrawingArea is viewport-sized; add scroll offset
+    // to convert viewport y to layout y.
+    y = y + m_scroll_y;
+    if (!m_pipeline.has_page()) return;
+
+    const auto* el = m_pipeline.hit_test(
+        static_cast<float>(x), static_cast<float>(y));
+
+    // No change: skip restyle (avoids churn on intra-element motion).
+    if (el == m_pipeline.state().hovered_element) return;
+
+    m_pipeline.set_hovered_element(el);
+    // ADR-021: restyle instead of relayout. Re-cascades and
+    // updates colors in place; skips layout entirely. Hover
+    // becomes sub-frame-latency regardless of page size.
+    m_pipeline.restyle();
+    m_drawing_area.queue_draw();
+}
+
+void HoneyBeeWindow::on_mouse_leave() {
+    if (!m_pipeline.has_page()) return;
+    if (m_pipeline.state().hovered_element == nullptr) return;
+
+    m_pipeline.set_hovered_element(nullptr);
+    // ADR-021: restyle, not relayout.
+    m_pipeline.restyle();
+    m_drawing_area.queue_draw();
+}
+
+// =============================================================
+// ADR-018 Commit 5: link-click navigation.
+//
+// Hit-tests the click, walks up the DOM to find the nearest
+// <a> ancestor (hit_test may return <strong>/<em> inside the
+// <a>), extracts href, resolves it against the current page's
+// base URL, and navigates via navigate_to.
+// =============================================================
+
+void HoneyBeeWindow::on_link_clicked(double x, double y) {
+    // ADR-069: same as on_mouse_motion -- viewport-relative y.
+    y = y + m_scroll_y;
+    if (!m_pipeline.has_page()) return;
+
+    const auto* el = m_pipeline.hit_test(
+        static_cast<float>(x), static_cast<float>(y));
+    if (!el) return;
+
+    const dom::Element* a = el;
+    while (a && a->tag() != "a") {
+        const dom::Node* p = a->parent();
+        a = (p && p->type() == dom::NodeType::Element)
+            ? static_cast<const dom::Element*>(p)
+            : nullptr;
+    }
+    if (!a) return;
+
+    const std::string href = a->get_attribute("href");
+    if (href.empty()) return;
+
+    const std::string resolved =
+        honeybee::resolve_url(href, m_pipeline.state().base_url);
+    if (!honeybee::is_valid_url(resolved)) {
+        m_status_label.set_text("رابط غير صالح");
+        return;
+    }
+
+    navigate_to(resolved, NavKind::New);
 }

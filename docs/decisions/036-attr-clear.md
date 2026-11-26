@@ -1,0 +1,675 @@
+# ADR-036: Attribute Selectors + `clear` Property
+
+**Status:** Implemented
+**Date:** 2026-10-27
+**Deciders:** Amr Muhammad (maintainer)
+**Relates to:** ADR-031 (float v1), ADR-034 (`<img>` paint), ADR-035 (image layout integration)
+
+## Context
+
+ADR-035's Implementation section recorded an honest finding:
+below-fold thumbnails have real heights in the tree
+(`<img>` 250x250 inside a container), but the **containers
+don't float right**. Tree dump post-ADR-035:
+
+    FOUND IMG as Box x=324 y=1297 w=926 h=0  (JPEG, fails to decode)
+    FOUND IMG as Box x=346 y=6481 w=250 h=250  (HTML5 logo — left-aligned!)
+    FOUND IMG as Box x=346 y=14924 w=250 h=177  (categories diagram)
+
+The `x=346` means the `<img>` sits at the content-left of
+some container, not at the right edge of a right-float. That's
+a **cascade coverage gap**, not a float layout bug.
+
+### Measurement (2026-10-27, Wikipedia CSS + HTML)
+
+**Wikipedia's thumbnail rule** (13 matching selectors, all
+identical shape):
+
+```css
+figure[typeof~='mw:File/Thumb'],
+figure[typeof~='mw:File/Frame'] {
+    display: table;
+    text-align: center;
+    border-collapse: collapse;
+    line-height: 0;
+    margin: 0.5em 0 1.3em 1.4em;
+    clear: right;
+    float: right;
+}
+```
+
+Two things prevent it from matching:
+
+1. **`[typeof~='mw:File/Thumb']`** is a word-token attribute
+   selector. Our cascade likely doesn't support `[attr~=val]`
+   syntax (verified in Commit 1's diagnostic).
+2. Even if it matched, **`clear: right`** isn't parsed by our
+   layout (confirmed: `grep '"clear"'` in `src/renderer/css/`
+   and `src/renderer/layout/` returns empty).
+
+**`clear` distribution in Wikipedia CSS** (20 total):
+
+| Value | Count |
+|---|---|
+| `clear: both` | 7 |
+| `clear: right` | 5 |
+| `clear: none` | 4 |
+| `clear: left` | 3 |
+| `clear: right !important` | 1 |
+
+Full scope worth supporting.
+
+**Article body container** (`flow-root` / `overflow: hidden`):
+no matching rules detected. Either absent or in `@media` we
+don't parse. **Parent height still won't include float
+heights** — documented v1 limitation.
+
+**Honest timing correction to ADR-035**: measurement now
+shows **6.3 sec** render (was 5.0-5.5 sec pre-ADR-035).
+ADR-035's spec predicted 5.3-5.8 sec; actual is 6.3 sec —
+**1 second added**, 2-3x the predicted cost. Real cost of 8
+sync fetches at layout time on cold cache. Documented in
+this ADR and corrected in a Post-ADR-035 note.
+
+### What this fixes
+
+After both cascade + layout fixes:
+
+- `figure[typeof~='mw:File/Thumb']` matches → `float: right`
+  applies → figure positions at right edge of article body
+- `clear: right` on float → consecutive floats stack vertically
+  instead of overlapping at right edge
+- `clear: right` on following blocks (if any) → those blocks
+  jump below the float
+- Thumbnail `<img>` inside the float stays at 250×250 (from
+  ADR-035) — the figure containers it correctly
+
+### What this ADR does NOT fix
+
+- **Article body height still doesn't include float heights** —
+  needs `display: flow-root` or `overflow: hidden` on the
+  article container (ADR-037 if needed)
+- **Navbox overlap at x=324** (separate ADR-037/own-follow-up)
+- **JPEG decode** (needs `libjpeg-turbo`, deferred since
+  ADR-034)
+- **First-viewport appearance** — thumbnails are below fold.
+  This ADR's visible delta is **below-fold only**.
+
+## Decision
+
+Two coupled fixes shipped together.
+
+### 1. Cascade: attribute selector support
+
+Extend the selector parser and matcher to handle all seven
+attribute selector forms:
+
+| Form | Matches |
+|---|---|
+| `[attr]` | Element has `attr` at all |
+| `[attr=val]` | `attr` equals `val` exactly |
+| `[attr~=val]` | `attr` is space-separated list containing `val` |
+| `[attr\|=val]` | `attr` is `val` or starts with `val-` |
+| `[attr^=val]` | `attr` starts with `val` |
+| `[attr$=val]` | `attr` ends with `val` |
+| `[attr*=val]` | `attr` contains `val` |
+
+**Selectors AST** currently represents compound selectors as
+strings + kind. Attribute selectors need a structured
+representation:
+
+```cpp
+struct AttributeSelector {
+    enum class Op { Exists, Equals, Includes, DashMatch,
+                    Prefix, Suffix, Substring };
+    std::string name;
+    std::string value;  // unused for Exists
+    Op op;
+};
+```
+
+Compound selector gains `std::vector<AttributeSelector>
+attributes;`. Match logic checks all attributes against the
+element's `get_attribute(name)`.
+
+**Files touched**: `selector.hpp` (AST), `selector.cpp`
+(parse + match).
+
+### 2. Layout: `clear` property support
+
+Read `clear` from `ComputedStyle::get("clear")` during
+`layout_element`. Two behaviors:
+
+**A. Clear on a float** — forces the float below all previous
+same-direction (or both) floats. In `layout_block_children`'s
+float branch:
+
+```cpp
+if (float_dir == "left" || float_dir == "right") {
+    // ADR-036: clear on a float forces it below prior
+    // same-direction (or both-direction) floats.
+    std::string clear_dir = "none";
+    if (child_style) {
+        if (auto c = child_style->get("clear")) clear_dir = *c;
+    }
+    const bool must_jump =
+        (clear_dir == "both") ||
+        (clear_dir == "right" && float_dir == "right") ||
+        (clear_dir == "left"  && float_dir == "left");
+    if (must_jump) {
+        cursor_y = std::max(cursor_y, float_bottom);
+    }
+    // ... existing float layout ...
+}
+```
+
+This means: two consecutive `clear: right; float: right` figures
+stack vertically (second one starts at `float_bottom` of the
+first) instead of overlapping at the right edge.
+
+**B. Clear on a non-float block** — forces the block below
+all same-direction (or both) floats. In
+`layout_block_children`'s regular block branch, before
+deciding `narrow_x/narrow_w`:
+
+```cpp
+// ADR-036: clear on a non-float block forces it below
+// any same-direction float. If clear_both, jump below both
+// sides; if clear_right/left, jump below that side.
+std::string clear_dir = "none";
+if (child_style) {
+    if (auto c = child_style->get("clear")) clear_dir = *c;
+}
+const bool must_clear_right =
+    (clear_dir == "both" || clear_dir == "right");
+const bool must_clear_left =
+    (clear_dir == "both" || clear_dir == "left");
+if (must_clear_right && float_right_w > 0) {
+    cursor_y = std::max(cursor_y, float_bottom);
+}
+if (must_clear_left && float_left_w > 0) {
+    cursor_y = std::max(cursor_y, float_bottom);
+}
+```
+
+This means: an `<h2>` with `clear: both` (if Wikipedia has
+such a rule) starts below any active float, not beside it.
+
+### What ships together, and why
+
+The two fixes are coupled: cascade alone would make thumbnails
+float right, but consecutive floats would overlap. Layout
+alone wouldn't help — nothing has `float: right` because the
+selector doesn't match. Together they deliver the correct
+visible layout.
+
+ADR-035's `<img>` sizes reserve space inside the figure.
+Figure at right edge (from float). Following text narrows
+(from existing float logic). Consecutive figures stack (from
+new clear handling). That's real Wikipedia.
+
+## Design decisions
+
+### Why `[attr~=val]` first, others as bundle
+
+All seven attribute operators are ~30 lines each once the AST
+exists. The AST is the expensive part (~40-60 lines). Once
+it's in place, adding all seven is cheap and future-proofs
+the cascade for rules like `[role='button']` (16 uses in
+Wikipedia CSS), `[aria-hidden="true"]`, `[href]`.
+
+Bundling all seven matches the arc's pattern (ADR-011 shipped
+all block/inline layout at once; ADR-028 shipped all grid
+features at once). No partial attribute-selector support.
+
+### Why `clear` on both float and non-float
+
+Real CSS `clear` applies to any block-level element. The
+`figure[typeof~='mw:File/Thumb']` rule puts `clear: right` on
+the **float itself** — a spec-standard pattern for stacking
+floats vertically. The article's section headings may have
+`clear: both` — a spec-standard pattern for jumping sections
+below floats. Both are real, both fix real layouts.
+
+Implementing both is ~30 lines beyond the minimal float-only
+version, and matches CSS spec.
+
+### Why not `display: flow-root` in v1
+
+The article body's container (`.mw-parser-output` or
+`mw-content-ltr`) probably has `display: flow-root` or
+`overflow: hidden` in modern Wikimedia CSS — but our
+measurement didn't detect it (either absent or in @media we
+don't parse).
+
+Without flow-root support, article body height **won't
+include float heights**. This means:
+- Article can look "shorter than real Wikipedia" below a
+  floated thumbnail
+- Following sections may appear to overlap the float's bottom
+  visually in extreme cases
+
+For the current HTML article specifically: thumbnails are 8443
+and 8443+ px apart, so no overlap in practice. But structurally
+incomplete.
+
+**Deferred to ADR-037** (`display: flow-root` or
+`overflow: hidden` for float-containing parents). Real,
+principled, its own cycle.
+
+### Why not navbox hide in this ADR
+
+The `navbox/sidebar` overlap at x=324 (visible in ADR-035's
+PNG) is a **separate defect**. It's a `<table class="sidebar">`
+or `<table class="navbox">` variant that ADR-031's
+`.sidebar{display:none !important}` isn't matching — likely
+a different class token.
+
+Adding a broad `.navbox{display:none}` would probably help but
+risks hiding legitimate article content (some navboxes are
+intentional). Better as its own focused diagnostic.
+
+## Deferred (ADR-037+ candidates)
+
+- **`display: flow-root`** — article body container includes
+  float heights; float bottom doesn't look "cut off" below
+- **`overflow: hidden` auto-float-containment** — alternative
+  to flow-root; same effect
+- **Navbox/sidebar class token identification** — hide
+  whatever's at x=324
+- **`calc()` evaluation** — search icon 2×2 today
+- **`max-width` property** — footer SVGs, width-constrained
+  containers
+- **JPEG decode** — needs `libjpeg-turbo`
+- **`object-fit`** — non-intrinsic aspect
+- **`[attr~=val]` with case-insensitive modifier** (`[attr~=val i]`)
+  — CSS4 feature; not used by Wikipedia assets
+- **`:not()` with attribute arguments** — e.g. `:not([attr])`
+  — future selector work
+
+## Scope Amendment (2026-10-27): attribute selectors and floats already work; navbox is the actual defect
+
+Following this spec's merge, the Commit-1 diagnostic (originally
+scoped as "verify attribute selector support") **refuted the
+spec's premise in two places**. Both findings are recorded below
+with the original spec preserved unchanged above.
+
+### Finding 1: attribute selectors are fully implemented
+
+`selectors.hpp` already has:
+
+```cpp
+enum class SimpleKind {
+    // ...
+    Attribute,
+    // ...
+};
+enum class AttributeMatch {
+    Presence, Exact, Prefix, Suffix, Contains, Word, Hyphen,
+};
+struct SimpleSelector {
+    SimpleKind kind;
+    std::string name;
+    AttributeMatch attr_match;
+    std::string attr_value;
+};
+```
+
+`selectors.cpp` has the full parser (30+ lines handling `[`,
+quoted/unquoted values, the `^$*~|` modifier tokens) and the
+full matcher (`matches_attribute`, 20+ lines with `starts_with`,
+`ends_with`, `find`, word-token, hyphen-separated branches).
+
+**Tested 10/10 forms matched** including the exact Wikipedia
+rule `figure[typeof~='mw:File/Thumb']`. ADR-008 shipped full
+attribute selector support five ADRs ago; the spec's "our
+cascade likely doesn't support `[attr~=val]`" was wrong.
+
+### Finding 2: thumbnails already float correctly
+
+The HTML is:
+
+```html
+<figure class="mw-default-size mw-halign-left" typeof="mw:File/Thumb">
+<figure class="mw-default-size mw-halign-right" typeof="mw:File/Thumb">
+```
+
+Per `figure[typeof~='mw:File/Thumb'].mw-halign-left { clear:left; float:left }`
+and `.mw-halign-right { clear:right; float:right }` — both rules
+match. First thumbnail's `<img>` sits at `x=346` in the tree,
+which is **exactly** content-x + the CSS `margin-left:1.4em` of
+a left-floating figure. Second sits at right edge. **Thumbnails
+were floating correctly all along.**
+
+ADR-035's "partial" finding was itself a misreading — correct
+behavior interpreted as a defect because the visible PNG also
+showed the navbox overlap, which was easy to conflate with the
+thumbnails.
+
+### Finding 3: the `float:none !important` override is @media-gated
+
+The `body.skin--responsive figure { float:none !important }`
+rule lives inside `@media all and (max-width:calc(640px - 1px))`.
+It does **not** apply at viewport 1774. Our @media filter is
+correct.
+
+### The actual remaining visible defect: navbox at x=324
+
+Every screenshot since ADR-029 shows nav-like content at
+`x=324` overlapping the article intro. That's a
+`<table class="navbox">` or `.sidebar` variant. ADR-031's
+`.sidebar{display:none !important}` viewport rule isn't
+matching it — likely a different class token
+(`.navbox`, `.navbox-styles`, `.navbox-inner`, or a sidebar
+variant with distinct class).
+
+**This is what ADR-035's PNG actually showed** — not
+thumbnails. The misdiagnosis cascade (ADR-035 "partial" →
+ADR-036 "attribute selectors missing" → measurement) ends
+here: it's a specific class-token miss.
+
+### Reframed decision
+
+Two features still ship in ADR-036, but the scope is now
+honestly measured:
+
+**1. `clear` property support (~40-50 lines)**
+
+Even though floats already work at the page level, `clear`
+genuinely isn't implemented. Consequence: consecutive
+same-side floats (two `float: right` thumbnails in a row)
+would overlap at the right edge instead of stacking
+vertically. The current HTML article happens to have only one
+`float: right` thumbnail and two `float: left` thumbnails,
+so the overlap doesn't manifest yet — but it will the moment
+an article has consecutive same-side figures.
+
+`clear` is genuinely useful defensively. Same pattern as
+ADR-032's paint culling: no visible delta today, but
+preconditions a future correct render.
+
+- `clear: right` on a float → jump below prior right float
+- `clear: left` on a float → jump below prior left float
+- `clear: both` on a float → jump below both
+- `clear: right | left | both` on a non-float block → same
+- `clear: none` → default no-op
+
+**2. Navbox/sidebar class-token hide (~15 lines)**
+
+Commit 1's diagnostic identifies the exact element at
+`x=324` and its class token. Commit 2 adds
+`.<token>{display:none !important}` to the desktop
+viewport_css (following ADR-029's `#p-lang-btn`, ADR-030's
+`.mw-jump-link`, ADR-031's `.sidebar` pattern). This is a
+workaround, documented as temporary until proper
+`position: sticky` / `display: flow-root` / grid support
+reaches the sidebar/table internals — but it fixes the
+**actual visible defect** the arc has been carrying since
+ADR-029.
+
+### What does NOT ship
+
+- **Attribute selector work**: already exists, no implementation
+- **Float correctness**: already correct, no implementation
+
+### Visible delta prediction (revised)
+
+| Check | Before | After |
+|---|---|---|
+| Navbox content at x=324 (overlapping intro) | visible | **hidden** |
+| Article intro paragraph | overlapped | **clean** |
+| Consecutive same-side floats | overlap | **stack** (defensive; not manifested in current article) |
+| First-viewport PNG | navbox visible | **navbox gone** |
+| Thumbnail floats | already correct | unchanged |
+
+First ADR since ADR-030 whose PNG change is a **fix to an
+existing defect** rather than a new feature.
+
+### Fifth misdiagnosis in the arc
+
+The arc's correction record now has:
+1. ADR-028 — grid was correct, header was the bug
+2. ADR-031 — float "overlap" was intro text misread
+3. ADR-034 — SVG intrinsic was 1x1, not 220x35
+4. ADR-035 — "partial" finding was actually correct behavior
+5. **ADR-036 (this amendment)** — attribute selectors and
+   floats both already work; the whole spec premise was a
+   cascade of misreadings from ADR-035
+
+Each preserved in place. The pattern holds: measure before
+assuming, preserve corrections alongside original claims.
+
+## Consequences
+
+**Better:**
+
+- **Thumbnails float right, at correct position.** The HTML5
+  logo and categories diagram sit at the right edge of article
+  body, with text flowing beside them — matching real
+  Wikipedia. Biggest remaining visible delta below the fold.
+- **Consecutive floats stack correctly.** `clear: right` on
+  float prevents overlap.
+- **Following blocks with `clear` jump below.** Section
+  headings and other clear-having blocks position correctly.
+- **Cascade gains `[attr]`, `[attr=val]`, `[attr~=val]`, etc.**
+  — enables 16+ future rule matches (`[role='button']`,
+  `[aria-hidden]`, etc.).
+- **Zero workarounds added.** Pure cascade+layout fix; no
+  viewport_css additions, no paint-layer skips.
+
+**Accepted limitations (honest, documented):**
+
+- **Below-fold only.** Thumbnails don't appear in first
+  viewport; PNG first-viewport unchanged.
+- **Article body height excludes floats.** No `display:
+  flow-root` yet. Article looks slightly shorter than real
+  Wikipedia. ADR-037.
+- **`navbox` overlap unchanged** — separate ADR.
+- **JPEG unchanged** — separate ADR.
+- **Timing correction**: ADR-035's sync fetch at layout cost
+  ~1 sec (6.3 sec cold render, not 5.3-5.8 as predicted).
+  Documented in ADR-035's Post-ADR-036 note.
+
+**Unchanged:**
+
+- ADR-035's image layout (wordmark, tagline, header fix).
+- ADR-034's `<img>` paint pipeline (PNG/SVG decode, cache).
+- ADR-031's float v1 (narrowing following blocks beside float).
+
+## Implementation plan
+
+Three commits on `feat/attr-selectors-clear`:
+
+1. **Cascade: attribute selector AST + parser + match** (all
+   seven forms). Add 12-15 tests.
+2. **Layout: `clear` on float + non-float** (jump-below logic
+   for both float stacking and following block). Add 6-8
+   tests. Verify against Wikipedia: thumbnail tree shows
+   figure at right edge, following text narrowed.
+3. **Docs** — ADR-036 status → Implemented, Post-ADR-036
+   notes in ADR-031 (float interaction: `clear` now honored)
+   and ADR-035 (timing correction + thumbnail propagation now
+   delivered), CHANGELOG.
+
+## Implementation
+
+**Implemented 2026-10-27.** Three PRs after the amendment:
+spec amendment #188 (docs), impl #189 (clear), this docs PR.
+
+The original spec's premise was refuted before any code was
+written. This section records what actually shipped and
+preserves the fifth misdiagnosis in the arc's correction
+record.
+
+### What shipped
+
+**`clear` property support** (~37 lines in `layout_block_children`,
+6 tests in `[layout][clear][adr-036]`):
+
+- `clear:right` on a float -> jump below prior `float:right`
+- `clear:left` on a float -> jump below prior `float:left`
+- `clear:both` on a float -> jump below prior same-side float
+- `clear:none` -> no-op
+- Same forms on a non-float block -> jump below active float
+
+Reads `clear` from ComputedStyle, checks `float_bottom >
+cursor_y` before advancing, and clears `float_right_w` /
+`float_left_w` after jumping so following narrow-blocks
+aren't pinned to a float they've cleared past.
+
+### What did NOT ship
+
+Two features from the original spec's scope were refuted by
+measurement before implementation:
+
+**1. Attribute selectors (already implemented in ADR-008)**
+
+`selectors.hpp` has `SimpleKind::Attribute` + full
+`AttributeMatch` enum (`Presence`, `Exact`, `Prefix`,
+`Suffix`, `Contains`, `Word`, `Hyphen`). `selectors.cpp`
+has the parser (30+ lines handling `[`, quoted/unquoted
+values, `^$*~|` modifiers) and matcher (`matches_attribute`,
+20+ lines). Tested 10/10 forms matched including the exact
+Wikipedia rule `figure[typeof~='mw:File/Thumb']`.
+
+**2. Float correctness (already correct per ADR-031)**
+
+Thumbnails float correctly. First thumbnail's `<img>` at
+`x=346` = content-x + CSS `margin-left:1.4em` of a
+left-floating figure. Second at right edge. The visible
+"partial" finding in ADR-035 was actually the nav overlap
+at `x=324`, not the thumbnails.
+
+### Visible delta: zero, honestly verified
+
+Byte-identical PNG comparison (clear path vs no-clear path,
+same source, same viewport 1774):
+
+    ✓ IDENTICAL
+
+Layout height unchanged at 62295. Current HTML article has
+no consecutive same-side thumbnails, so no overlap manifests.
+The value of `clear` is **defensive**: the moment any article
+has two consecutive `float:right` (or `float:left`) figures,
+without `clear` support they overlap at the right/left edge
+instead of stacking.
+
+### The nav overlap at x=324 is deferred
+
+Every screenshot since ADR-029 shows nav-like content at
+`x=324` overlapping the article intro. Diagnostic in the
+implementation branch:
+
+- `.navbox` (real navbox): at `y=34880`, way below fold --
+  not the overlap
+- `.sidebar`: **not found** in tree -- hidden or absent
+- `.nomobile`: only `.shortdescription.nomobile` at `y=233`,
+  23px tall -- not the overlap
+- `navbox2` substring search over class/id for
+  `navbox|sidebar|nomobile`: only found descendants of the
+  real navbox at `y=34880`
+
+**The element is unidentified.** Deferred to a separate
+diagnostic cycle: dump every Box at `x<500, y<900` sorted by
+y, identify the one that isn't a maintenance banner / article
+paragraph.
+
+### Fifth misdiagnosis in the arc's correction record
+
+The pattern now has five instances, each preserved in place:
+
+| ADR | What measurement refuted |
+|---|---|
+| 028 | Grid misdiagnosis -- "grid placement bug" was 585px header |
+| 031 | Float overlap -- "infobox duplication" was intro text |
+| 034 | SVG intrinsic -- "220x35" was actually 1x1 (viewBox fallback) |
+| 035 | "Partial" thumbnail finding was correct behavior |
+| **036** | **Whole spec premise** -- attribute selectors and floats already worked |
+
+Each ADR carries its original claim above the correction.
+This is the arc's most consistent behavior: **measurement
+catches the misreading, the record preserves both versions**.
+
+### Test count
+
+- Before Commit 1: 425 cases / 1741 assertions
+- After Commit 1: **431 cases / 1765 assertions** (+6 / +24)
+- Full suite all pass, zero warnings
+- CI green on PR and post-merge
+
+## Verification
+
+**Unit tests** (cascade `[css][attr-sel]` tag):
+
+- `[attr]` matches any element with the attribute
+- `[attr=val]` exact match
+- `[attr~=val]` word-token match
+- `[attr|=val]` dash-separated match
+- `[attr^=val]` prefix
+- `[attr$=val]` suffix
+- `[attr*=val]` substring
+- `[attr=val]` non-match when attribute absent
+- `[attr~=val]` non-match on partial word (e.g. `attr="abc"` with `~=ab` doesn't match)
+- Case sensitivity (default: case-sensitive for value; CSS spec says optional `i` modifier — deferred)
+- Compound: `figure[typeof~='mw:File/Thumb'].mw-halign-right` — both tag, attr, and class must match
+
+**Layout tests** (`[layout][clear][adr-036]` tag):
+
+- Float with `clear: right` after a `float: right` — jumps below
+- Float with `clear: left` after a `float: right` — no jump
+- Float with `clear: both` after a `float: right` — jumps below
+- Non-float with `clear: right` after a `float: right` — jumps below
+- Non-float with `clear: none` after a `float: right` — flows beside (narrowed)
+- Two consecutive `clear: right; float: right` — stack vertically
+
+**Visual verification** (Wikipedia HTML):
+
+| Check | Before ADR-036 | After |
+|---|---|---|
+| HTML5 logo img x | 346 (left of content) | **~1422** (right edge) |
+| Categories img x | 346 | **~1422** |
+| Following `<p>` x | 324 (narrow) | 324 (narrow, correct) |
+| Following `<p>` width | 948 | ~948 (unchanged) |
+| Footer wikimedia img x | 67 (left) | **~1550** (right) |
+| Footer mediawiki img x | 67 | **~1550** |
+| First-viewport PNG | (wordmark/tagline rendering) | **unchanged** (thumbnails below fold) |
+| Below-fold PNG | overlap | **correct** (thumbnails at right edge) |
+
+## Acceptance criteria
+
+ADR-036 is complete when:
+
+- [ ] All seven attribute selector forms parsed + matched
+- [ ] `figure[typeof~='mw:File/Thumb']` matches
+- [ ] Thumbnail float positioned at right edge
+- [ ] Consecutive floats stack (clear: right on float)
+- [ ] Non-float blocks with clear jump below
+- [ ] 18-23 tests added and passing
+- [ ] Measured visible delta below fold (Commit 2 message)
+- [ ] Post-ADR-036 notes in ADR-031, ADR-035
+- [ ] `main` green: 425 + N cases, all pass, zero warnings
+- [ ] CI green (PR + post-merge)
+- [ ] ADR-036 status -> Implemented in Commit 3
+
+**Explicit claim**: thumbnails float right, at correct
+position; consecutive floats stack; following blocks with
+`clear` jump below. Below-fold visible delta: thumbnails
+positioned correctly at right edge, text flows beside them.
+
+**Honest caveats**:
+
+1. **First viewport unchanged** — thumbnails are below fold.
+2. **Article body height excludes floats** — no `flow-root`
+   (ADR-037).
+3. **Timing correction recorded** — ADR-035 cost ~1 sec (6.3s
+   cold, not 5.3-5.8s predicted); updated in Post-ADR-035.
+4. **Navbox overlap unchanged** — separate defect.
+5. **Root cause verified in Commit 1** — if attribute
+   selectors ARE already supported, ADR-036 becomes
+   clear-only (~40 lines). Measurement in Commit 1's
+   diagnostic settles this before implementation.
+
+**Structural value**: full attribute selector support
+(`[attr]` through `[attr*=val]`) is broadly useful — 16+
+rules in Wikipedia CSS use `[role=...]`, `[aria-*]`,
+`[href]`. `clear` property completes the float model.

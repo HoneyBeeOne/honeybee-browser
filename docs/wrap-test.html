@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <title>Wrap Test</title>
+  <style>
+    body { margin: 20px; font-size: 16px; }
+    p { margin: 8px 0; }
+    .narrow { width: 300px; background-color: #eee; padding: 8px; }
+  </style>
+</head>
+<body>
+  <p>Short paragraph.</p>
+
+  <p class="narrow">
+    This is a long paragraph inside a 300px-wide box. It should
+    wrap across multiple lines. The text is long enough to need
+    several lines at this width. If it does not wrap, the text
+    will overflow past the right edge of the gray box.
+  </p>
+
+  <p class="narrow">
+    هذا نص عربي طويل جداً. يجب أن يلتف على عدة أسطر لأن عرض
+    الصندوق ثلاثمئة بكسل فقط. كل سطر يجب أن يكون محاذى إلى اليمين،
+    والكلمات في ترتيب صحيح. إذا لم يلتف النص، سيتجاوز الحد الأيمن
+    من الصندوق الرمادي.
+  </p>
+</body>
+</html>

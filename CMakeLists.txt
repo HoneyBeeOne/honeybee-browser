@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
   honeybee
-  VERSION 0.1.0
+  VERSION 0.4.0
   DESCRIPTION "A community-built web browser from Cairo University students"
   LANGUAGES CXX
 )
@@ -30,10 +30,49 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
   add_compile_options(-O3 -DNDEBUG)
 endif()
 
+# تفعيل نظام الاختبارات
+enable_testing()
+
+# جلب مكتبة Catch2 للاختبارات
+include(FetchContent)
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG        v3.5.2
+)
+FetchContent_MakeAvailable(Catch2)
+
 # Find dependencies
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM4 REQUIRED IMPORTED_TARGET gtkmm-4.0)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo)
+# ADR-021: pangocairo is used by browser/pango_text.cpp, which
+# lives in honeybee_lib after this commit. Previously it came
+# in transitively via GTKMM4 on the executable target; moving
+# the file requires explicit declaration.
+pkg_check_modules(PANGOCAIRO REQUIRED IMPORTED_TARGET pangocairo)
+
+# ADR-034: SVG decode for <img> + background-image.
+pkg_check_modules(RSVG REQUIRED IMPORTED_TARGET librsvg-2.0)
+
+# ----------------------------------------------------------------------------
+# lexbor: vendored HTML parser (submodule in third_party/lexbor)
+# ----------------------------------------------------------------------------
+# Configure lexbor before adding it: build static only, skip its tests,
+# examples, benchmarks, and install rules. We embed it, we don't install it.
+set(LEXBOR_BUILD_SHARED      OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_STATIC      ON  CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_TESTS_CPP   OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_BENCHMARKS  OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_UTILS       OFF CACHE BOOL "" FORCE)
+set(LEXBOR_BUILD_WASM        OFF CACHE BOOL "" FORCE)
+set(LEXBOR_INSTALL_HEADERS   OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(third_party/lexbor EXCLUDE_FROM_ALL)
 
 # Add source directory
 add_subdirectory(src)
+add_subdirectory(tests)

@@ -1,0 +1,584 @@
+#include "renderer/layout/layout_box.hpp"
+#include "renderer/paint/paint.hpp"
+
+#include <cairo.h>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+
+namespace layout = honeybee::renderer::layout;
+namespace paint = honeybee::renderer::paint;
+
+namespace {
+
+struct Canvas {
+    cairo_surface_t* surface;
+    cairo_t* cr;
+
+    Canvas(int w, int h) {
+        surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        cr = cairo_create(surface);
+        cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+        cairo_paint(cr);
+    }
+    ~Canvas() {
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+    }
+};
+
+struct Pixel {
+    uint8_t a, r, g, b;
+};
+
+Pixel pixel_at(cairo_surface_t* surface, int x, int y) {
+    cairo_surface_flush(surface);
+    auto* data = reinterpret_cast<uint32_t*>(
+        cairo_image_surface_get_data(surface));
+    const int stride = cairo_image_surface_get_stride(surface);
+    const uint32_t px = data[y * (stride / 4) + x];
+    return {
+        static_cast<uint8_t>((px >> 24) & 0xff),
+        static_cast<uint8_t>((px >> 16) & 0xff),
+        static_cast<uint8_t>((px >> 8) & 0xff),
+        static_cast<uint8_t>(px & 0xff),
+    };
+}
+
+bool is_red(const Pixel& p) {
+    return p.r > 200 && p.g < 50 && p.b < 50 && p.a > 200;
+}
+bool is_white(const Pixel& p) {
+    return p.r > 200 && p.g > 200 && p.b > 200;
+}
+bool is_blue(const Pixel& p) {
+    return p.b > 200 && p.r < 50 && p.g < 50;
+}
+
+void fake_drawer(cairo_t* cr, const layout::LineFragment& f) {
+    cairo_set_source_rgb(cr, 0.0, 0.0, 1.0);
+    cairo_rectangle(cr, f.x, f.y, f.width, f.height);
+    cairo_fill(cr);
+}
+
+} // namespace
+
+TEST_CASE("paint: canvas baseline is white", "[paint]") {
+    Canvas c(100, 100);
+    CHECK(is_white(pixel_at(c.surface, 50, 50)));
+}
+
+TEST_CASE("paint: background fills border-box", "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox box;
+    box.x = 10.0f;
+    box.y = 10.0f;
+    box.width = 100.0f;
+    box.height = 50.0f;
+    box.background = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    paint::paint(c.cr, box, fake_drawer);
+    CHECK(is_red(pixel_at(c.surface, 50, 30)));
+    CHECK(is_white(pixel_at(c.surface, 5, 5)));
+}
+
+TEST_CASE("paint: transparent background draws nothing",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox box;
+    box.x = 10.0f;
+    box.y = 10.0f;
+    box.width = 100.0f;
+    box.height = 50.0f;
+
+    paint::paint(c.cr, box, fake_drawer);
+    CHECK(is_white(pixel_at(c.surface, 50, 30)));
+}
+
+TEST_CASE("paint: border draws four strips", "[paint]") {
+    Canvas c(200, 200);
+
+    layout::LayoutBox box;
+    box.x = 0.0f;
+    box.y = 0.0f;
+    box.width = 100.0f;
+    box.height = 100.0f;
+    box.border[0] = 4.0f;
+    box.border[1] = 4.0f;
+    box.border[2] = 4.0f;
+    box.border[3] = 4.0f;
+    box.border_color = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    paint::paint(c.cr, box, fake_drawer);
+
+    CHECK(is_red(pixel_at(c.surface, 50, 1)));
+    CHECK(is_red(pixel_at(c.surface, 98, 50)));
+    CHECK(is_red(pixel_at(c.surface, 50, 98)));
+    CHECK(is_red(pixel_at(c.surface, 1, 50)));
+    CHECK(is_white(pixel_at(c.surface, 50, 50)));
+}
+
+TEST_CASE("paint: text drawer called at text position",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->x = 20.0f;
+    lt->y = 20.0f;
+    lt->width = 40.0f;
+    lt->height = 16.0f;
+    lt->text = "Hi";
+    lt->lines.push_back({
+        .x = 20.0f, .y = 20.0f, .width = 40.0f, .height = 16.0f,
+        .text = "Hi",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    root.children.push_back(std::move(lt));
+
+    paint::paint(c.cr, root, fake_drawer);
+    CHECK(is_blue(pixel_at(c.surface, 30, 25)));
+    CHECK(is_white(pixel_at(c.surface, 5, 5)));
+}
+
+TEST_CASE("paint: null drawer is a no-op", "[paint]") {
+    Canvas c(100, 100);
+    layout::LayoutBox box;
+    box.width = 100.0f;
+    box.height = 100.0f;
+    box.background = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    paint::paint(c.cr, box, nullptr);
+    CHECK(is_white(pixel_at(c.surface, 50, 50)));
+}
+
+TEST_CASE("paint: null cr is a no-op", "[paint]") {
+    layout::LayoutBox box;
+    box.background = {1.0f, 0.0f, 0.0f, 1.0f};
+    paint::paint(nullptr, box, fake_drawer);
+    CHECK(true);
+}
+
+TEST_CASE("paint: multi-line text draws each fragment at its y",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->x = 0.0f;
+    lt->y = 0.0f;
+    lt->width = 40.0f;
+    lt->height = 50.0f;
+    lt->text = "AAA BBB";
+    // Two fragments with a visible gap in between, at distinct
+    // x and y. The fake drawer paints a blue rect per fragment;
+    // the gap remains white.
+    lt->lines.push_back({
+        .x = 10.0f, .y = 10.0f, .width = 10.0f, .height = 10.0f,
+        .text = "AAA",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    lt->lines.push_back({
+        .x = 20.0f, .y = 40.0f, .width = 10.0f, .height = 10.0f,
+        .text = "BBB",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    root.children.push_back(std::move(lt));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Fragment 1 covers (10,10)-(20,20)
+    CHECK(is_blue(pixel_at(c.surface, 15, 15)));
+    // Fragment 2 covers (20,40)-(30,50)
+    CHECK(is_blue(pixel_at(c.surface, 25, 45)));
+    // Gap between them stays white
+    CHECK(is_white(pixel_at(c.surface, 15, 30)));
+    CHECK(is_white(pixel_at(c.surface, 5, 5)));
+}
+
+TEST_CASE("paint: empty-lines text draws nothing", "[paint]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 100.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->text = "";
+    // No lines added.
+    root.children.push_back(std::move(lt));
+
+    paint::paint(c.cr, root, fake_drawer);
+    CHECK(is_white(pixel_at(c.surface, 50, 50)));
+}
+
+TEST_CASE("paint: LayoutInlineContext lines are painted",
+          "[paint]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 0.0f;
+    ctx->width = 100.0f;
+    ctx->height = 40.0f;
+
+    layout::LineFragment f1;
+    f1.x = 10.0f; f1.y = 10.0f; f1.width = 20.0f; f1.height = 16.0f;
+    f1.text = "A";
+    layout::LineFragment f2;
+    f2.x = 10.0f; f2.y = 30.0f; f2.width = 20.0f; f2.height = 16.0f;
+    f2.text = "B";
+    ctx->lines.push_back(f1);
+    ctx->lines.push_back(f2);
+
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    CHECK(is_blue(pixel_at(c.surface, 15, 15)));  // f1
+    CHECK(is_blue(pixel_at(c.surface, 15, 35)));  // f2
+    CHECK(is_white(pixel_at(c.surface, 15, 28))); // gap between f1 (ends y=26) and f2 (starts y=30)
+}
+
+// =============================================================
+// ADR-072: Regression tests for ADR-071 fixes.
+//
+// ADR-071 changed paint_children to only cull leaf nodes
+// (Text, InlineContext). Box children are always recursed, because
+// a Box's y+height does NOT bound its descendants (absolute
+// positioning, overflow, floats). These tests fail if that rule
+// is reverted.
+// =============================================================
+
+TEST_CASE("ADR-071: Box parent is not culled by its own height",
+          "[paint][adr071]") {
+    // Reproduction of the Wikipedia bug: <body> is clamped to the
+    // viewport height (641px) but contains <div> with height 30440.
+    // Text at y=1500 lives inside.
+    //
+    // Before ADR-071: paint_children(root=[body]) checked
+    //   body.y + body.height = 641 < visible_top - 128 = 1372
+    //   → TRUE → cull body → text never reached.
+    //
+    // After ADR-071: body is Box → not culled → recurse into body
+    //   → <div> is Box → not culled → recurse
+    //   → text at y=1500 is in visible range → drawer fires.
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 641.0f;
+
+    auto body = std::make_unique<layout::LayoutBox>();
+    body->width = 200.0f;
+    body->height = 641.0f;      // clamped to viewport
+    body->y = 0.0f;
+
+    auto content = std::make_unique<layout::LayoutBox>();
+    content->width = 200.0f;
+    content->height = 30000.0f;  // real content much taller
+    content->y = 0.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->y = 1500.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 10.0f, .y = 1500.0f,
+        .width = 20.0f, .height = 16.0f,
+        .text = "INSIDE",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    content->children.push_back(std::move(lt));
+    body->children.push_back(std::move(content));
+    root.children.push_back(std::move(body));
+
+    int draws = 0;
+    auto drawer = [&](cairo_t*, const layout::LineFragment&) { ++draws; };
+    paint::paint(c.cr, root, drawer, nullptr,
+                 1500.0f,   // visible_top (past body's height)
+                 2141.0f);  // visible_bottom
+
+    // If Box culling were restored, draws would be 0 (body culled).
+    CHECK(draws == 1);
+}
+
+TEST_CASE("ADR-071: Text leaf is still culled when off-screen",
+          "[paint][adr071]") {
+    // Guards the perf property: culling was NOT removed entirely.
+    // A Text node far outside the visible range must be skipped.
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 200.0f;
+
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->y = 50000.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 10.0f, .y = 50000.0f,
+        .width = 20.0f, .height = 16.0f,
+        .text = "OFFSCREEN",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    root.children.push_back(std::move(lt));
+
+    int draws = 0;
+    auto drawer = [&](cairo_t*, const layout::LineFragment&) { ++draws; };
+    paint::paint(c.cr, root, drawer, nullptr,
+                 5000.0f,   // visible_top
+                 5641.0f);  // visible_bottom
+
+    // Text at y=50000 is way off-screen → culled → drawer not called.
+    CHECK(draws == 0);
+}
+
+// =============================================================
+// ADR-080: list marker rendering
+// =============================================================
+
+TEST_CASE("ADR-080: disc marker paints at (box.x-20, box.y+10)",
+          "[paint][adr080]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto li = std::make_unique<layout::LayoutBox>();
+    li->x = 40.0f;
+    li->y = 10.0f;
+    li->width = 150.0f;
+    li->height = 20.0f;
+    li->list_style_type = "disc";
+
+    // A text child so the li box has content (paint won't skip)
+    auto lt = std::make_unique<layout::LayoutText>();
+    lt->x = 40.0f;
+    lt->y = 10.0f;
+    lt->height = 20.0f;
+    lt->lines.push_back({
+        .x = 40.0f, .y = 10.0f,
+        .width = 50.0f, .height = 16.0f,
+        .text = "item",
+        .font_family = "", .font_size = 16.0f,
+        .color = layout::Color::black()});
+    li->children.push_back(std::move(lt));
+    root.children.push_back(std::move(li));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Marker center at (20, 20), radius 3. Pixel at (20, 20) should
+    // be dark (from disc fill), pixel at (60, 60) far away should be white.
+    auto marker_px = pixel_at(c.surface, 20, 20);
+    CHECK(marker_px.r < 100);  // dark red channel = marker drawn
+    CHECK(marker_px.g < 100);
+    CHECK(marker_px.b < 100);
+
+    // Far pixel should be white (nothing drawn)
+    CHECK(is_white(pixel_at(c.surface, 180, 90)));
+}
+
+TEST_CASE("ADR-080: empty list_style_type skips marker",
+          "[paint][adr080]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto block = std::make_unique<layout::LayoutBox>();
+    block->x = 40.0f;
+    block->y = 10.0f;
+    block->width = 150.0f;
+    block->height = 20.0f;
+    // list_style_type empty (default)
+    root.children.push_back(std::move(block));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Nothing should be drawn at (20, 20)
+    CHECK(is_white(pixel_at(c.surface, 20, 20)));
+}
+
+// =============================================================
+// ADR-081: inline-block fragment rendering
+// =============================================================
+
+TEST_CASE("ADR-081: InlineContext with inline_block_child paints box",
+          "[paint][adr081]") {
+    Canvas c(200, 100);
+
+    layout::LayoutBox root;
+    root.width = 200.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 0.0f;
+    ctx->width = 200.0f;
+    ctx->height = 20.0f;
+
+    // Create an inline-block child: red box 40x20 at origin.
+    // Note: at origin because layout_element puts content-box at (margin_left, margin_top).
+    auto child = std::make_shared<layout::LayoutBox>();
+    child->x = 0.0f;
+    child->y = 0.0f;
+    child->width = 40.0f;
+    child->height = 20.0f;
+    child->background = {1.0f, 0.0f, 0.0f, 1.0f};  // red
+
+    // Fragment with inline_block_child set
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 5.0f;
+    frag.width = 40.0f;
+    frag.height = 20.0f;
+    frag.inline_block_child = child;
+    // Note: no text — atomic unit
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Marker center lands at (frag.x + box.x + width/2, ...) = (10+20, 5+10) = (30, 15).
+    auto px = pixel_at(c.surface, 30, 15);
+    CHECK(px.r > 200);   // red channel
+    CHECK(px.g < 50);
+    CHECK(px.b < 50);
+
+    // Outside the box: white
+    CHECK(is_white(pixel_at(c.surface, 100, 50)));
+}
+
+
+// ADR-081: inline-block painting respects top/left margins.
+TEST_CASE("ADR-081: inline-block painting offsets border box by margins",
+          "[paint][adr081]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 100.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->width = 100.0f;
+    ctx->height = 40.0f;
+
+    auto child = std::make_shared<layout::LayoutBox>();
+
+    // Deliberately use a different internal origin. The paint
+    // translation must cancel this origin and apply the margins.
+    child->x = 100.0f;
+    child->y = 100.0f;
+    child->width = 20.0f;
+    child->height = 20.0f;
+
+    // LayoutBox margin order: top, right, bottom, left.
+    child->margin[0] = 7.0f;
+    child->margin[3] = 5.0f;
+
+    child->background = {1.0f, 0.0f, 0.0f, 1.0f};
+
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 10.0f;
+    frag.width = 25.0f;
+    frag.height = 27.0f;
+    frag.inline_block_child = child;
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    paint::paint(c.cr, root, fake_drawer);
+
+    // Border box should start at (10 + 5, 10 + 7) = (15, 17).
+    const auto inside = pixel_at(c.surface, 16, 18);
+    CHECK(inside.r > 200);
+    CHECK(inside.g < 50);
+    CHECK(inside.b < 50);
+
+    // These points would incorrectly be red if margins were ignored.
+    CHECK(is_white(pixel_at(c.surface, 12, 18)));
+    CHECK(is_white(pixel_at(c.surface, 16, 14)));
+
+    // Outside the border box.
+    CHECK(is_white(pixel_at(c.surface, 40, 40)));
+}
+
+// ADR-081: descendants of an inline-block must survive viewport culling
+// when the inline-block is positioned far down the document.
+TEST_CASE("ADR-081: inline-block descendants use translated viewport for culling",
+          "[paint][adr081]") {
+    Canvas c(100, 100);
+
+    layout::LayoutBox root;
+    root.width = 100.0f;
+    root.height = 6000.0f;
+
+    auto ctx = std::make_unique<layout::LayoutInlineContext>();
+    ctx->x = 0.0f;
+    ctx->y = 5000.0f;
+    ctx->width = 100.0f;
+    ctx->height = 20.0f;
+
+    auto child = std::make_shared<layout::LayoutBox>();
+    child->x = 0.0f;
+    child->y = 0.0f;
+    child->width = 40.0f;
+    child->height = 20.0f;
+
+    // Internal text is at local y=0, not document y=5000.
+    auto text = std::make_unique<layout::LayoutText>();
+    text->x = 0.0f;
+    text->y = 0.0f;
+    text->width = 30.0f;
+    text->height = 10.0f;
+
+    layout::LineFragment text_frag;
+    text_frag.x = 2.0f;
+    text_frag.y = 0.0f;
+    text_frag.width = 20.0f;
+    text_frag.height = 10.0f;
+    text_frag.text = "inside";
+    text->lines.push_back(std::move(text_frag));
+
+    child->children.push_back(std::move(text));
+
+    layout::LineFragment frag;
+    frag.x = 10.0f;
+    frag.y = 5000.0f;
+    frag.width = 40.0f;
+    frag.height = 20.0f;
+    frag.inline_block_child = child;
+
+    ctx->lines.push_back(std::move(frag));
+    root.children.push_back(std::move(ctx));
+
+    // Simulate a viewport scrolled to document y=5000.
+    cairo_translate(c.cr, 0.0, -5000.0);
+
+    paint::paint(c.cr, root, fake_drawer, nullptr,
+                 5000.0f, 5100.0f);
+
+    // The internal text should be visible at viewport y=0.
+    CHECK(is_blue(pixel_at(c.surface, 16, 5)));
+
+    // The rest of the canvas should remain untouched.
+    CHECK(is_white(pixel_at(c.surface, 80, 50)));
+}

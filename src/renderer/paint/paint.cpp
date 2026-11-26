@@ -1,0 +1,704 @@
+#include "renderer/paint/paint.hpp"
+#include "renderer/dom/node.hpp"
+
+
+#include <cmath>
+#include <cstdio>
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <vector>
+
+#include "base/log.hpp"
+
+namespace honeybee::renderer::paint {
+
+namespace {
+
+void fill_rect(cairo_t* cr, const layout::Color& c,
+               float x, float y, float w, float h) {
+    if (c.a == 0.0f) return;
+    if (w <= 0.0f || h <= 0.0f) return;
+    cairo_set_source_rgba(cr, c.r, c.g, c.b, c.a);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+}
+
+// ADR-034: draw an image (from <img> src or background-image url)
+// scaled to the box's rect. The provider owns the surface; we
+// borrow it. Zero-height + non-zero-width boxes (the wordmark
+// case) derive height from the surface's intrinsic aspect ratio.
+// ADR-056: paint_image split into paint_img_element (stretch-to-
+// box for <img>) and paint_background_image (intrinsic + explicit
+// size + position + repeat for block backgrounds). This function
+// keeps the pre-ADR-056 stretch behavior for <img> elements.
+void paint_img_element(cairo_t* cr, const layout::LayoutBox& box,
+                       const std::string& url,
+                       const ImageProvider* images) {
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    float pw = box.width;
+    float ph = box.height;
+    if (pw > 0.0f && ph <= 0.0f) {
+        ph = pw * (ih / iw);
+    } else if (pw <= 0.0f && ph <= 0.0f) {
+        pw = iw; ph = ih;
+    } else if (pw <= 0.0f && ph > 0.0f) {
+        pw = ph * (iw / ih);
+    }
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    cairo_save(cr);
+    cairo_translate(cr, box.x, box.y);
+    cairo_scale(cr, pw / iw, ph / ih);
+    cairo_set_source_surface(cr, surf, 0, 0);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+// ADR-056: paint block background-image with size/position/repeat.
+// Mirrors ADR-047's paint_mask_image pattern matrix; cairo_mask
+// becomes cairo_paint (fill vs mask). Intrinsic size by default,
+// explicit background_size_w overrides; aspect-derive _h when
+// only _w is set. Position relative to box; repeat via
+// CAIRO_EXTEND_REPEAT clipped to box rect.
+void paint_background_image(cairo_t* cr, const layout::LayoutBox& box,
+                            const ImageProvider* images) {
+    if (box.background_image_url.empty()) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(box.background_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: explicit background_size_w wins; aspect-derive _h if
+    // only _w set. Both 0 = intrinsic.
+    float pw = box.background_size_w > 0.0f ? box.background_size_w : iw;
+    float ph = box.background_size_h > 0.0f ? box.background_size_h
+             : (box.background_size_w > 0.0f
+                ? box.background_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position keywords relative to box.
+    float ix = box.x;
+    if (box.background_pos_x == layout::BgPosX::Right) {
+        ix = box.x + box.width - pw;
+    } else if (box.background_pos_x == layout::BgPosX::Center) {
+        ix = box.x + (box.width - pw) * 0.5f;
+    }
+    float iy = box.y;
+    if (box.background_pos_y == layout::BgPosY::Bottom) {
+        iy = box.y + box.height - ph;
+    } else if (box.background_pos_y == layout::BgPosY::Center) {
+        iy = box.y + (box.height - ph) * 0.5f;
+    }
+
+    cairo_save(cr);
+    // Clip to box so repeat doesn't bleed outside the element.
+    cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+    cairo_clip(cr);
+
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+    cairo_matrix_t mat;
+    cairo_matrix_init_scale(&mat, iw / pw, ih / ph);
+    cairo_matrix_translate(&mat, -ix, -iy);
+    cairo_pattern_set_matrix(pat, &mat);
+    cairo_pattern_set_extend(pat, box.background_no_repeat
+                                  ? CAIRO_EXTEND_NONE
+                                  : CAIRO_EXTEND_REPEAT);
+    cairo_set_source(cr, pat);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+}
+
+// ADR-062: paint block background linear-gradient.
+// Computes gradient line endpoints from angle + half-diagonal
+// per CSS spec SS3.1.1: hl = (w*|cos| + h*|sin|)/2.
+void paint_background_gradient(cairo_t* cr,
+                               const layout::LayoutBox& box) {
+    if (!box.background_is_gradient) return;
+    if (box.background_gradient_stops.size() < 2) return;
+
+    // CSS linear-gradient angle theta convention:
+    //   0deg   = to top    (bottom -> top)
+    //   90deg  = to right  (left -> right)
+    //   180deg = to bottom (top -> bottom)   [default]
+    //   270deg = to left   (right -> left)
+    // Direction vector in screen coords (y down): (sin, -cos)
+    // Gradient line length per CSS Images 3 SS3.1.1:
+    //   L = |W * sin(theta)| + |H * cos(theta)|
+    const float cx = box.x + box.width * 0.5f;
+    const float cy = box.y + box.height * 0.5f;
+    const float rad = box.background_gradient_angle_deg
+                    * 0.017453292519943295f;
+    const float s = std::sin(rad);
+    const float c = std::cos(rad);
+    const float L = box.width * std::abs(s)
+                  + box.height * std::abs(c);
+    const float half = L * 0.5f;
+    const float dx = s;
+    const float dy = -c;
+    const float x0 = cx - dx * half;
+    const float y0 = cy - dy * half;
+    const float x1 = cx + dx * half;
+    const float y1 = cy + dy * half;
+
+    cairo_save(cr);
+    cairo_pattern_t* pat = cairo_pattern_create_linear(x0, y0, x1, y1);
+    for (const auto& stop : box.background_gradient_stops) {
+        cairo_pattern_add_color_stop_rgba(pat, stop.position,
+            stop.color.r, stop.color.g, stop.color.b, stop.color.a);
+    }
+    cairo_set_source(cr, pat);
+    cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+    cairo_fill(cr);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+}
+
+// ADR-047: draw mask-image over the already-drawn background.
+// Cairo path: set source to background_color, then cairo_mask
+// with the loaded surface pattern (scaled + positioned). The
+// pattern's alpha channel determines where the fill shows.
+// v1 renders only when background.a > 0 (transparent bg =
+// invisible mask). Documented deviation: for boxes with
+// border-radius, the border ring is also masked (v1 draws
+// mask after the whole if(any_radius)/else block). 0 target
+// rules combine mask + border-radius.
+void paint_mask_image(cairo_t* cr, const layout::LayoutBox& box,
+                      const ImageProvider* images) {
+    if (!box.mask_has || box.mask_image_url.empty()) return;
+    if (box.background.a <= 0.0001f) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(box.mask_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: mask_size_w > 0 wins; if mask_size_h is 0, aspect-
+    // derive. Both 0 = intrinsic.
+    float pw = box.mask_size_w > 0.0f ? box.mask_size_w : iw;
+    float ph = box.mask_size_h > 0.0f ? box.mask_size_h
+             : (box.mask_size_w > 0.0f
+                ? box.mask_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position keywords.
+    float ix = box.x;
+    if (box.mask_pos_x == layout::BgPosX::Right) {
+        ix = box.x + box.width - pw;
+    } else if (box.mask_pos_x == layout::BgPosX::Center) {
+        ix = box.x + (box.width - pw) * 0.5f;
+    }
+    float iy = box.y;
+    if (box.mask_pos_y == layout::BgPosY::Bottom) {
+        iy = box.y + box.height - ph;
+    } else if (box.mask_pos_y == layout::BgPosY::Center) {
+        iy = box.y + (box.height - ph) * 0.5f;
+    }
+
+    HB_LOG(Paint, Debug, "mask: %s at (%.0f,%.0f) size %.0fx%.0f",
+           box.mask_image_url.c_str(), ix, iy, pw, ph);
+
+    // Pattern matrix maps device coords -> surface coords.
+    // device (ix, iy)         -> surf (0, 0)
+    // device (ix+pw, iy+ph)   -> surf (iw, ih)
+    // M = scale(iw/pw, ih/ph) * translate(-ix, -iy)
+    cairo_save(cr);
+    cairo_set_source_rgba(cr, box.background.r, box.background.g,
+                          box.background.b, box.background.a);
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+    cairo_matrix_t mat;
+    cairo_matrix_init_scale(&mat, iw / pw, ih / ph);
+    cairo_matrix_translate(&mat, -ix, -iy);
+    cairo_pattern_set_matrix(pat, &mat);
+    cairo_mask(cr, pat);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+}
+
+void paint_children(
+    cairo_t* cr,
+    const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
+    const LineDrawer& drawer,
+    const ImageProvider* images,
+    float visible_top,
+    float visible_bottom);
+
+// ADR-044: trace a rounded-rect path. Radii in TL, TR, BR, BL
+// order. Each is clamped to min(w/2, h/2) -- Wikipedia's 2px on
+// 100px+ boxes never triggers clamping; simple bound prevents
+// self-overlap on tiny boxes (full CSS SS5.5 proportional clamp
+// deferred).
+void rounded_rect_path(cairo_t* cr, float x, float y,
+                       float w, float h, const float r[4]) {
+    if (w <= 0.0f || h <= 0.0f) return;
+    const float half_min = std::min(w, h) * 0.5f;
+    const float r_tl = std::max(0.0f, std::min(r[0], half_min));
+    const float r_tr = std::max(0.0f, std::min(r[1], half_min));
+    const float r_br = std::max(0.0f, std::min(r[2], half_min));
+    const float r_bl = std::max(0.0f, std::min(r[3], half_min));
+
+    cairo_new_path(cr);
+    // Top-left corner: start on left edge, arc to top edge.
+    if (r_tl > 0.0f) {
+        cairo_arc(cr, x + r_tl, y + r_tl, r_tl, M_PI, 1.5f * M_PI);
+    } else {
+        cairo_move_to(cr, x, y);
+    }
+    // Top edge to TR corner start.
+    cairo_line_to(cr, x + w - r_tr, y);
+    // Top-right corner: top edge to right edge.
+    if (r_tr > 0.0f) {
+        cairo_arc(cr, x + w - r_tr, y + r_tr, r_tr,
+                  1.5f * M_PI, 2.0f * M_PI);
+    }
+    // Right edge to BR corner start.
+    cairo_line_to(cr, x + w, y + h - r_br);
+    // Bottom-right corner: right edge to bottom edge.
+    if (r_br > 0.0f) {
+        cairo_arc(cr, x + w - r_br, y + h - r_br, r_br,
+                  0.0f, 0.5f * M_PI);
+    }
+    // Bottom edge to BL corner start.
+    cairo_line_to(cr, x + r_bl, y + h);
+    // Bottom-left corner: bottom edge to left edge.
+    if (r_bl > 0.0f) {
+        cairo_arc(cr, x + r_bl, y + h - r_bl, r_bl, 0.5f * M_PI, M_PI);
+    }
+    cairo_close_path(cr);
+}
+
+void paint_box(cairo_t* cr, const layout::LayoutBox& box,
+               const LineDrawer& drawer,
+               const ImageProvider* images,
+               float visible_top,
+               float visible_bottom) {
+    HB_LOG(Paint, Trace, "paint_box: <%s> y=%.1f h=%.1f",
+           box.element ? box.element->tag().c_str() : "null",
+           box.y, box.height);
+
+    // ADR-032: paint-authoritative culling. Skip the entire
+    // subtree if visibility:hidden or opacity:0. Set on
+    // LayoutBox::visible by layout_element. Handles both root
+    // and child invocations since they all route through
+    // paint_box().
+    if (!box.visible) return;
+
+    // ADR-069: box-level paint gate. If box is entirely off-screen,
+    // skip its own paint ops (background, border, shadow, mask,
+    // image) but STILL recurse into paint_children — descendants
+    // may overflow visible.
+    constexpr float CULL_MARGIN_BOX = 128.0f;
+    const bool box_on_screen =
+        (box.y + box.height >= visible_top - CULL_MARGIN_BOX) &&
+        (box.y <= visible_bottom + CULL_MARGIN_BOX);
+
+    // ADR-054: rotate transform.
+    // ADR-058: translateY transform. Wrap the entire paint_box
+    // body (background, border, box-shadow, mask, images,
+    // children) in a cairo save/translate/rotate/restore. No
+    // transform is a no-op (did_transform stays false, zero
+    // cairo state change).
+    // ADR-058: transform wrapper handles translateY AND rotate.
+    // Applied in a single save/restore pair (translate first,
+    // then rotate) -- correct for the magnifier case and
+    // independent for each when only one is set.
+    bool did_transform = false;
+    if (box.transform_rotate_deg != 0.0f
+        || box.transform_translate_y != 0.0f) {
+        cairo_save(cr);
+        if (box.transform_translate_y != 0.0f) {
+            cairo_translate(cr, 0, box.transform_translate_y);
+        }
+        if (box.transform_rotate_deg != 0.0f) {
+            const float cx = box.x + box.width * 0.5f;
+            const float cy = box.y + box.height * 0.5f;
+            const float rad =
+                box.transform_rotate_deg * 0.017453292519943295f;
+            cairo_translate(cr, cx, cy);
+            cairo_rotate(cr, rad);
+            cairo_translate(cr, -cx, -cy);
+        }
+        did_transform = true;
+    }
+
+    if (box_on_screen) {
+    // ADR-043: draw box-shadow before background (CSS z-order:
+    // shadow renders behind the element's own background/border).
+    // Only non-inset, non-blurred shadows render in v1; inset
+    // and blurred shadows are parsed and stored but skipped
+    // here (deferrals in ADR-043).
+    if (box.box_shadow_has
+        && !box.box_shadow_inset
+        && box.box_shadow_blur <= 0.0001f) {
+        const float sx = box.x + box.box_shadow_ox - box.box_shadow_spread;
+        const float sy = box.y + box.box_shadow_oy - box.box_shadow_spread;
+        const float sw = box.width  + 2.0f * box.box_shadow_spread;
+        const float sh = box.height + 2.0f * box.box_shadow_spread;
+        // CSS spec: "outer box-shadow is drawn outside the
+        // border edge only; it is clipped inside the border-
+        // box." Even-odd clip of (shadow_rect, box_rect)
+        // produces the L-shaped outside-only region.
+        cairo_save(cr);
+        cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+        cairo_rectangle(cr, sx, sy, sw, sh);
+        cairo_rectangle(cr, box.x, box.y, box.width, box.height);
+        cairo_clip(cr);
+        fill_rect(cr, box.box_shadow_color, sx, sy, sw, sh);
+        cairo_restore(cr);
+    }
+
+    // ADR-044: if any border-radius > 0, use rounded-rect path
+    // (two-fill: outer border_color ring + inner background_color).
+    // Zero-radius boxes take the existing rect path byte-for-byte.
+    const bool any_radius = box.border_radius[0] > 0.001f
+                         || box.border_radius[1] > 0.001f
+                         || box.border_radius[2] > 0.001f
+                         || box.border_radius[3] > 0.001f;
+
+    if (any_radius) {
+        const float bt = box.border[0], br = box.border[1];
+        const float bb = box.border[2], bl = box.border[3];
+
+        // Outer: fill with border_color (visible ring when
+        // border-width > 0 AND border_color.a > 0). Transparent
+        // border_color produces no visible ring -- correct.
+        rounded_rect_path(cr, box.x, box.y, box.width, box.height,
+                          box.border_radius);
+        cairo_set_source_rgba(cr, box.border_color.r, box.border_color.g,
+                              box.border_color.b, box.border_color.a);
+        cairo_fill(cr);
+
+        // Inner: fill with background_color (inset by border).
+        // Radius reduced by border-width per corner, clamped to 0.
+        const float inner_x = box.x + bl;
+        const float inner_y = box.y + bt;
+        const float inner_w = box.width  - bl - br;
+        const float inner_h = box.height - bt - bb;
+        if (inner_w > 0.0f && inner_h > 0.0f) {
+            const float inner_r[4] = {
+                std::max(0.0f, box.border_radius[0] - bt),
+                std::max(0.0f, box.border_radius[1] - bt),
+                std::max(0.0f, box.border_radius[2] - bb),
+                std::max(0.0f, box.border_radius[3] - bb),
+            };
+            rounded_rect_path(cr, inner_x, inner_y, inner_w, inner_h,
+                              inner_r);
+            cairo_set_source_rgba(cr, box.background.r, box.background.g,
+                                  box.background.b, box.background.a);
+            cairo_fill(cr);
+        }
+    } else {
+        fill_rect(cr, box.background, box.x, box.y, box.width, box.height);
+
+        const float& bt = box.border[0];
+        const float& br = box.border[1];
+        const float& bb = box.border[2];
+        const float& bl = box.border[3];
+        fill_rect(cr, box.border_color, box.x, box.y, box.width, bt);
+        fill_rect(cr, box.border_color, box.x + box.width - br, box.y,
+                  br, box.height);
+        fill_rect(cr, box.border_color, box.x, box.y + box.height - bb,
+                  box.width, bb);
+        fill_rect(cr, box.border_color, box.x, box.y, bl, box.height);
+    }
+
+    // ADR-047: mask draws after background/border fill, before
+    // background-image (which paints above the mask layer).
+    paint_mask_image(cr, box, images);
+
+    // ADR-062: gradient background painted first (fill),
+    // then URL background on top.
+    if (box.background_is_gradient) {
+        paint_background_gradient(cr, box);
+    }
+
+    // ADR-034: draw background-image if present.
+    if (images && !box.background_image_url.empty()) {
+        paint_background_image(cr, box, images);
+    }
+
+    // ADR-034: draw <img> element if this box is one.
+    if (images && box.element && box.element->tag() == "img") {
+        std::string src = box.element->get_attribute("src");
+        if (!src.empty()) {
+            paint_img_element(cr, box, src, images);
+        }
+    }
+
+    } // ADR-069: end box_on_screen paint gate
+
+    // ADR-080: list marker. Drawn in the padding-left area of the
+    // parent ul/ol (40px from UA), positioned at first line's vertical
+    // center. Only renders when list_style_type was captured by
+    // layout_element for a display:list-item box.
+    if (box_on_screen && !box.list_style_type.empty()) {
+        const float marker_x = box.x - 20.0f;
+        const float marker_y = box.y + 10.0f;
+        const float r = 3.0f;
+        cairo_save(cr);
+        cairo_set_source_rgba(cr, 0.125, 0.129, 0.133, 1.0);  // #202122
+        if (box.list_style_type == "disc") {
+            cairo_arc(cr, marker_x, marker_y, r, 0.0, 2.0 * M_PI);
+            cairo_fill(cr);
+        } else if (box.list_style_type == "circle") {
+            cairo_arc(cr, marker_x, marker_y, r, 0.0, 2.0 * M_PI);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+        } else if (box.list_style_type == "square") {
+            cairo_rectangle(cr, marker_x - r, marker_y - r,
+                            r * 2.0, r * 2.0);
+            cairo_fill(cr);
+        }
+        // "none", "decimal", etc.: deferred
+        cairo_restore(cr);
+    }
+
+    // ADR-039: clip children to content bounds when
+    // overflow: hidden. Save / clip / paint / restore.
+    if (box.clip_children) {
+        cairo_save(cr);
+        const float cx = box.x + box.padding[3];
+        const float cy = box.y + box.padding[0];
+        const float cw = box.width - box.padding[3] - box.padding[1];
+        const float ch = box.height - box.padding[0] - box.padding[2];
+        cairo_rectangle(cr, cx, cy,
+                        cw > 0.0f ? cw : 0.0f,
+                        ch > 0.0f ? ch : 0.0f);
+        cairo_clip(cr);
+    }
+    paint_children(cr, box.children, drawer, images,
+                   visible_top, visible_bottom);
+    if (box.clip_children) cairo_restore(cr);
+
+    // ADR-054: pop the rotate save if it was pushed above.
+    // Balanced: save was pushed at function entry, restored
+    // here before the function returns.
+    if (did_transform) cairo_restore(cr);
+}
+
+// ADR-045: draw an inline-element background-image on a
+// LineFragment. Resolves bg_pos_x/y keywords against loaded
+// icon dimensions (layout couldn't -- no image access there).
+void paint_inline_image(cairo_t* cr,
+                        const layout::LineFragment& frag,
+                        const ImageProvider* images) {
+    if (frag.bg_image_url.empty()) return;
+    if (!images || !images->get_surface) return;
+    cairo_surface_t* surf = images->get_surface(frag.bg_image_url);
+    if (!surf) return;
+
+    const float iw = static_cast<float>(
+        cairo_image_surface_get_width(surf));
+    const float ih = static_cast<float>(
+        cairo_image_surface_get_height(surf));
+    if (iw <= 0.0f || ih <= 0.0f) return;
+
+    // Size: explicit bg_size_w wins; if bg_size_h is 0, aspect-
+    // derive from bg_size_w. Both 0 = intrinsic size.
+    float pw = frag.bg_size_w > 0.0f ? frag.bg_size_w : iw;
+    float ph = frag.bg_size_h > 0.0f ? frag.bg_size_h
+             : (frag.bg_size_w > 0.0f
+                ? frag.bg_size_w * (ih / iw)
+                : ih);
+    if (pw <= 0.0f || ph <= 0.0f) return;
+
+    // Position: keyword resolve.
+    float ix = frag.x;
+    if (frag.bg_pos_x == layout::BgPosX::Right) {
+        ix = frag.x + frag.width - pw;
+    } else if (frag.bg_pos_x == layout::BgPosX::Center) {
+        ix = frag.x + (frag.width - pw) * 0.5f;
+    }
+    float iy = frag.y;
+    if (frag.bg_pos_y == layout::BgPosY::Bottom) {
+        iy = frag.y + frag.height - ph;
+    } else if (frag.bg_pos_y == layout::BgPosY::Center) {
+        iy = frag.y + (frag.height - ph) * 0.5f;
+    }
+
+    cairo_save(cr);
+    cairo_translate(cr, ix, iy);
+    cairo_scale(cr, pw / iw, ph / ih);
+    cairo_set_source_surface(cr, surf, 0, 0);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+void paint_children(
+    cairo_t* cr,
+    const std::vector<std::unique_ptr<layout::LayoutNode>>& children,
+    const LineDrawer& drawer,
+    const ImageProvider* images,
+    float visible_top,
+    float visible_bottom) {
+    
+    constexpr float CULL_MARGIN = 128.0f;
+    // ADR-071: if viewport_h is 0 (initial unallocated frame),
+    // disable culling so we paint the whole tree.
+    const bool disable_cull = (visible_bottom <= 0.0f) || (visible_top >= visible_bottom);
+    
+    for (const auto& child : children) {
+        if (!child) continue;
+        
+        HB_LOG(PaintDetail, Trace, "paint_children: kind=%d y=%.1f h=%.1f",
+               static_cast<int>(child->kind), child->y, child->height);
+
+        if (!disable_cull) {
+            // ADR-069 fix: NEVER cull a Box at the parent level.
+            // A Box's y/height does NOT bound its descendants (absolute
+            // positioning, floated figures, overflow:visible). Skipping an
+            // off-screen Box skips everything inside it — including visible
+            // descendants. We only cull leaf nodes (Text, InlineContext).
+            if (child->kind == layout::LayoutKind::Text ||
+                child->kind == layout::LayoutKind::InlineContext) {
+                if (child->y + child->height < visible_top - CULL_MARGIN) {
+                    HB_LOG(PaintDetail, Trace, "  -> CULLED Text/Inline (above)");
+                    continue;
+                }
+                if (child->y > visible_bottom + CULL_MARGIN) {
+                    HB_LOG(PaintDetail, Trace, "  -> CULLED Text/Inline (below)");
+                    continue;
+                }
+            }
+        }
+        
+        switch (child->kind) {
+            case layout::LayoutKind::Box:
+                paint_box(
+                    cr, static_cast<const layout::LayoutBox&>(*child),
+                    drawer, images, visible_top, visible_bottom);
+                break;
+            case layout::LayoutKind::Text: {
+                const auto& lt =
+                    static_cast<const layout::LayoutText&>(*child);
+                for (const auto& frag : lt.lines) {
+                    paint_inline_image(cr, frag, images);
+                }
+                for (const auto& frag : lt.lines) drawer(cr, frag);
+                break;
+            }
+            case layout::LayoutKind::InlineContext: {
+                const auto& ctx =
+                    static_cast<const layout::LayoutInlineContext&>(*child);
+                if (log_enabled(LogCategory::PaintDetail, LogLevel::Trace)) {
+                    std::string first_text = ctx.lines.empty() ? ""
+                        : ctx.lines[0].text.substr(0, 40);
+                    HB_LOG(PaintDetail, Trace,
+                        "  -> painting InlineContext y=%.1f h=%.1f text='%s'",
+                        ctx.y, ctx.height, first_text.c_str());
+                }
+                for (const auto& line : ctx.lines) {
+                    HB_LOG(Paint, Trace, "     LINE y=%.1f text='%.60s' w=%.1f h=%.1f size=%.1f",
+                           line.y, line.text.c_str(), line.width, line.height, line.font_size);
+                }
+                // ADR-081: inline-block fragments carry an atomic
+                // laid-out child box. Paint applies the fragment's
+                // margin-box offset and adjusts the viewport for the
+                // child's local coordinate system before recursing.
+                for (const auto& frag : ctx.lines) {
+                    if (frag.inline_block_child) {
+                        const auto& child = *frag.inline_block_child;
+
+                        // The inline-block subtree is laid out in its own
+                        // local coordinate space. Translate both painting
+                        // AND the viewport used by descendant culling.
+                        const float paint_offset_x =
+                            frag.x + child.margin[3] - child.x;
+                        const float paint_offset_y =
+                            frag.y + child.margin[0] - child.y;
+
+                        // Preserve the existing no-culling sentinel used
+                        // during an unallocated initial viewport.
+                        const bool culling_disabled =
+                            visible_bottom <= 0.0f ||
+                            visible_top >= visible_bottom;
+
+                        const float child_visible_top =
+                            culling_disabled
+                                ? visible_top
+                                : visible_top - paint_offset_y;
+                        const float child_visible_bottom =
+                            culling_disabled
+                                ? visible_bottom
+                                : visible_bottom - paint_offset_y;
+
+                        cairo_save(cr);
+                        cairo_translate(cr, paint_offset_x, paint_offset_y);
+                        paint_box(cr, child, drawer, images,
+                                  child_visible_top, child_visible_bottom);
+                        cairo_restore(cr);
+                    } else {
+                        paint_inline_image(cr, frag, images);
+                    }
+                }
+                for (const auto& frag : ctx.lines) {
+                    if (!frag.inline_block_child) {
+                        drawer(cr, frag);
+                    }
+                }
+                break;
+            }
+            case layout::LayoutKind::Inline:
+                break;
+        }
+    }
+}
+
+
+} // namespace
+
+void paint(cairo_t* cr, const layout::LayoutNode& root,
+           LineDrawer drawer) {
+    paint(cr, root, std::move(drawer), nullptr);
+}
+
+void paint(cairo_t* cr, const layout::LayoutNode& root,
+           LineDrawer drawer, const ImageProvider* images,
+           float visible_top, float visible_bottom) {
+    if (cr == nullptr || !drawer) return;
+    HB_LOG(Paint, Trace, "PAINT START: visible_top=%.1f visible_bottom=%.1f", visible_top, visible_bottom);
+    HB_LOG(Paint, Debug, "paint: root kind=%d",
+           static_cast<int>(root.kind));
+    switch (root.kind) {
+        case layout::LayoutKind::Box:
+            paint_box(
+                cr, static_cast<const layout::LayoutBox&>(root), drawer, images,
+                visible_top, visible_bottom);
+            break;
+        case layout::LayoutKind::Text: {
+            const auto& lt =
+                static_cast<const layout::LayoutText&>(root);
+            for (const auto& frag : lt.lines) drawer(cr, frag);
+            break;
+        }
+        case layout::LayoutKind::InlineContext: {
+            const auto& ctx =
+                static_cast<const layout::LayoutInlineContext&>(root);
+            for (const auto& frag : ctx.lines) drawer(cr, frag);
+            break;
+        }
+        case layout::LayoutKind::Inline:
+            break;
+    }
+}
+
+} // namespace honeybee::renderer::paint

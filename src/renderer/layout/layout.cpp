@@ -1,0 +1,3653 @@
+#include "renderer/layout/layout.hpp"
+#include "renderer/layout/grid_layout.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+
+#include "renderer/layout/style_values.hpp"
+#include "renderer/layout/text_utils.hpp"
+
+#include "base/log.hpp"
+
+namespace honeybee::renderer::layout {
+
+namespace {
+
+constexpr float kDefaultFontSize = 16.0f;
+
+// ADR-079: per-block float context, threaded into layout_element so
+// descendants can wrap text around ancestor floats per line instead
+// of being block-narrowed wholesale. All coordinates are absolute
+// within the layout tree's coordinate system.
+struct FloatContext {
+    float parent_x      = 0.0f;  // parent's content-left (absolute x)
+    float parent_width  = 0.0f;  // parent's content width
+    float float_left_w  = 0.0f;
+    float float_right_w = 0.0f;
+    float float_bottom  = 0.0f;  // absolute y where floats end
+    bool  active        = false;
+};
+
+// ADR-062: local helpers for gradient parsing. Duplicated from
+// style_values.cpp's anonymous namespace (file-local there);
+// cheaper than restructuring the layering -- same pattern as
+// ADR-056's is_color_token duplication.
+namespace gradient_detail {
+
+std::string_view g_trim(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t'
+                          || s.front() == '\n' || s.front() == '\r')) {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t'
+                          || s.back() == '\n' || s.back() == '\r')) {
+        s.remove_suffix(1);
+    }
+    return s;
+}
+
+std::vector<std::string_view> g_split_commas(std::string_view inner) {
+    std::vector<std::string_view> out;
+    size_t start = 0;
+    int depth = 0;
+    for (size_t i = 0; i < inner.size(); ++i) {
+        if (inner[i] == '(') ++depth;
+        else if (inner[i] == ')') --depth;
+        else if (inner[i] == ',' && depth == 0) {
+            out.push_back(inner.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    out.push_back(inner.substr(start));
+    return out;
+}
+
+// Split on whitespace (used for "<color> [<position>]" stop parsing).
+std::vector<std::string_view> g_split_whitespace(std::string_view s) {
+    std::vector<std::string_view> out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t'
+                                || s[i] == '\n' || s[i] == '\r')) {
+            ++i;
+        }
+        if (i >= s.size()) break;
+        const std::size_t start = i;
+        while (i < s.size() && s[i] != ' ' && s[i] != '\t'
+               && s[i] != '\n' && s[i] != '\r') {
+            ++i;
+        }
+        out.push_back(s.substr(start, i - start));
+    }
+    return out;
+}
+
+// Direction keyword -> CSS angle in degrees.
+float direction_to_deg(std::string_view dir) {
+    dir = g_trim(dir);
+    if (dir == "to bottom") return 180.0f;
+    if (dir == "to top")    return 0.0f;
+    if (dir == "to right")  return 90.0f;
+    if (dir == "to left")   return 270.0f;
+    if (dir == "to bottom right") return 135.0f;
+    if (dir == "to bottom left")  return 225.0f;
+    if (dir == "to top right")    return 45.0f;
+    if (dir == "to top left")     return 315.0f;
+    return -1.0f;  // not a direction
+}
+
+// Parse "<N>deg" or "<N>" as degrees. Returns false on failure.
+bool parse_angle_sv(std::string_view sv, float& out_deg) {
+    sv = g_trim(sv);
+    if (sv.empty()) return false;
+    std::string_view num = sv;
+    if (num.size() >= 3 && num.substr(num.size() - 3) == "deg") {
+        num = num.substr(0, num.size() - 3);
+    }
+    try {
+        out_deg = std::stof(std::string(num));
+        return true;
+    } catch (...) { return false; }
+}
+
+}  // namespace gradient_detail
+
+// ADR-062: parse "linear-gradient(...)" string into box fields.
+// Called from layout_element after background_image_url extraction.
+void parse_background_gradient(std::string_view raw, LayoutBox& box) {
+    const std::string_view prefix = "linear-gradient(";
+    if (raw.rfind(prefix, 0) != 0) return;
+    if (raw.back() != ')') return;
+
+    std::string_view inner =
+        raw.substr(prefix.size(), raw.size() - prefix.size() - 1);
+    auto tokens = gradient_detail::g_split_commas(inner);
+    if (tokens.size() < 2) return;
+
+    std::size_t first_stop = 0;
+    box.background_gradient_angle_deg = 180.0f;  // default
+
+    // First token: direction (Ndeg or "to <keyword>") OR first stop.
+    {
+        auto t0 = gradient_detail::g_trim(tokens[0]);
+        // "to " prefix
+        if (t0.rfind("to ", 0) == 0) {
+            const float deg = gradient_detail::direction_to_deg(t0);
+            if (deg >= 0.0f) {
+                box.background_gradient_angle_deg = deg;
+                first_stop = 1;
+            } else {
+                return;  // malformed direction
+            }
+        } else {
+            // Maybe Ndeg
+            float deg = 0.0f;
+            if (gradient_detail::parse_angle_sv(t0, deg)) {
+                // Only treat as angle if it ends with "deg" (avoid
+                // treating bare numbers as angles; CSS requires
+                // explicit deg).
+                if (t0.size() >= 3 &&
+                    t0.substr(t0.size() - 3) == "deg") {
+                    box.background_gradient_angle_deg = deg;
+                    first_stop = 1;
+                }
+            }
+        }
+    }
+
+    // Parse stops.
+    const std::size_t n = tokens.size() - first_stop;
+    if (n < 2) return;
+    box.background_gradient_stops.clear();
+    box.background_gradient_stops.reserve(n);
+    for (std::size_t i = first_stop; i < tokens.size(); ++i) {
+        auto stop_tokens = gradient_detail::g_split_whitespace(
+            gradient_detail::g_trim(tokens[i]));
+        if (stop_tokens.empty()) return;
+        // First token = color; optional second = position (ignored in v1).
+        Color c = parse_color(stop_tokens[0]);
+        const float pos = static_cast<float>(i - first_stop)
+                        / static_cast<float>(n - 1);
+        box.background_gradient_stops.push_back({c, pos});
+    }
+
+    box.background_is_gradient = true;
+}
+
+const css::ComputedStyle* lookup(const css::ComputedStyleMap& styles,
+                                 const dom::Element& el) {
+    auto it = styles.find(&el);
+    return it == styles.end() ? nullptr : &it->second;
+}
+
+// ADR-082: an inline-block uses its last in-flow line-box baseline
+// only when all of its overflow axes remain visible.
+bool overflow_is_visible(const css::ComputedStyle* style) {
+    if (!style) return true;
+
+    const char* properties[] = {
+        "overflow", "overflow-x", "overflow-y"
+    };
+
+    for (const char* property : properties) {
+        const auto value = style->get(property);
+        if (!value) continue;
+
+        const std::string& raw = *value;
+        std::size_t i = 0;
+
+        while (i < raw.size()) {
+            while (i < raw.size() &&
+                   (raw[i] == ' ' || raw[i] == '\t' ||
+                    raw[i] == '\n' || raw[i] == '\r')) {
+                ++i;
+            }
+
+            const std::size_t start = i;
+
+            while (i < raw.size() &&
+                   raw[i] != ' ' && raw[i] != '\t' &&
+                   raw[i] != '\n' && raw[i] != '\r') {
+                ++i;
+            }
+
+            if (start < i &&
+                raw.substr(start, i - start) != "visible") {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// ADR-082: find the last in-flow line box in an inline-block's
+// subtree. Coordinates are relative to the inline-block's border-box
+// origin because its subtree was laid out from (0, 0).
+//
+// Atomic inline-block fragments are deliberately not traversed:
+// they are not descendants in the LayoutBox child tree.
+std::optional<float> last_in_flow_line_baseline(
+    const LayoutBox& root,
+    const css::ComputedStyleMap& styles) {
+
+    std::optional<float> result;
+
+    auto visit = [&](auto&& self, const LayoutNode& node) -> void {
+        switch (node.kind) {
+            case LayoutKind::Text: {
+                const auto& text = static_cast<const LayoutText&>(node);
+                if (!text.lines.empty()) {
+                    const auto& last = text.lines.back();
+                    result = last.y + last.baseline;
+                }
+                break;
+            }
+
+            case LayoutKind::InlineContext: {
+                const auto& context =
+                    static_cast<const LayoutInlineContext&>(node);
+
+                if (!context.line_baselines.empty()) {
+                    result = context.line_baselines.back();
+                }
+
+                for (const auto& child : context.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Inline: {
+                const auto& inline_node =
+                    static_cast<const LayoutInline&>(node);
+
+                for (const auto& child : inline_node.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+
+            case LayoutKind::Box: {
+                const auto& child_box =
+                    static_cast<const LayoutBox&>(node);
+
+                // Absolutely and fixed-positioned boxes are out of flow.
+                if (child_box.position == Position::Absolute ||
+                    child_box.position == Position::Fixed) {
+                    break;
+                }
+
+                // Floats do not establish in-flow line boxes for
+                // the inline-block's baseline.
+                if (child_box.element) {
+                    const auto* child_style =
+                        lookup(styles, *child_box.element);
+
+                    if (child_style) {
+                        const auto float_value =
+                            child_style->get("float");
+
+                        if (float_value && *float_value != "none") {
+                            break;
+                        }
+                    }
+                }
+
+                for (const auto& child : child_box.children) {
+                    if (child) self(self, *child);
+                }
+                break;
+            }
+        }
+    };
+
+    for (const auto& child : root.children) {
+        if (child) visit(visit, *child);
+    }
+
+    return result;
+}
+
+void fill_sides(float out[4], const css::ComputedStyle* style,
+                const LengthContext& ctx,
+                const char* top, const char* right,
+                const char* bottom, const char* left) {
+    if (!style) {
+        out[0] = out[1] = out[2] = out[3] = 0.0f;
+        return;
+    }
+    // ADR-060: use direct find with transparent-hash lookup
+    // (string_view key, no allocation) + reference access to
+    // .value (no copy). Eliminates 3 allocs per call vs the old
+    // get() path.
+    auto px = [&](std::string_view p) -> float {
+        auto it = style->declarations.find(p);
+        if (it == style->declarations.end()) return 0.0f;
+        return parse_length(it->second.value, ctx);
+    };
+    out[0] = px(top);
+    out[1] = px(right);
+    out[2] = px(bottom);
+    out[3] = px(left);
+}
+
+std::string font_family_of(const css::ComputedStyle* style) {
+    if (!style) return {};
+    return style->get("font-family").value_or("");
+}
+
+float font_size_of(const css::ComputedStyle* style,
+                   float parent_font_size, float root_font_size) {
+    if (!style) return parent_font_size;
+    const auto v = style->get("font-size");
+    if (!v) return parent_font_size;
+    LengthContext ctx;
+    ctx.font_size = parent_font_size;
+    ctx.parent_font_size = parent_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = true;
+    const float px = parse_length(*v, ctx);
+    return px > 0.0f ? px : parent_font_size;
+}
+
+
+// ADR-082: resolve the computed font size of an element while
+// respecting the element on which an inherited declaration
+// was originally specified.
+float computed_font_size_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    float root_font_size) {
+
+    const css::ComputedStyle* style = lookup(styles, el);
+    if (!style) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    auto it = style->declarations.find("font-size");
+    if (it == style->declarations.end()) {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (parent) {
+            return computed_font_size_for_element(
+                static_cast<const dom::Element&>(*parent),
+                styles, root_font_size);
+        }
+        return root_font_size;
+    }
+
+    const css::CascadeValue& value = it->second;
+    const dom::Element* source =
+        value.specified_on ? value.specified_on : &el;
+
+    float parent_size = root_font_size;
+    const dom::Node* parent = source->parent();
+    while (parent && parent->type() != dom::NodeType::Element)
+        parent = parent->parent();
+
+    if (parent) {
+        parent_size = computed_font_size_for_element(
+            static_cast<const dom::Element&>(*parent),
+            styles, root_font_size);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = parent_size;
+    ctx.parent_font_size = parent_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = true;
+
+    const float result = parse_length(value.value, ctx);
+    return result > 0.0f ? result : parent_size;
+}
+
+std::string_view trim_line_height(std::string_view value) {
+    while (!value.empty() &&
+           (value.front() == ' ' || value.front() == '\t' ||
+            value.front() == '\n' || value.front() == '\r')) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '\t' ||
+            value.back() == '\n' || value.back() == '\r')) {
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+bool parse_line_height_number(std::string_view value, float& result) {
+    value = trim_line_height(value);
+    if (value.empty()) return false;
+
+    std::string copy(value);
+    char* end = nullptr;
+    const float parsed = std::strtof(copy.c_str(), &end);
+
+    if (end == copy.c_str() || !end || *end != '\0')
+        return false;
+
+    result = parsed;
+    return true;
+}
+
+// Resolve line-height using the declaration's original element.
+// Unitless values inherit as multipliers; percentages and lengths
+// inherit as absolute computed lengths.
+float used_line_height(
+    const dom::Element& el,
+    const css::ComputedStyle* style,
+    const css::ComputedStyleMap& styles,
+    float own_font_size,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetrics& metrics) {
+
+    if (!style)
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    auto it = style->declarations.find("line-height");
+    if (it == style->declarations.end())
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    const css::CascadeValue& declaration = it->second;
+    const std::string_view value =
+        trim_line_height(declaration.value);
+
+    if (value == "normal")
+        return metrics.normal_line_height > 0.0f
+                   ? metrics.normal_line_height
+                   : own_font_size * 1.2f;
+
+    float number = 0.0f;
+    if (parse_line_height_number(value, number))
+        return std::max(0.0f, number * own_font_size);
+
+    const dom::Element* source =
+        declaration.specified_on ? declaration.specified_on : &el;
+
+    const float source_font_size =
+        computed_font_size_for_element(
+            *source, styles, root_font_size);
+
+    if (!value.empty() && value.back() == '%') {
+        std::string_view numeric = value;
+        numeric.remove_suffix(1);
+        if (parse_line_height_number(numeric, number))
+            return std::max(0.0f, source_font_size * number / 100.0f);
+    }
+
+    LengthContext ctx;
+    ctx.font_size = source_font_size;
+    ctx.parent_font_size = source_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    const float result = parse_length(value, ctx);
+    return result >= 0.0f
+               ? result
+               : (metrics.normal_line_height > 0.0f
+                      ? metrics.normal_line_height
+                      : own_font_size * 1.2f);
+}
+
+
+// Resolve the computed vertical-align keyword/value for an element.
+// vertical-align is non-inherited; an explicit `inherit` walks to
+// the nearest element ancestor. `initial` and `unset` resolve to
+// the initial value, baseline.
+std::string vertical_align_value_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles) {
+
+    auto it = styles.find(&el);
+    if (it == styles.end())
+        return "baseline";
+
+    auto declaration = it->second.declarations.find("vertical-align");
+    if (declaration == it->second.declarations.end())
+        return "baseline";
+
+    const std::string_view value =
+        trim_line_height(declaration->second.value);
+
+    if (value == "baseline" || value == "sub" ||
+        value == "super" || value == "middle" ||
+        value == "text-top" || value == "text-bottom" ||
+        value == "top" || value == "bottom") {
+        return std::string(value);
+    }
+
+    if (value == "initial" || value == "unset" || value.empty())
+        return "baseline";
+
+    if (value == "inherit") {
+        const dom::Node* parent = el.parent();
+        while (parent && parent->type() != dom::NodeType::Element)
+            parent = parent->parent();
+
+        if (!parent)
+            return "baseline";
+
+        return vertical_align_value_for_element(
+            static_cast<const dom::Element&>(*parent), styles);
+    }
+
+    // Lengths and percentages are handled by the numeric resolver.
+    return std::string(value);
+}
+
+// Resolve vertical-align offsets for baseline-relative keyword values
+// and numeric values. Positive offsets raise the inline box.
+float vertical_align_offset_for_element(
+    const dom::Element& el,
+    const css::ComputedStyleMap& styles,
+    const std::string& fallback_family,
+    float root_font_size,
+    float viewport_w,
+    float viewport_h,
+    const FontMetricsProvider& font_metrics) {
+
+    const std::string value =
+        vertical_align_value_for_element(el, styles);
+
+    if (value == "baseline" || value == "top" || value == "bottom")
+        return 0.0f;
+
+    auto metrics_for = [&](const dom::Element& target,
+                           const std::string& inherited_family) {
+        auto style_it = styles.find(&target);
+        const css::ComputedStyle* target_style =
+            style_it == styles.end() ? nullptr : &style_it->second;
+
+        const float size =
+            computed_font_size_for_element(target, styles, root_font_size);
+
+        std::string family = inherited_family;
+        if (target_style) {
+            const std::string declared_family =
+                font_family_of(target_style);
+            if (!declared_family.empty())
+                family = declared_family;
+        }
+
+        FontMetrics metrics;
+        if (font_metrics) {
+            metrics = font_metrics(family, size);
+        } else {
+            metrics.ascent = size * 0.8f;
+            metrics.descent = size * 0.2f;
+            metrics.x_height = size * 0.5f;
+            metrics.normal_line_height = size * 1.2f;
+        }
+
+        if (metrics.ascent <= 0.0f)
+            metrics.ascent = size * 0.8f;
+        if (metrics.descent <= 0.0f)
+            metrics.descent = size * 0.2f;
+        if (metrics.x_height <= 0.0f)
+            metrics.x_height = size * 0.5f;
+
+        return metrics;
+    };
+
+    const FontMetrics element_metrics =
+        metrics_for(el, fallback_family);
+
+    const dom::Element* parent_element = nullptr;
+    const dom::Node* parent_node = el.parent();
+    while (parent_node) {
+        if (parent_node->type() == dom::NodeType::Element) {
+            parent_element =
+                static_cast<const dom::Element*>(parent_node);
+            break;
+        }
+        parent_node = parent_node->parent();
+    }
+
+    const FontMetrics parent_metrics = parent_element
+        ? metrics_for(*parent_element, fallback_family)
+        : element_metrics;
+
+    // The exact sub/super displacement is user-agent-defined.
+    // Use half the parent's x-height consistently.
+    if (value == "super")
+        return parent_metrics.x_height * 0.5f;
+
+    if (value == "sub")
+        return -parent_metrics.x_height * 0.5f;
+
+    // Align the element's font-box midpoint with the parent's baseline
+    // plus half the parent's x-height.
+    if (value == "middle") {
+        return (element_metrics.ascent - element_metrics.descent -
+                parent_metrics.x_height) * 0.5f;
+    }
+
+    // Baseline coordinates increase downward. Align the corresponding
+    // font-box edges with the parent's font-box edges.
+    if (value == "text-top")
+        return element_metrics.ascent - parent_metrics.ascent;
+
+    if (value == "text-bottom")
+        return parent_metrics.descent - element_metrics.descent;
+
+    auto style_it = styles.find(&el);
+    const css::ComputedStyle* style =
+        style_it == styles.end() ? nullptr : &style_it->second;
+
+    const float own_font_size =
+        computed_font_size_for_element(el, styles, root_font_size);
+
+    if (value.size() > 1 && value.back() == '%') {
+        std::string_view numeric(value);
+        numeric.remove_suffix(1);
+
+        float percentage = 0.0f;
+        if (!parse_line_height_number(numeric, percentage))
+            return 0.0f;
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, element_metrics);
+
+        return line_height * percentage / 100.0f;
+    }
+
+    LengthContext ctx;
+    ctx.font_size = own_font_size;
+    ctx.parent_font_size = own_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    return parse_length(value, ctx);
+}
+
+Color text_color_of(const css::ComputedStyle* style) {
+    if (!style) return Color::black();
+    const auto v = style->get("color");
+    return v ? parse_color(*v) : Color::black();
+}
+
+void flatten_inline_text(const dom::Node& node, std::string& out) {
+    if (node.type() == dom::NodeType::Text) {
+        const auto& tn = static_cast<const dom::TextNode&>(node);
+        out += tn.data();
+    } else if (node.type() == dom::NodeType::Element) {
+        for (const auto& child : node.children()) {
+            flatten_inline_text(*child, out);
+        }
+    }
+}
+
+bool is_ws_byte(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+// Recursively walk an inline subtree, emitting StyledWord tokens.
+// Text nodes inherit the current style parameters. Elements with
+// their own color in ComputedStyle override the color for their
+// descendants. Font family and font size are inherited uniformly
+// (per ADR-016, font-weight/style render is deferred).
+// prev_had_space is threaded through siblings so that whitespace
+// at the boundary between inline elements is preserved.
+void flatten_inline_to_words(
+    const dom::Node& node,
+    const css::ComputedStyleMap& styles,
+    const std::string& family,
+    float size,
+    float root_font_size,
+    const Color& default_color,
+    bool& prev_had_space,
+    std::vector<StyledWord>& out,
+    const dom::Element* current_element,
+    const std::vector<const dom::Element*>& inline_ancestors) {
+
+    if (node.type() == dom::NodeType::Text) {
+        const auto& tn = static_cast<const dom::TextNode&>(node);
+        const std::string_view data = tn.data();
+        bool pending_ws = false;
+        std::size_t i = 0;
+        while (i < data.size()) {
+            if (is_ws_byte(data[i])) {
+                pending_ws = true;
+                ++i;
+                continue;
+            }
+            const std::size_t start = i;
+            while (i < data.size() && !is_ws_byte(data[i])) ++i;
+            StyledWord w;
+            w.text = std::string(data.substr(start, i - start));
+            HB_LOG(LayoutDetail, Trace, "flatten_inline_to_words: word='%.20s'", w.text.c_str());
+            w.font_family = family;
+            w.font_size = size;
+            w.color = default_color;
+            w.preceded_by_space =
+                !out.empty() && (prev_had_space || pending_ws);
+            w.element = current_element;
+            w.inline_ancestors = inline_ancestors;
+            pending_ws = false;
+            prev_had_space = false;
+            out.push_back(std::move(w));
+        }
+        if (pending_ws) prev_had_space = true;
+    } else if (node.type() == dom::NodeType::Element) {
+        const auto& el = static_cast<const dom::Element&>(node);
+        auto it = styles.find(&el);
+
+        // ADR-082: resolve font properties at each inline element
+        // boundary so nested spans can use their own font metrics.
+        std::string element_family = family;
+        float element_size = size;
+
+        if (it != styles.end()) {
+            const std::string declared_family =
+                font_family_of(&it->second);
+            if (!declared_family.empty())
+                element_family = declared_family;
+
+            element_size = computed_font_size_for_element(
+                el, styles, root_font_size);
+        }
+
+        // ADR-081: detect inline-block here as well as in
+        // layout_block_children. Inline parents (e.g. `.catlinks ul`
+        // which is display:inline) recurse through flatten, so
+        // inline-block children would otherwise be missed.
+        if (it != styles.end()) {
+            const auto dv = it->second.get("display");
+            if (dv && *dv == "inline-block") {
+                StyledWord w;
+                w.text = "";
+                w.font_family = element_family;
+                w.font_size = element_size;
+                w.color = default_color;
+                w.preceded_by_space = !out.empty() && prev_had_space;
+                w.element = &el;
+                w.inline_block_element = &el;
+                w.inline_ancestors = inline_ancestors;
+                w.inline_ancestors.push_back(&el);
+                prev_had_space = false;
+                out.push_back(std::move(w));
+                return;
+            }
+        }
+
+        // ADR-026 fix: display: none check in inline flattening.
+        //
+        // Block-level iteration skips display: none elements
+        // before they can enter inline_run (in layout_element's
+        // child loop), but once inside an inline run, recursion
+        // into a display: none descendant (e.g. a <style> nested
+        // inside a <span>) had no such guard. Wikipedia ships 18
+        // <style> tags in <body>; several live inside inline
+        // elements and were being rendered as visible CSS text
+        // before this fix.
+        if (it != styles.end()) {
+            const auto dv = it->second.get("display");
+            if (dv && *dv == "none") return;
+        }
+
+        // Preserve this inline element in the ancestry passed to
+        // its descendants. The owning block is never added here.
+        auto child_ancestors = inline_ancestors;
+        child_ancestors.push_back(&el);
+
+        Color color = default_color;
+        if (it != styles.end()) {
+            const auto cv = it->second.get("color");
+            if (cv) {
+                const Color c = parse_color(*cv);
+                if (c.a > 0.0f) color = c;
+            }
+        }
+        for (const auto& child : el.children()) {
+            flatten_inline_to_words(
+                *child, styles,
+                element_family, element_size, root_font_size,
+                color, prev_had_space, out, &el, child_ancestors);
+        }
+
+    }
+}
+
+// ADR-045: shared post-process for inline background-image +
+// padding-right. Called from both LayoutText path (single-element
+// text runs, where <a> goes today) and InlineContext path
+// (inline formatting context with multiple mixed-style words).
+void apply_inline_bg_pp(
+    std::vector<LineFragment>& frags,
+    const css::ComputedStyleMap& styles,
+    float font_size, float parent_font_size,
+    float root_font_size, float content_w) {
+    LengthContext pad_ctx;
+    pad_ctx.font_size = font_size;
+    pad_ctx.parent_font_size = parent_font_size;
+    pad_ctx.root_font_size = root_font_size;
+    pad_ctx.parent_content_width = content_w;
+    pad_ctx.on_font_size_property = false;
+
+    float cur_line_y = -1.0e30f;
+    float accumulated_shift = 0.0f;
+    for (auto& frag : frags) {
+        if (frag.y != cur_line_y) {
+            cur_line_y = frag.y;
+            accumulated_shift = 0.0f;
+        }
+        if (accumulated_shift > 0.0f) {
+            frag.x += accumulated_shift;
+        }
+        if (!frag.element) continue;
+        const css::ComputedStyle* fs = lookup(styles, *frag.element);
+        if (!fs) continue;
+
+        if (auto bg = fs->get("background-image");
+            bg && !bg->empty() && *bg != "none") {
+            const auto upos = bg->find("url(");
+            if (upos != std::string::npos) {
+                auto s = upos + 4;
+                while (s < bg->size() &&
+                       ((*bg)[s] == ' ' || (*bg)[s] == '\'' ||
+                        (*bg)[s] == '"')) ++s;
+                auto e = bg->find_first_of(" \t)'\"", s);
+                if (e == std::string::npos) e = bg->size();
+                frag.bg_image_url = bg->substr(s, e - s);
+            }
+        }
+
+        if (auto sz = fs->get("background-size");
+            sz && !sz->empty() && *sz != "auto") {
+            std::string tok;
+            for (char c : *sz) {
+                if (c == ' ' || c == '\t') break;
+                tok.push_back(c);
+            }
+            if (!tok.empty() && tok != "cover" && tok != "contain"
+                && tok.back() != '%') {
+                frag.bg_size_w = parse_length(tok, pad_ctx);
+            }
+        }
+
+        if (auto ps = fs->get("background-position");
+            ps && !ps->empty()) {
+            std::vector<std::string> toks;
+            {
+                std::string t;
+                for (char c : *ps) {
+                    if (c == ' ' || c == '\t') {
+                        if (!t.empty()) {
+                            toks.push_back(t); t.clear();
+                        }
+                    } else t.push_back(c);
+                }
+                if (!t.empty()) toks.push_back(t);
+            }
+            auto px = [](const std::string& t) -> BgPosX {
+                if (t == "right") return BgPosX::Right;
+                if (t == "center") return BgPosX::Center;
+                return BgPosX::Left;
+            };
+            auto py = [](const std::string& t) -> BgPosY {
+                if (t == "bottom") return BgPosY::Bottom;
+                if (t == "center") return BgPosY::Center;
+                return BgPosY::Top;
+            };
+            if (toks.size() == 1) {
+                const auto& t = toks[0];
+                if (t == "center") {
+                    frag.bg_pos_x = BgPosX::Center;
+                    frag.bg_pos_y = BgPosY::Center;
+                } else if (t == "left" || t == "right") {
+                    frag.bg_pos_x = px(t);
+                } else if (t == "top" || t == "bottom") {
+                    frag.bg_pos_y = py(t);
+                }
+            } else if (toks.size() >= 2) {
+                const auto& t0 = toks[0];
+                const auto& t1 = toks[1];
+                if (t1 == "left" || t1 == "right") {
+                    frag.bg_pos_x = px(t1);
+                    frag.bg_pos_y = py(t0);
+                } else {
+                    frag.bg_pos_x = px(t0);
+                    frag.bg_pos_y = py(t1);
+                }
+            }
+        }
+
+        if (auto rr = fs->get("background-repeat");
+            rr && !rr->empty()) {
+            if (rr->find("no-repeat") != std::string::npos) {
+                frag.bg_no_repeat = true;
+            }
+        }
+
+        if (auto pad = fs->get("padding-right");
+            pad && !pad->empty() && *pad != "0" && *pad != "auto") {
+            const float pv = parse_length(*pad, pad_ctx);
+            if (pv > 0.0f) {
+                frag.width += pv;
+                accumulated_shift += pv;
+            }
+        }
+    }
+}
+
+// ADR-057: compute what this element's content height WILL be,
+// based on its own CSS height: property (or 0 for auto). Used to
+// thread parent_content_height into children before they lay out.
+float own_declared_content_height(
+    const css::ComputedStyle* style, const LengthContext& ctx) {
+    if (!style) return 0.0f;
+    auto h = style->get("height");
+    if (!h || is_auto(*h)) return 0.0f;
+    const float v = parse_length_for_height(*h, ctx);
+    return v > 0.0f ? v : 0.0f;
+}
+
+LayoutBox layout_element(const dom::Element& el,
+                         const css::ComputedStyleMap& styles,
+                         const TextMeasurer& measurer,
+                         float x_before_margin,
+                         float y_before_margin,
+                         float parent_content_width,
+                         float parent_content_height,    // ADR-057
+                         float parent_font_size,
+                         float root_font_size,
+                         float viewport_w,   // ADR-051
+                         float viewport_h,   // ADR-051
+                         Direction parent_dir,
+                         ImageDimLookup image_dims,
+                         const FontMetricsProvider& font_metrics,
+                         const FloatContext* float_ctx = nullptr) {
+    {
+        const css::ComputedStyle* s = nullptr;
+        auto it = styles.find(&el);
+        if (it != styles.end()) s = &it->second;
+        std::string disp = s ? s->get("display").value_or("default") : "none";
+        HB_LOG(LayoutDetail, Trace, "layout_element: enter <%s> id='%s' class='%s' display='%s'",
+               el.tag().c_str(), el.get_attribute("id").c_str(), el.get_attribute("class").c_str(), disp.c_str());
+    }
+
+    LayoutBox box;
+    box.element = &el;
+
+    const Direction own_dir = resolve_direction(el, parent_dir);
+
+    const css::ComputedStyle* style = lookup(styles, el);
+        // ADR-034: extract background-image url(...) if present.
+    // Paint fetches + decodes (PNG via Cairo, SVG via librsvg)
+    // and draws at box rect. Handles data: URLs (search icon).
+    if (style) {
+        if (auto bg = style->get("background-image")) {
+            const std::string& v = *bg;
+            if (v.find("url(") != std::string::npos) {
+                const auto start = v.find("url(") + 4;
+                const auto end = v.find(')', start);
+                if (end != std::string::npos) {
+                    std::string url = v.substr(start, end - start);
+                    while (!url.empty() && (url.front() == ' ' || url.front() == '\t')) url.erase(url.begin());
+                    while (!url.empty() && (url.back() == ' ' || url.back() == '\t')) url.pop_back();
+                    if (!url.empty() && (url.front() == '\'' || url.front() == '"')) url.erase(url.begin());
+                    if (!url.empty() && (url.back() == '\'' || url.back() == '"')) url.pop_back();
+                    box.background_image_url = url;
+                }
+            }
+        }
+    }
+
+    // ADR-062: parse linear-gradient into structured form.
+    if (style) {
+        if (auto bg = style->get("background-image")) {
+            if (bg->find("linear-gradient(") != std::string::npos) {
+                parse_background_gradient(*bg, box);
+            }
+        }
+    }
+
+    // ADR-033: parse position. ADR-042 extends: relative and
+    // absolute are now used (relative = containing block marker,
+    // absolute = out-of-flow + positioned). Sticky remains
+    // stored-but-static. Fixed behavior unchanged (ADR-033
+    // special case in layout_block_children).
+    if (style) {
+        if (auto p = style->get("position")) {
+            if (*p == "relative") box.position = Position::Relative;
+            else if (*p == "absolute") box.position = Position::Absolute;
+            else if (*p == "fixed") box.position = Position::Fixed;
+            else if (*p == "sticky") box.position = Position::Sticky;
+            // ADR-042: any non-static position is a containing
+            // block for absolute descendants.
+            if (box.position != Position::Static) {
+                box.is_containing_block = true;
+            }
+        }
+    }
+
+    // ADR-032: compute paint-authoritative visibility. Layout
+    // still lays out hidden elements (visibility:hidden preserves
+    // their space per CSS spec); paint respects LayoutBox::visible
+    // and skips the subtree.
+    if (style) {
+        if (auto v = style->get("visibility")) {
+            if (*v == "hidden" || *v == "collapse") {
+                box.visible = false;
+            }
+        }
+        if (box.visible) {
+            if (auto o = style->get("opacity")) {
+                try {
+                    if (std::stof(*o) <= 0.0001f) {
+                        box.visible = false;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
+    const float own_font_size =
+        computed_font_size_for_element(el, styles, root_font_size);
+
+    LengthContext ctx;
+    ctx.font_size = own_font_size;
+    ctx.parent_font_size = parent_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.parent_content_width = parent_content_width;
+    // ADR-057: <html>'s containing block is the viewport (CSS
+    // spec: initial containing block). So % heights on <html>
+    // resolve against viewport_h, not parent_content_height.
+    // <body> gets the correct value automatically -- its
+    // parent is <html>, and html's own_content_height (computed
+    // below) flows into body as its parent_content_height.
+    ctx.parent_content_height =
+        (el.tag() == "html") ? viewport_h : parent_content_height;
+    ctx.on_font_size_property = false;
+    ctx.viewport_w = viewport_w;
+    ctx.viewport_h = viewport_h;
+
+    // ADR-057: compute own declared content height upfront --
+    // this becomes the parent_content_height for all children.
+    const float own_content_height =
+        own_declared_content_height(style, ctx);
+
+    fill_sides(box.margin, style, ctx,
+               "margin-top", "margin-right", "margin-bottom", "margin-left");
+    fill_sides(box.border, style, ctx,
+               "border-top-width", "border-right-width",
+               "border-bottom-width", "border-left-width");
+    fill_sides(box.padding, style, ctx,
+               "padding-top", "padding-right", "padding-bottom", "padding-left");
+
+    if (style) {
+        const auto bg = style->get("background-color");
+        box.background = bg ? parse_color(*bg) : Color::transparent();
+        const auto bc = style->get("border-color");
+        box.border_color = bc ? parse_color(*bc) : Color::transparent();
+
+        // ADR-043: parse box-shadow. Non-inset, non-blurred
+        // rendered in Commit 2; inset / blur / multi-shadow
+        // parsed and stored but skipped at paint.
+        if (auto bs = style->get("box-shadow");
+            bs && !bs->empty() && *bs != "none") {
+            // Multi-shadow: take first only (comma-separated
+            // list; each remaining shadow is silently dropped).
+            std::string first = *bs;
+            if (auto comma = first.find(',');
+                comma != std::string::npos) {
+                first = first.substr(0, comma);
+            }
+
+            // Tokenize on whitespace.
+            std::vector<std::string> tokens;
+            {
+                std::istringstream iss(first);
+                std::string tok;
+                while (iss >> tok) tokens.push_back(tok);
+            }
+
+            // Optional `inset` keyword at start.
+            bool inset = false;
+            if (!tokens.empty() && tokens[0] == "inset") {
+                inset = true;
+                tokens.erase(tokens.begin());
+            }
+
+            // Validate: 2-4 length tokens + 1 color token.
+            // Length token: "0" exactly, or numeric prefix +
+            // px|em|rem|% suffix. Rejects solid / auto / etc.
+            auto is_length_token = [](const std::string& t) -> bool {
+                if (t == "0") return true;
+                auto ends_with = [&](std::string_view suf) {
+                    return t.size() > suf.size() &&
+                        t.compare(t.size() - suf.size(),
+                                  suf.size(), suf) == 0;
+                };
+                size_t unit_len = 0;
+                if (ends_with("rem")) unit_len = 3;
+                else if (ends_with("px")) unit_len = 2;
+                else if (ends_with("em")) unit_len = 2;
+                else if (ends_with("%"))  unit_len = 1;
+                else return false;
+                const size_t num_end = t.size() - unit_len;
+                if (num_end == 0) return false;
+                bool has_digit = false;
+                for (size_t i = 0; i < num_end; ++i) {
+                    const char c = t[i];
+                    if (c >= '0' && c <= '9') { has_digit = true; continue; }
+                    if (c == '.') continue;
+                    if (c == '-' && i == 0) continue;
+                    return false;
+                }
+                return has_digit;
+            };
+
+            if (tokens.size() >= 3 && tokens.size() <= 5) {
+                bool ok = true;
+                std::vector<float> lens;
+                for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+                    if (!is_length_token(tokens[i])) { ok = false; break; }
+                    lens.push_back(parse_length(tokens[i], ctx));
+                }
+                if (ok && lens.size() >= 2 && lens.size() <= 4) {
+                    box.box_shadow_ox     = lens[0];
+                    box.box_shadow_oy     = lens[1];
+                    box.box_shadow_blur   = lens.size() >= 3 ? lens[2] : 0.0f;
+                    box.box_shadow_spread = lens.size() >= 4 ? lens[3] : 0.0f;
+                    // Note: transparent-fallback for unknown color
+                    // tokens yields an invisible shadow (v1
+                    // acceptable; matches "no visual effect").
+                    box.box_shadow_color  = parse_color(tokens.back());
+                    box.box_shadow_inset  = inset;
+                    box.box_shadow_has    = true;
+                }
+            }
+        }
+
+        // ADR-044: parse border-radius. Shorthand (single
+        // value) fills all four corners; per-corner longhands
+        // override. Percentage and `inherit` deferred (leave 0;
+        // documented -- radio buttons display:none in target).
+        // Elliptical and multi-value: take first token only
+        // (0 uses; documented deviation for future).
+        auto parse_radius_token = [&](const char* prop)
+                -> std::optional<float> {
+            const auto v = style->get(prop);
+            if (!v || v->empty()) return std::nullopt;
+            if (*v == "inherit" || *v == "unset" || *v == "initial") {
+                return std::nullopt;
+            }
+            std::string first = *v;
+            // Elliptical form `5px / 10px`: take before the slash.
+            if (auto slash = first.find('/');
+                slash != std::string::npos) {
+                first = first.substr(0, slash);
+            }
+            // Multi-value form: take first whitespace-delimited token.
+            std::string token;
+            for (char c : first) {
+                if (c == ' ' || c == '\t') break;
+                token.push_back(c);
+            }
+            if (token.empty()) return std::nullopt;
+            // Percentage deferred (needs box's own dimensions,
+            // not parent's; parse_length's ctx would give a
+            // semantically wrong value). Documented deviation.
+            if (token.back() == '%') return std::nullopt;
+            return parse_length(token, ctx);
+        };
+
+        if (const auto sh = parse_radius_token("border-radius"); sh) {
+            box.border_radius[0] = *sh;
+            box.border_radius[1] = *sh;
+            box.border_radius[2] = *sh;
+            box.border_radius[3] = *sh;
+        }
+        if (const auto v = parse_radius_token("border-top-left-radius"); v)
+            box.border_radius[0] = *v;
+        if (const auto v = parse_radius_token("border-top-right-radius"); v)
+            box.border_radius[1] = *v;
+        if (const auto v = parse_radius_token("border-bottom-right-radius"); v)
+            box.border_radius[2] = *v;
+        if (const auto v = parse_radius_token("border-bottom-left-radius"); v)
+            box.border_radius[3] = *v;
+
+        // ADR-047: parse mask-image + mask-size / -position /
+        // -repeat. Both -webkit- prefixed and unprefixed forms
+        // accepted; unprefixed wins if both present.
+        // ADR-047: return by value (owning copy). Returning a
+        // pointer into a temporary optional was a use-after-free
+        // (SIGSEGV on first parse). Cost: one small-string copy
+        // per mask parse -- negligible.
+        auto mask_lookup = [&](const char* unprefixed,
+                               const char* webkit) -> std::string {
+            if (auto v = style->get(unprefixed); v) return *v;
+            if (auto v = style->get(webkit); v) return *v;
+            return {};
+        };
+        if (const std::string mv =
+                mask_lookup("mask-image", "-webkit-mask-image");
+            !mv.empty() && mv != "none") {
+            if (mv.find("url(") != std::string::npos) {
+                const auto start = mv.find("url(") + 4;
+                const auto end = mv.find(')', start);
+                if (end != std::string::npos) {
+                    std::string url = mv.substr(start, end - start);
+                    while (!url.empty() &&
+                           (url.front() == ' ' || url.front() == '\t'))
+                        url.erase(url.begin());
+                    while (!url.empty() &&
+                           (url.back() == ' ' || url.back() == '\t'))
+                        url.pop_back();
+                    if (!url.empty() &&
+                        (url.front() == '\'' || url.front() == '"'))
+                        url.erase(url.begin());
+                    if (!url.empty() &&
+                        (url.back() == '\'' || url.back() == '"'))
+                        url.pop_back();
+                    if (!url.empty()) {
+                        box.mask_image_url = url;
+                        box.mask_has = true;
+                    }
+                }
+            }
+        }
+    // ADR-056: read background-size / -position / -repeat
+    // (mirror ADR-047's mask block at lines 558-635).
+    if (style && !box.background_image_url.empty()) {
+        if (auto sz = style->get("background-size")) {
+            std::string tok;
+            for (char c : *sz) {
+                if (c == ' ' || c == '\t') break;
+                tok.push_back(c);
+            }
+            if (!tok.empty() && tok != "auto" && tok != "cover"
+                && tok != "contain" && tok.back() != '%') {
+                box.background_size_w = parse_length(tok, ctx);
+            }
+        }
+        if (auto ps = style->get("background-position")) {
+            std::vector<std::string> toks;
+            {
+                std::string t;
+                for (char c : *ps) {
+                    if (c == ' ' || c == '\t') {
+                        if (!t.empty()) {
+                            toks.push_back(t); t.clear();
+                        }
+                    } else t.push_back(c);
+                }
+                if (!t.empty()) toks.push_back(t);
+            }
+            auto px = [](const std::string& t) -> BgPosX {
+                if (t == "right") return BgPosX::Right;
+                if (t == "center") return BgPosX::Center;
+                return BgPosX::Left;
+            };
+            auto py = [](const std::string& t) -> BgPosY {
+                if (t == "bottom") return BgPosY::Bottom;
+                if (t == "center") return BgPosY::Center;
+                return BgPosY::Top;
+            };
+            if (toks.size() == 1) {
+                const auto& t = toks[0];
+                if (t == "center") {
+                    box.background_pos_x = BgPosX::Center;
+                    box.background_pos_y = BgPosY::Center;
+                } else if (t == "left" || t == "right") {
+                    box.background_pos_x = px(t);
+                } else if (t == "top" || t == "bottom") {
+                    box.background_pos_y = py(t);
+                }
+            } else if (toks.size() >= 2) {
+                const auto& t0 = toks[0];
+                const auto& t1 = toks[1];
+                if (t1 == "left" || t1 == "right") {
+                    box.background_pos_x = px(t1);
+                    box.background_pos_y = py(t0);
+                } else {
+                    box.background_pos_x = px(t0);
+                    box.background_pos_y = py(t1);
+                }
+            }
+        }
+        if (auto rr = style->get("background-repeat")) {
+            if (rr->find("no-repeat") != std::string::npos) {
+                box.background_no_repeat = true;
+            }
+        }
+    }
+
+        if (box.mask_has) {
+            if (const std::string sz = mask_lookup(
+                    "mask-size", "-webkit-mask-size");
+                !sz.empty() && sz != "auto") {
+                std::string tok;
+                for (char c : sz) {
+                    if (c == ' ' || c == '\t') break;
+                    tok.push_back(c);
+                }
+                if (!tok.empty() && tok != "cover" && tok != "contain"
+                    && tok.back() != '%') {
+                    box.mask_size_w = parse_length(tok, ctx);
+                }
+            }
+            if (const std::string ps = mask_lookup(
+                    "mask-position", "-webkit-mask-position");
+                !ps.empty()) {
+                std::vector<std::string> toks;
+                {
+                    std::string t;
+                    for (char c : ps) {
+                        if (c == ' ' || c == '\t') {
+                            if (!t.empty()) {
+                                toks.push_back(t); t.clear();
+                            }
+                        } else t.push_back(c);
+                    }
+                    if (!t.empty()) toks.push_back(t);
+                }
+                auto px = [](const std::string& t) -> BgPosX {
+                    if (t == "right") return BgPosX::Right;
+                    if (t == "center") return BgPosX::Center;
+                    return BgPosX::Left;
+                };
+                auto py = [](const std::string& t) -> BgPosY {
+                    if (t == "bottom") return BgPosY::Bottom;
+                    if (t == "center") return BgPosY::Center;
+                    return BgPosY::Top;
+                };
+                if (toks.size() == 1) {
+                    const auto& t = toks[0];
+                    if (t == "center") {
+                        box.mask_pos_x = BgPosX::Center;
+                        box.mask_pos_y = BgPosY::Center;
+                    } else if (t == "left" || t == "right") {
+                        box.mask_pos_x = px(t);
+                    } else if (t == "top" || t == "bottom") {
+                        box.mask_pos_y = py(t);
+                    }
+                } else if (toks.size() >= 2) {
+                    const auto& t0 = toks[0];
+                    const auto& t1 = toks[1];
+                    if (t1 == "left" || t1 == "right") {
+                        box.mask_pos_x = px(t1);
+                        box.mask_pos_y = py(t0);
+                    } else {
+                        box.mask_pos_x = px(t0);
+                        box.mask_pos_y = py(t1);
+                    }
+                }
+            }
+            if (const std::string rr = mask_lookup(
+                    "mask-repeat", "-webkit-mask-repeat");
+                !rr.empty()) {
+                if (rr.find("no-repeat") != std::string::npos) {
+                    box.mask_no_repeat = true;
+                }
+            }
+        }
+    }
+
+    box.x = x_before_margin + box.margin[3];
+    box.y = y_before_margin + box.margin[0];
+
+    // ADR-080: capture list-style-type only for elements whose own
+    // display is list-item (so <ul> itself doesn't get a marker,
+    // only <li>). The value comes via CSS inheritance from the
+    // parent ul/ol rule (is_inherited handles that in cascade.cpp).
+    if (style) {
+        if (auto d = style->get("display"); d && *d == "list-item") {
+            if (auto lst = style->get("list-style-type"); lst) {
+                box.list_style_type = *lst;
+            }
+        }
+    }
+
+    float content_x = box.x + box.border[3] + box.padding[3];
+    float content_y = box.y + box.border[0] + box.padding[0];
+
+    float content_w = parent_content_width
+                    - box.margin[3] - box.border[3] - box.padding[3]
+                    - box.margin[1] - box.border[1] - box.padding[1];
+    if (style) {
+        const auto w = style->get("width");
+        if (w && !is_auto(*w)) {
+            const float ew = parse_length(*w, ctx);
+            if (ew > 0.0f) content_w = ew;
+        }
+    }
+    if (content_w < 0.0f) content_w = 0.0f;
+
+    // ADR-013: auto horizontal margins center the box.
+    if (style) {
+        const auto ml_s = style->get("margin-left");
+        const auto mr_s = style->get("margin-right");
+        const bool ml_auto = ml_s && is_auto(*ml_s);
+        const bool mr_auto = mr_s && is_auto(*mr_s);
+        if (ml_auto || mr_auto) {
+            const float available = parent_content_width
+                                  - content_w
+                                  - box.padding[3] - box.padding[1]
+                                  - box.border[3]  - box.border[1];
+            const float each = available > 0.0f
+                             ? available / (ml_auto && mr_auto ? 2.0f : 1.0f)
+                             : 0.0f;
+            if (ml_auto) box.margin[3] = each;
+            if (mr_auto) box.margin[1] = each;
+            // Recompute position from the final margins.
+            box.x = x_before_margin + box.margin[3];
+            box.y = y_before_margin + box.margin[0];
+            content_x = box.x + box.border[3] + box.padding[3];
+            content_y = box.y + box.border[0] + box.padding[0];
+        }
+    }
+
+    float cursor_y = content_y;
+
+    // ADR-016 Block B: inline runs flow together as one LayoutText.
+    // We collect consecutive inline children (text nodes and
+    // display:inline elements) into inline_run, then flatten them
+    // into a single text when a block child interrupts or when the
+    // loop ends. Per-fragment style (Block C) will need
+    // LayoutInlineContext instead; for uniform style, flattening to
+    // one LayoutText produces the same visual output.
+    std::vector<const dom::Node*> inline_run;
+
+    auto flush_inline_run = [&]() {
+        if (inline_run.empty()) return;
+
+        // ADR-079: build a per-line width provider if this block is
+        // inside an active float range (LTR only). Empty function
+        // preserves pre-ADR-079 behavior and covers RTL.
+        LineWidthProvider line_width_provider;
+        if (float_ctx && float_ctx->active && own_dir == Direction::Ltr) {
+            const FloatContext* fc = float_ctx;
+            const float my_x = content_x;
+            const float my_w = content_w;
+            line_width_provider = [fc, my_x, my_w](float y_abs) -> LineWidth {
+                if (y_abs >= fc->float_bottom) {
+                    return { 0.0f, my_w };
+                }
+                const float c_right = my_x + my_w;
+                const float f_right = fc->parent_x + fc->parent_width
+                                      - fc->float_right_w;
+                const float right_edge = std::min(c_right, f_right);
+                const float left_edge  = std::max(my_x,
+                                                  fc->parent_x + fc->float_left_w);
+                const float avail = right_edge - left_edge;
+                if (avail <= 0.0f) return { 0.0f, my_w };
+                return { left_edge - my_x, avail };
+            };
+        }
+        HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes", inline_run.size());
+        HB_LOG(LayoutDetail, Trace, "flush_inline_run: %zu nodes in run", inline_run.size());
+
+        const std::string family = font_family_of(style);
+        const Color tc = text_color_of(style);
+
+        // Determine whether any inline element (as opposed to only
+        // text nodes) is present in the run.
+        bool has_inline_element = false;
+        for (const auto* n : inline_run) {
+            if (n->type() == dom::NodeType::Element) {
+                has_inline_element = true;
+                break;
+            }
+        }
+
+        if (!has_inline_element) {
+            // Text-only run: LayoutText path (ADR-015).
+            std::string raw;
+            for (const auto* n : inline_run) {
+                flatten_inline_text(*n, raw);
+            }
+            std::string collapsed = collapse_whitespace(raw);
+            inline_run.clear();
+            if (collapsed.empty()) return;
+
+            const bool rtl = (own_dir == Direction::Rtl);
+            // ADR-079: wrap the provider so it accepts the relative
+            // y that break_into_lines tracks internally.
+            LineWidthProvider rel_provider;
+            if (line_width_provider) {
+                auto p = line_width_provider;
+                const float base = cursor_y;
+                rel_provider = [p, base](float rel_y) {
+                    return p(base + rel_y);
+                };
+            }
+            auto fragments = break_into_lines(
+                collapsed, family, own_font_size, content_w, measurer,
+                0.0f, rel_provider);
+            if (fragments.empty()) return;
+
+            float max_line_w = 0.0f;
+            float total_h = 0.0f;
+            for (auto& f : fragments) {
+                f.font_family = family;
+                f.font_size = own_font_size;
+                f.color = tc;
+                // ADR-079: apply per-line x_offset.
+                f.x = rtl ? content_x + content_w - f.width - f.x_offset
+                          : content_x + f.x_offset;
+                f.y += cursor_y;
+                f.element = &el;
+                if (f.width > max_line_w) max_line_w = f.width;
+                total_h += f.height;
+            }
+
+            auto lt = std::make_unique<LayoutText>();
+            lt->x = content_x;
+            lt->y = cursor_y;
+            lt->width = max_line_w;
+            lt->height = total_h;
+            lt->text = std::move(collapsed);
+            lt->font_family = family;
+            lt->font_size = own_font_size;
+            lt->color = tc;
+            lt->rtl = rtl;
+            apply_inline_bg_pp(fragments, styles, own_font_size,
+                               parent_font_size, root_font_size,
+                               content_w);
+            lt->lines = std::move(fragments);
+            cursor_y += total_h;
+            box.children.push_back(std::move(lt));
+            return;
+        }
+
+        // Inline-element run: LayoutInlineContext path (ADR-016).
+        std::vector<StyledWord> words;
+        const std::vector<const dom::Element*> no_inline_ancestors;
+        bool prev_had_space = false;
+        for (const auto* n : inline_run) {
+            // ADR-081: detect inline-block at the iterator level
+            // instead of modifying flatten_inline_to_words.
+            if (n->type() == dom::NodeType::Element) {
+                const auto& child_el = static_cast<const dom::Element&>(*n);
+                auto it = styles.find(&child_el);
+                if (it != styles.end()) {
+                    const auto dv = it->second.get("display");
+                    if (dv && *dv == "inline-block") {
+                        StyledWord w;
+                        w.text = "";
+                        w.font_family = family;
+                        w.font_size = own_font_size;
+                        w.color = tc;
+                        w.preceded_by_space = !words.empty() && prev_had_space;
+                        w.element = &child_el;
+                        w.inline_block_element = &child_el;
+                        w.inline_ancestors.push_back(&child_el);
+                        prev_had_space = false;
+                        words.push_back(std::move(w));
+                        continue;
+                    }
+                }
+            }
+            flatten_inline_to_words(*n, styles, family, own_font_size,
+                                    root_font_size, tc,
+                                    prev_had_space, words, &el,
+                                    no_inline_ancestors);
+        }
+        inline_run.clear();
+        if (words.empty()) return;
+
+        std::string run_text;
+        for (const auto& w : words) {
+            if (!run_text.empty()) run_text += ' ';
+            run_text += w.text;
+        }
+        const bool rtl = (own_dir == Direction::Rtl);
+
+        // ADR-082: calculate the accumulated vertical-align shift
+        // from every inline ancestor, outermost to innermost.
+        // Inline-block words include their own element in this list.
+        for (auto& w : words) {
+            float offset = 0.0f;
+            w.top_aligned_ancestors.clear();
+            w.bottom_aligned_ancestors.clear();
+
+            for (const dom::Element* ancestor : w.inline_ancestors) {
+                if (!ancestor) continue;
+
+                const std::string align =
+                    vertical_align_value_for_element(*ancestor, styles);
+
+                if (align == "top") {
+                    w.top_aligned_ancestors.push_back(ancestor);
+                } else if (align == "bottom") {
+                    w.bottom_aligned_ancestors.push_back(ancestor);
+                } else {
+                    offset += vertical_align_offset_for_element(
+                        *ancestor, styles, w.font_family,
+                        root_font_size, viewport_w, viewport_h,
+                        font_metrics);
+                }
+            }
+
+            w.baseline_offset = offset;
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                const std::string element_tag =
+                    w.element ? w.element->tag() : "null";
+                const std::string element_id =
+                    w.element ? w.element->get_attribute("id") : "";
+                const std::string element_class =
+                    w.element ? w.element->get_attribute("class") : "";
+
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_WORD element=%p tag=%s id='%s' class='%.64s' "
+                    "text='%.96s' font='%s' size=%.2f "
+                    "baseline_offset=%.3f top_ancestors=%zu "
+                    "bottom_ancestors=%zu inline_ancestors=%zu",
+                    static_cast<const void*>(w.element),
+                    element_tag.c_str(), element_id.c_str(),
+                    element_class.c_str(), w.text.c_str(),
+                    w.font_family.c_str(), w.font_size,
+                    w.baseline_offset,
+                    w.top_aligned_ancestors.size(),
+                    w.bottom_aligned_ancestors.size(),
+                    w.inline_ancestors.size());
+
+                for (const auto* ancestor : w.inline_ancestors) {
+                    if (!ancestor) continue;
+
+                    const std::string tag = ancestor->tag();
+                    const std::string id = ancestor->get_attribute("id");
+                    const std::string class_name =
+                        ancestor->get_attribute("class");
+                    const std::string align =
+                        vertical_align_value_for_element(*ancestor, styles);
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_ANCESTOR word_element=%p ancestor=%p "
+                        "tag=%s id='%s' class='%.64s' vertical_align='%s'",
+                        static_cast<const void*>(w.element),
+                        static_cast<const void*>(ancestor),
+                        tag.c_str(), id.c_str(), class_name.c_str(),
+                        align.c_str());
+                }
+            }
+        }
+
+        // ADR-081: pre-lay-out inline-block atomic words. Each one
+        // gets a fully-laid-out LayoutBox subtree that paint will
+        // render at the fragment position.
+        for (auto& w : words) {
+            if (w.inline_block_element != nullptr && !w.inline_block_box) {
+                auto child_box = std::make_shared<LayoutBox>(
+                    layout_element(*w.inline_block_element, styles, measurer,
+                                   0.0f, 0.0f, content_w, own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h, own_dir, image_dims, font_metrics));
+                // ADR-082: the selected baseline is relative to
+                // the margin-box top, matching the atomic fragment's
+                // coordinate origin.
+                const auto* inline_block_style =
+                    lookup(styles, *w.inline_block_element);
+
+                if (overflow_is_visible(inline_block_style)) {
+                    if (const auto baseline =
+                            last_in_flow_line_baseline(*child_box, styles)) {
+                        w.inline_block_baseline =
+                            child_box->margin[0] + *baseline;
+                        w.has_inline_block_baseline = true;
+                    }
+                }
+
+                w.inline_block_box = std::move(child_box);
+            }
+        }
+
+        // ADR-082: establish the block's inline formatting
+        // strut from its font metrics and used line-height.
+        FontMetrics own_metrics;
+        if (font_metrics) {
+            own_metrics = font_metrics(family, own_font_size);
+        } else {
+            own_metrics.ascent = own_font_size * 0.8f;
+            own_metrics.descent = own_font_size * 0.2f;
+            own_metrics.x_height = own_font_size * 0.5f;
+            own_metrics.normal_line_height = own_font_size * 1.2f;
+        }
+
+        const float line_height = used_line_height(
+            el, style, styles, own_font_size, root_font_size,
+            viewport_w, viewport_h, own_metrics);
+
+        const float font_box_height =
+            own_metrics.ascent + own_metrics.descent;
+        const float half_leading =
+            (line_height - font_box_height) * 0.5f;
+
+        const float strut_ascent =
+            std::max(0.0f, own_metrics.ascent + half_leading);
+        const float strut_descent =
+            std::max(0.0f, own_metrics.descent + half_leading);
+
+        auto styled_lines = break_styled_words_into_lines(
+            words, content_w, measurer,
+            strut_ascent, strut_descent,
+            cursor_y, line_width_provider);
+        if (styled_lines.empty()) return;
+
+        // ADR-082: resolve vertical-align: top/bottom against each
+        // completed visual line. An inline ancestor can produce several
+        // fragments on a line, so move the ancestor's fragments together.
+        struct EdgeAlignedGroup {
+            const dom::Element* ancestor = nullptr;
+            bool align_top = false;
+        };
+
+        for (auto& line : styled_lines) {
+            std::vector<EdgeAlignedGroup> groups;
+
+            for (const auto& frag : line.fragments) {
+                for (const auto* ancestor : frag.top_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, true});
+                }
+
+                for (const auto* ancestor : frag.bottom_aligned_ancestors) {
+                    if (!ancestor) continue;
+                    const bool exists = std::any_of(
+                        groups.begin(), groups.end(),
+                        [&](const EdgeAlignedGroup& group) {
+                            return group.ancestor == ancestor &&
+                                   !group.align_top;
+                        });
+                    if (!exists) groups.push_back({ancestor, false});
+                }
+            }
+
+            // A fragment belonging to a deeper edge-aligned descendant
+            // must not determine its ancestor group's own alignment edge.
+            // The descendant is aligned independently after its ancestor.
+            auto belongs_to_nested_edge_group =
+                [](const LineFragment& frag,
+                   const EdgeAlignedGroup& group) {
+                    const auto group_it = std::find(
+                        frag.inline_ancestors.begin(),
+                        frag.inline_ancestors.end(),
+                        group.ancestor);
+
+                    if (group_it == frag.inline_ancestors.end())
+                        return false;
+
+                    const auto group_depth = std::distance(
+                        frag.inline_ancestors.begin(), group_it);
+
+                    auto has_deeper_edge_ancestor =
+                        [&](const std::vector<const dom::Element*>& aligned) {
+                            for (const auto* candidate : aligned) {
+                                if (!candidate || candidate == group.ancestor)
+                                    continue;
+
+                                const auto candidate_it = std::find(
+                                    frag.inline_ancestors.begin(),
+                                    frag.inline_ancestors.end(),
+                                    candidate);
+
+                                if (candidate_it != frag.inline_ancestors.end() &&
+                                    std::distance(
+                                        frag.inline_ancestors.begin(),
+                                        candidate_it) > group_depth) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        };
+
+                    return has_deeper_edge_ancestor(
+                               frag.top_aligned_ancestors) ||
+                           has_deeper_edge_ancestor(
+                               frag.bottom_aligned_ancestors);
+                };
+
+            // Determine the line height needed to contain all edge groups.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom >= group_top) {
+                    line.height = std::max(
+                        line.height, group_bottom - group_top);
+                }
+            }
+
+            line.descent = std::max(
+                line.descent, line.height - line.baseline);
+
+            // Align each ancestor's complete fragment group to its edge.
+            for (const auto& group : groups) {
+                float group_top = 1.0e30f;
+                float group_bottom = -1.0e30f;
+
+                for (const auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) == ancestors.end())
+                        continue;
+
+                    if (belongs_to_nested_edge_group(frag, group))
+                        continue;
+
+                    const float fragment_top =
+                        line.baseline - frag.baseline;
+                    group_top = std::min(group_top, fragment_top);
+                    group_bottom = std::max(
+                        group_bottom, fragment_top + frag.height);
+                }
+
+                if (group_bottom < group_top) continue;
+
+                const float shift = group.align_top
+                    ? -group_top
+                    : line.height - group_bottom;
+
+                for (auto& frag : line.fragments) {
+                    const auto& ancestors = group.align_top
+                        ? frag.top_aligned_ancestors
+                        : frag.bottom_aligned_ancestors;
+
+                    if (std::find(ancestors.begin(), ancestors.end(),
+                                  group.ancestor) != ancestors.end()) {
+                        // A positive shift moves the fragment down.
+                        frag.baseline -= shift;
+                    }
+                }
+            }
+        }
+
+        auto ctx = std::make_unique<LayoutInlineContext>();
+        ctx->x = content_x;
+        ctx->y = cursor_y;
+        ctx->rtl = rtl;
+
+        float max_line_w = 0.0f;
+        float total_h = 0.0f;
+        float line_y = cursor_y;
+        std::size_t line_index = 0;
+
+        for (auto& line : styled_lines) {
+            // Preserve the line-box baseline independently of the
+            // fragment baselines modified by vertical-align.
+            ctx->line_baselines.push_back(line_y + line.baseline);
+
+            const float line_start_x =
+                rtl ? content_x + content_w - line.width : content_x;
+
+            std::size_t fragment_index = 0;
+            for (auto& frag : line.fragments) {
+                // ADR-079: apply per-line x_offset (already frozen
+                // onto the fragment by the breaker).
+                if (rtl) {
+                    frag.x = content_x + content_w - frag.x - frag.width;
+                } else {
+                    frag.x = line_start_x + frag.x + frag.x_offset;
+                }
+                frag.line_top = line_y;
+                frag.y = line_y + line.baseline - frag.baseline;
+
+                if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                    const std::string tag =
+                        frag.element ? frag.element->tag() : "null";
+                    const std::string id =
+                        frag.element ? frag.element->get_attribute("id") : "";
+
+                    HB_LOG(InlineLayout, Trace,
+                        "INLINE_POSITION context=%p line=%zu fragment=%zu "
+                        "element=%p tag=%s id='%s' text='%.96s' "
+                        "line_top=%.3f line_baseline=%.3f "
+                        "fragment_baseline=%.3f x=%.3f y=%.3f "
+                        "width=%.3f height=%.3f rtl=%d",
+                        static_cast<const void*>(ctx.get()),
+                        line_index, fragment_index,
+                        static_cast<const void*>(frag.element),
+                        tag.c_str(), id.c_str(), frag.text.c_str(),
+                        frag.line_top, line.baseline, frag.baseline,
+                        frag.x, frag.y, frag.width, frag.height,
+                        rtl ? 1 : 0);
+                }
+
+                ctx->lines.push_back(frag);
+                ++fragment_index;
+            }
+
+            if (log_enabled(LogCategory::InlineLayout, LogLevel::Trace)) {
+                HB_LOG(InlineLayout, Trace,
+                    "INLINE_POSITION_LINE context=%p line=%zu "
+                    "y=%.3f width=%.3f height=%.3f "
+                    "baseline=%.3f ascent=%.3f descent=%.3f",
+                    static_cast<const void*>(ctx.get()),
+                    line_index, line_y, line.width, line.height,
+                    line.baseline, line.ascent, line.descent);
+            }
+
+            if (line.width > max_line_w) max_line_w = line.width;
+            line_y += line.height;
+            total_h += line.height;
+            ++line_index;
+        }
+
+        // ADR-045: post-process ctx->lines.
+        // 1. Populate background-image / size / position / repeat
+        //    from element's ComputedStyleMap.
+        // 2. Extend fragment width by inline padding-right and
+        //    shift subsequent same-line fragments rightward
+        //    (creates the gap the external-link icon draws in).
+        // RTL: padding extension handled only for LTR; Wikipedia
+        // is LTR-only, so this is a documented deferral.
+        //
+        // Note: `ctx` in this scope is the unique_ptr to
+        // LayoutInlineContext -- NOT the outer LengthContext.
+        // Build a fresh LengthContext for parse_length calls.
+        {
+            LengthContext pad_ctx;
+            pad_ctx.font_size = own_font_size;
+            pad_ctx.parent_font_size = parent_font_size;
+            pad_ctx.root_font_size = root_font_size;
+            pad_ctx.parent_content_width = content_w;
+            pad_ctx.on_font_size_property = false;
+            pad_ctx.viewport_w = viewport_w;
+            pad_ctx.viewport_h = viewport_h;
+
+            float cur_line_y = -1.0e30f;
+            float accumulated_shift = 0.0f;
+            for (auto& frag : ctx->lines) {
+                // New line: reset per-line shift.
+                if (frag.line_top != cur_line_y) {
+                    cur_line_y = frag.line_top;
+                    accumulated_shift = 0.0f;
+                }
+                // Apply shift from previous fragments' padding.
+                if (accumulated_shift > 0.0f) {
+                    frag.x += accumulated_shift;
+                }
+                if (!frag.element) continue;
+                const css::ComputedStyle* fs = lookup(styles, *frag.element);
+                if (!fs) continue;
+
+                // background-image: extract url(...)
+                if (auto bg = fs->get("background-image");
+                    bg && !bg->empty() && *bg != "none") {
+                    const auto upos = bg->find("url(");
+                    if (upos != std::string::npos) {
+                        auto s = upos + 4;
+                        while (s < bg->size() &&
+                               ((*bg)[s] == ' ' || (*bg)[s] == '\'' ||
+                                (*bg)[s] == '"')) ++s;
+                        auto e = bg->find_first_of(" \t)'\"", s);
+                        if (e == std::string::npos) e = bg->size();
+                        frag.bg_image_url = bg->substr(s, e - s);
+                    }
+                }
+
+                // background-size: first token; auto/cover/contain/
+                // percentage all deferred (0 -> auto in paint).
+                if (auto sz = fs->get("background-size");
+                    sz && !sz->empty() && *sz != "auto") {
+                    std::string tok;
+                    for (char c : *sz) {
+                        if (c == ' ' || c == '\t') break;
+                        tok.push_back(c);
+                    }
+                    if (!tok.empty() && tok != "cover" && tok != "contain"
+                        && tok.back() != '%') {
+                        // Length token: numeric prefix + unit, or "0".
+                        frag.bg_size_w = parse_length(tok, pad_ctx);
+                    }
+                }
+
+                // background-position: keyword pair (flexible order).
+                if (auto ps = fs->get("background-position");
+                    ps && !ps->empty()) {
+                    std::vector<std::string> toks;
+                    {
+                        std::string t;
+                        for (char c : *ps) {
+                            if (c == ' ' || c == '\t') {
+                                if (!t.empty()) {
+                                    toks.push_back(t); t.clear();
+                                }
+                            } else t.push_back(c);
+                        }
+                        if (!t.empty()) toks.push_back(t);
+                    }
+                    auto px = [](const std::string& t) -> BgPosX {
+                        if (t == "right") return BgPosX::Right;
+                        if (t == "center") return BgPosX::Center;
+                        return BgPosX::Left;
+                    };
+                    auto py = [](const std::string& t) -> BgPosY {
+                        if (t == "bottom") return BgPosY::Bottom;
+                        if (t == "center") return BgPosY::Center;
+                        return BgPosY::Top;
+                    };
+                    if (toks.size() == 1) {
+                        const auto& t = toks[0];
+                        if (t == "center") {
+                            frag.bg_pos_x = BgPosX::Center;
+                            frag.bg_pos_y = BgPosY::Center;
+                        } else if (t == "left" || t == "right") {
+                            frag.bg_pos_x = px(t);
+                        } else if (t == "top" || t == "bottom") {
+                            frag.bg_pos_y = py(t);
+                        }
+                    } else if (toks.size() >= 2) {
+                        const auto& t0 = toks[0];
+                        const auto& t1 = toks[1];
+                        // CSS allows either order for X/Y keywords.
+                        // If t1 is X-only (left/right), swap.
+                        if (t1 == "left" || t1 == "right") {
+                            frag.bg_pos_x = px(t1);
+                            frag.bg_pos_y = py(t0);
+                        } else {
+                            frag.bg_pos_x = px(t0);
+                            frag.bg_pos_y = py(t1);
+                        }
+                    }
+                }
+
+                // background-repeat: no-repeat only (0 uses of
+                // repeat/repeat-x/repeat-y in target page).
+                if (auto rr = fs->get("background-repeat");
+                    rr && !rr->empty()) {
+                    if (rr->find("no-repeat") != std::string::npos) {
+                        frag.bg_no_repeat = true;
+                    }
+                }
+
+                // padding-right: extend fragment width, accumulate
+                // shift for subsequent same-line fragments. This is
+                // the CSS "gap" that the external-link icon draws
+                // in (via background-position: center right).
+                if (auto pad = fs->get("padding-right");
+                    pad && !pad->empty() && *pad != "0" && *pad != "auto") {
+                    const float pv = parse_length(*pad, pad_ctx);
+                    if (pv > 0.0f) {
+                        frag.width += pv;
+                        accumulated_shift += pv;
+                    }
+                }
+            }
+        }
+
+        ctx->width = max_line_w;
+        ctx->height = total_h;
+        if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+            std::string first_text = ctx->lines.empty() ? ""
+                : ctx->lines[0].text.substr(0, 40);
+            HB_LOG(LayoutDetail, Trace,
+                "InlineContext created: y=%.1f h=%.1f lines=%zu text='%s'",
+                ctx->y, ctx->height, ctx->lines.size(),
+                first_text.c_str());
+        }
+        cursor_y += total_h;
+        box.children.push_back(std::move(ctx));
+    };
+
+    // ADR-028: block/inline children layout. Reused by the grid
+    // path's fallback (grid without a parsed template degrades to
+    // block) and by the standard block path.
+    // ADR-042: absolute children of a containing block are
+    // collected here and positioned against self's content box
+    // after normal (in-flow) children finish. Flex/grid parent
+    // absolutes are handled separately (deferred -- v1 only
+    // handles block-parent absolutes; covers titlebar case).
+    std::vector<const dom::Element*> pending_absolutes;
+
+    auto layout_block_children = [&]() {
+        // ADR-031: float tracking. A floated child is laid out at
+        // its natural size, positioned at the left or right edge
+        // of the block parent, and does NOT advance cursor_y.
+        // Following block children that start within the float's
+        // vertical extent have their content width narrowed to
+        // avoid overlapping the float. Full per-line text-wrap is
+        // deferred to ADR-032; this is a block-narrowing
+        // approximation that covers the infobox case.
+        float float_left_w = 0.0f;
+        float float_right_w = 0.0f;
+        float float_bottom = 0.0f;
+
+        for (const auto& child : el.children()) {
+            if (child->type() == dom::NodeType::Element) {
+                const auto& child_el = static_cast<const dom::Element&>(*child);
+                const css::ComputedStyle* child_style = lookup(styles, child_el);
+                if (display_of(child_style) == Display::None) {
+                    HB_LOG(Layout, Trace, "SKIP <%s> class='%s' (display:none)",
+                           child_el.tag().c_str(), child_el.get_attribute("class").c_str());
+                    continue;
+                }
+
+                // ADR-079 diagnostic: permanent cursor_y progression trace.
+                // Shows the y cursor before any child processing, so we
+                // can spot exactly which element causes a jump (clear,
+                // float placement, or layout advance). Guarded per ADR-073.
+                if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+                    std::string el_id = child_el.get_attribute("id");
+                    std::string el_cls = child_el.get_attribute("class");
+                    std::string float_v = child_style
+                        ? child_style->get("float").value_or("-")
+                        : "-";
+                    std::string clear_v = child_style
+                        ? child_style->get("clear").value_or("-")
+                        : "-";
+                    HB_LOG(LayoutDetail, Trace,
+                        "YPROG pre: <%s> id='%.30s' class='%.40s' "
+                        "cursor_y=%.1f float_bottom=%.1f "
+                        "float_L=%.1f float_R=%.1f float=%s clear=%s",
+                        child_el.tag().c_str(), el_id.c_str(), el_cls.c_str(),
+                        cursor_y, float_bottom, float_left_w, float_right_w,
+                        float_v.c_str(), clear_v.c_str());
+                }
+                
+                // Permanent diagnostic for heading issues (ADR-071 candidate)
+                if (child_el.tag() == "h2" || child_el.tag() == "h3" ||
+                    child_el.get_attribute("class").find("mw-heading") != std::string::npos) {
+                    std::string disp = child_style ? child_style->get("display").value_or("default") : "none";
+                    std::string col = child_style ? child_style->get("color").value_or("default") : "none";
+                    std::string fsize = child_style ? child_style->get("font-size").value_or("default") : "none";
+                    std::string el_id = child_el.get_attribute("id");
+                    std::string el_cls = child_el.get_attribute("class");
+                    HB_LOG(Layout, Trace, "LAYOUT <%s> id='%s' class='%s' display='%s' color='%s' font-size='%s'",
+                           child_el.tag().c_str(), el_id.c_str(), el_cls.c_str(), disp.c_str(), col.c_str(), fsize.c_str());
+                }
+
+                // ADR-042: absolute child of a containing block
+                // is out-of-flow; collect for post-positioning.
+                if (box.is_containing_block && child_style) {
+                    if (auto p = child_style->get("position");
+                        p && *p == "absolute") {
+                        if (log_enabled(LogCategory::LayoutDetail,
+                                        LogLevel::Trace)) {
+                            HB_LOG(LayoutDetail, Trace,
+                                "ABS_PUSH <%s> id='%s' class='%s'",
+                                child_el.tag().c_str(),
+                                child_el.get_attribute("id").c_str(),
+                                child_el.get_attribute("class").c_str());
+                        }
+                        pending_absolutes.push_back(&child_el);
+                        continue;
+                    }
+                }
+
+                // Read float direction
+                std::string float_dir = "none";
+                if (child_style) {
+                    if (auto f = child_style->get("float")) {
+                        float_dir = *f;
+                    }
+                }
+
+                // ADR-033: position:fixed children are out of
+                // flow. Layout at (0,0), then shift to viewport
+                // anchor. Don't advance cursor_y (parent height
+                // excludes fixed children). No float interaction
+                // (CSS spec: float is ignored on positioned
+                // elements).
+                if (child_style) {
+                    if (auto p = child_style->get("position");
+                        p && *p == "fixed") {
+                        flush_inline_run();
+                        auto fixed_box = std::make_unique<LayoutBox>(
+                            layout_element(child_el, styles, measurer,
+                                           0.0f, 0.0f, content_w,
+                                           own_content_height,
+                                           own_font_size, root_font_size,
+                                           viewport_w, viewport_h,
+                                           own_dir, image_dims, font_metrics));
+                        float top_off = 0.0f, left_off = 0.0f;
+                        if (auto t = child_style->get("top");
+                            t && *t != "auto") {
+                            top_off = parse_length(*t, ctx);
+                        }
+                        if (auto l = child_style->get("left");
+                            l && *l != "auto") {
+                            left_off = parse_length(*l, ctx);
+                        }
+                        if (left_off != 0.0f) {
+                            shift_subtree_x(*fixed_box, left_off);
+                        }
+                        if (top_off != 0.0f) {
+                            shift_subtree_y(*fixed_box, top_off);
+                        }
+                        box.children.push_back(std::move(fixed_box));
+                        continue;
+                    }
+                }
+
+                // Float: right|left. Layout at edge, don't advance
+                // cursor_y, track vertical extent for follow-ups.
+                if (float_dir == "left" || float_dir == "right") {
+                    flush_inline_run();
+                    // ADR-036: clear on a float forces it below prior
+                    // same-direction (or both-direction) floats.
+                    std::string clear_dir = "none";
+                    if (child_style) {
+                        if (auto c = child_style->get("clear")) {
+                            clear_dir = *c;
+                        }
+                    }
+                    const bool must_jump =
+                        (clear_dir == "both") ||
+                        (clear_dir == "right" && float_dir == "right") ||
+                        (clear_dir == "left"  && float_dir == "left");
+                    if (must_jump && float_bottom > cursor_y) {
+                        cursor_y = float_bottom;
+                    }
+                    auto probe = std::make_unique<LayoutBox>(
+                        layout_element(child_el, styles, measurer,
+                                       content_x, cursor_y, content_w,
+                                       own_content_height,
+                                       own_font_size, root_font_size,
+                                       viewport_w, viewport_h,
+                                       own_dir, image_dims, font_metrics));
+
+                    // ADR-066: intrinsic width for auto-width floats.
+                    // A <figure> with display:table has no explicit
+                    // width and falls back to block layout (HoneyBee
+                    // has no table engine), so its probe fills parent
+                    // content_w (976px). Use the img child's intrinsic
+                    // width instead -- matches shrink-to-fit for the
+                    // common Wikipedia figure pattern. Re-layout at
+                    // img_w so figcaption re-wraps and float paints
+                    // at its real size.
+                    if (child_style) {
+                        const auto w_prop = child_style->get("width");
+                        const bool auto_w = !w_prop || *w_prop == "auto"
+                                          || w_prop->empty();
+                        if (auto_w) {
+                            float img_w = 0.0f;
+                            std::vector<const layout::LayoutNode*> wstack;
+                            wstack.push_back(probe.get());
+                            while (!wstack.empty() && img_w == 0.0f) {
+                                const auto* wn = wstack.back();
+                                wstack.pop_back();
+                                if (wn->kind == layout::LayoutKind::Box) {
+                                    const auto* wb = static_cast<
+                                        const layout::LayoutBox*>(wn);
+                                    if (wb->element &&
+                                        wb->element->tag() == "img" &&
+                                        wb->width > 0.0f) {
+                                        img_w = wb->width;
+                                        break;
+                                    }
+                                    for (const auto& wc : wb->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                } else if (wn->kind ==
+                                           layout::LayoutKind::Inline) {
+                                    const auto* wi = static_cast<
+                                        const layout::LayoutInline*>(wn);
+                                    for (const auto& wc : wi->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                } else if (wn->kind ==
+                                           layout::LayoutKind::InlineContext) {
+                                    const auto* wic = static_cast<
+                                        const layout::LayoutInlineContext*>(wn);
+                                    for (const auto& wc : wic->children) {
+                                        wstack.push_back(wc.get());
+                                    }
+                                }
+                            }
+                            // ADR-066 Layer 2: cap at half-parent.
+                            // Safety net for huge intrinsic dims
+                            // without an HTML width attribute (e.g.
+                            // an SVG whose natural size fills the
+                            // parent). Without this, img_w == content_w
+                            // skips the re-layout check and text gets
+                            // narrowed to ~0.
+                            if (img_w > 0.0f) {
+                                const float half_w = content_w * 0.5f;
+                                if (half_w > 50.0f && img_w > half_w) {
+                                    img_w = half_w;
+                                }
+                            }
+                            if (img_w > 0.0f && img_w < content_w - 10.0f) {
+                                probe = std::make_unique<LayoutBox>(
+                                    layout_element(child_el, styles, measurer,
+                                                   content_x, cursor_y,
+                                                   img_w,
+                                                   own_content_height,
+                                                   own_font_size,
+                                                   root_font_size,
+                                                   viewport_w, viewport_h,
+                                                   own_dir, image_dims, font_metrics));
+                            }
+                        }
+                    }
+
+                    if (float_dir == "right") {
+                        // Shift right edge to content right edge.
+                        const float target_right =
+                            content_x + content_w - probe->margin[1];
+                        const float current_right =
+                            probe->x + probe->width;
+                        shift_subtree_x(*probe, target_right - current_right);
+                        if (probe->width > float_right_w) {
+                            float_right_w = probe->width;
+                        }
+                    } else {
+                        // Float left: natural position already at
+                        // content_x + margin[3]; no shift needed.
+                        if (probe->width > float_left_w) {
+                            float_left_w = probe->width;
+                        }
+                    }
+                    const float fbox_bottom =
+                        probe->y + probe->height + probe->margin[2];
+                    if (fbox_bottom > float_bottom) {
+                        float_bottom = fbox_bottom;
+                    }
+                    // ADR-073 (extended): permanent float-layout trace.
+                    // Shows where the float was placed, how wide/tall,
+                    // and what the cumulative float_bottom becomes.
+                    // Used to diagnose block-narrowing vs line-wrap
+                    // divergences from Firefox.
+                    if (log_enabled(LogCategory::LayoutDetail,
+                                    LogLevel::Trace)) {
+                        HB_LOG(LayoutDetail, Trace,
+                            "FLOAT <%s> class='%s' dir=%s y=%.1f h=%.1f "
+                            "bottom=%.1f left_w=%.1f right_w=%.1f",
+                            child_el.tag().c_str(),
+                            child_el.get_attribute("class").c_str(),
+                            float_dir.c_str(), probe->y, probe->height,
+                            float_bottom, float_left_w, float_right_w);
+                    }
+                    box.children.push_back(std::move(probe));
+                    continue;
+                }
+
+                if (display_of(child_style) == Display::Inline ||
+                    display_of(child_style) == Display::InlineFlex ||
+                    display_of(child_style) == Display::InlineBlock) {
+                    inline_run.push_back(child.get());
+                    continue;
+                }
+                flush_inline_run();
+
+                // ADR-036: clear on a non-float block forces it
+                // below any active float of the same (or both)
+                // direction.
+                {
+                    std::string clear_dir = "none";
+                    if (child_style) {
+                        if (auto c = child_style->get("clear")) {
+                            clear_dir = *c;
+                        }
+                    }
+                    const bool clear_right =
+                        (clear_dir == "both" || clear_dir == "right");
+                    const bool clear_left =
+                        (clear_dir == "both" || clear_dir == "left");
+                    if ((clear_right && float_right_w > 0.0f) ||
+                        (clear_left  && float_left_w  > 0.0f)) {
+                        if (float_bottom > cursor_y) {
+                            cursor_y = float_bottom;
+                        }
+                    }
+                }
+
+                // ADR-031: narrow block content if its actual
+                // starting y (cursor_y + margin_top) falls within
+                // the float's vertical zone. Reading margin-top
+                // explicitly is needed because layout_element
+                // applies margins internally -- checking cursor_y
+                // alone misjudges blocks that push themselves
+                // below the float via margin-top.
+                // Approximate: whole block is narrowed uniformly
+                // (per-line wrap is ADR-032).
+                float child_margin_top = 0.0f;
+                if (child_style) {
+                    if (auto m = child_style->get("margin-top")) {
+                        child_margin_top = parse_length(*m, ctx);
+                    }
+                }
+                const float start_y = cursor_y + child_margin_top;
+                float narrow_x = content_x;
+                float narrow_w = content_w;
+                const FloatContext* child_ctx = nullptr;
+                FloatContext local_ctx;
+                // ADR-073 (extended): trace the block-narrowing decision.
+                if (log_enabled(LogCategory::LayoutDetail,
+                                LogLevel::Trace)) {
+                    HB_LOG(LayoutDetail, Trace,
+                        "NARROW <%s> start_y=%.1f float_bottom=%.1f "
+                        "narrowed=%d w=%.1f->%.1f",
+                        child_el.tag().c_str(), start_y, float_bottom,
+                        (start_y < float_bottom) ? 1 : 0,
+                        content_w,
+                        (start_y < float_bottom)
+                            ? content_w - float_left_w - float_right_w
+                            : content_w);
+                }
+                if (own_dir == Direction::Ltr) {
+                    // ADR-079: LTR uses per-line float-aware wrapping,
+                    // so the child's width is NOT narrowed. Instead, a
+                    // FloatContext is built for its inline content to
+                    // consult on each line.
+                    if (start_y < float_bottom) {
+                        local_ctx.parent_x      = content_x;
+                        local_ctx.parent_width  = content_w;
+                        local_ctx.float_left_w  = float_left_w;
+                        local_ctx.float_right_w = float_right_w;
+                        local_ctx.float_bottom  = float_bottom;
+                        local_ctx.active        = true;
+                        child_ctx = &local_ctx;
+                    } else if (float_ctx && float_ctx->active
+                               && start_y < float_ctx->float_bottom) {
+                        child_ctx = float_ctx;
+                    }
+                } else {
+                    // RTL: preserve block-narrowing (ADR-031).
+                    if (start_y < float_bottom) {
+                        narrow_x = content_x + float_left_w;
+                        narrow_w = content_w - float_left_w - float_right_w;
+                        if (narrow_w < 0.0f) narrow_w = 0.0f;
+                    }
+                }
+
+                if (child_ctx && log_enabled(LogCategory::LayoutDetail,
+                                             LogLevel::Trace)) {
+                    HB_LOG(LayoutDetail, Trace,
+                        "FLOAT_CTX_CHILD <%s> start_y=%.1f float_bottom=%.1f "
+                        "L=%.1f R=%.1f mode=per-line",
+                        child_el.tag().c_str(), start_y,
+                        child_ctx->float_bottom,
+                        child_ctx->float_left_w, child_ctx->float_right_w);
+                }
+
+                auto child_box = std::make_unique<LayoutBox>(
+                    layout_element(child_el, styles, measurer, narrow_x, cursor_y,
+                                   narrow_w, own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
+                                   own_dir, image_dims, font_metrics,
+                                   child_ctx));
+                cursor_y = child_box->y + child_box->height + child_box->margin[2];
+                box.children.push_back(std::move(child_box));
+            } else if (child->type() == dom::NodeType::Text) {
+                inline_run.push_back(child.get());
+            }
+        }
+        flush_inline_run();
+    };
+
+    // ADR-029: flex layout dispatch. Single-line flex: row | column,
+    // justify-content, align-items (cross-axis row only), flex-grow /
+    // shrink / basis, gap. Multi-line flex (wrap) deferred per ADR-029.
+    bool flex_handled = false;
+    if (style &&
+        (display_of(style) == Display::Flex ||
+         display_of(style) == Display::InlineFlex)) {
+        auto get_prop = [&](const std::string& key,
+                            std::string_view fallback) -> std::string {
+            const auto v = style->get(key);
+            return v ? std::string(*v) : std::string(fallback);
+        };
+        const std::string direction = get_prop("flex-direction", "row");
+        const std::string justify = get_prop("justify-content", "flex-start");
+        const std::string align = get_prop("align-items", "stretch");
+        const bool is_row =
+            (direction != "column" && direction != "column-reverse");
+
+        // Gap: column-gap for row, row-gap for column; fall back to gap.
+        auto parse_gap_longhand = [&](const char* longhand) -> float {
+            if (const auto v = style->get(longhand)) {
+                if (*v != "normal" && *v != "auto") {
+                    return parse_length(*v, ctx);
+                }
+            }
+            return -1.0f;
+        };
+        float gap = parse_gap_longhand(is_row ? "column-gap" : "row-gap");
+        if (gap < 0.0f) {
+            if (const auto v = style->get("gap")) {
+                if (*v != "normal" && *v != "auto") {
+                    std::string_view gs = *v;
+                    const auto sp = gs.find(' ');
+                    if (sp != std::string_view::npos) gs = gs.substr(0, sp);
+                    gap = parse_length(gs, ctx);
+                }
+            }
+            if (gap < 0.0f) gap = 0.0f;
+        }
+
+        struct FC {
+            const dom::Element* el;
+            float basis;       // border-box main-axis size
+            float final_main;
+            float grow;
+            float shrink;
+            std::unique_ptr<LayoutBox> final_box;
+        };
+        std::vector<FC> fcs;
+
+        for (const auto& child : el.children()) {
+            if (child->type() != dom::NodeType::Element) continue;
+            const auto& child_el =
+                static_cast<const dom::Element&>(*child);
+            const css::ComputedStyle* cs = lookup(styles, child_el);
+            if (display_of(cs) == Display::None) continue;
+
+            float grow = 0.0f, shrink = 1.0f;
+            std::string basis_str = "auto";
+            if (cs) {
+                if (const auto g = cs->get("flex-grow")) {
+                    try { grow = std::stof(std::string(*g)); } catch (...) {}
+                }
+                if (const auto s = cs->get("flex-shrink")) {
+                    try { shrink = std::stof(std::string(*s)); } catch (...) {}
+                }
+                if (const auto b = cs->get("flex-basis")) {
+                    basis_str = *b;
+                }
+            }
+
+            // First pass: natural size for basis resolution.
+            LayoutBox natural = layout_element(
+                child_el, styles, measurer, 0.0f, 0.0f, content_w,
+                own_content_height,
+                own_font_size, root_font_size, viewport_w, viewport_h,
+                own_dir, image_dims, font_metrics);
+            const float natural_main =
+                is_row ? natural.width : natural.height;
+
+            float basis;
+            if (basis_str != "auto" && basis_str != "content") {
+                // ADR-029: honor explicit basis (including 0)
+                // per CSS flex shorthand semantics.
+                basis = parse_length(basis_str, ctx);
+            } else {
+                basis = natural_main;
+            }
+
+            FC fc;
+            fc.el = &child_el;
+            fc.basis = basis;
+            fc.final_main = basis;
+            fc.grow = grow;
+            fc.shrink = shrink;
+            fcs.push_back(std::move(fc));
+        }
+
+        // ADR-048: extracted per-line flex resolution. Runs
+        // Phases B-E (grow/shrink, justify positioning, per-item
+        // layout, cross alignment) with an explicit line context
+        // so single-line and multi-line both share one
+        // implementation. Returns container cross extent +
+        // used main extent for the caller to advance cursor_y
+        // (single-line) or stack lines (multi-line, Commit 2).
+        struct FlexLineResult {
+            float container_cross;
+            float used_main;
+        };
+        auto resolve_flex_line = [&](std::vector<FC>& line_fcs,
+                                      float line_main_start,
+                                      float line_cross_start,
+                                      float line_main_size,
+                                      const std::string& justify_str,
+                                      const std::string& align_str,
+                                      bool line_is_row,
+                                      float line_gap) -> FlexLineResult {
+            if (line_fcs.empty()) return {0.0f, 0.0f};
+
+            // Phase B: flex resolution (grow/shrink row only;
+            // column's container main is intrinsic).
+            float total_basis = line_gap *
+                static_cast<float>(line_fcs.size() - 1);
+            for (const auto& fc : line_fcs) total_basis += fc.basis;
+
+            if (line_is_row) {
+                const float free = line_main_size - total_basis;
+                if (free < 0.0f) {
+                    float total_shrink = 0.0f;
+                    for (const auto& fc : line_fcs) {
+                        total_shrink += fc.shrink * fc.basis;
+                    }
+                    if (total_shrink > 0.0f) {
+                        for (auto& fc : line_fcs) {
+                            const float amt =
+                                (fc.shrink * fc.basis / total_shrink) *
+                                (-free);
+                            fc.final_main =
+                                std::max(0.0f, fc.basis - amt);
+                        }
+                    }
+                } else if (free > 0.0f) {
+                    float total_grow = 0.0f;
+                    for (const auto& fc : line_fcs) {
+                        total_grow += fc.grow;
+                    }
+                    if (total_grow > 0.0f) {
+                        for (auto& fc : line_fcs) {
+                            fc.final_main =
+                                fc.basis +
+                                (fc.grow / total_grow) * free;
+                        }
+                    }
+                }
+            }
+
+            // Phase C: justify positioning.
+            float used_main = line_gap *
+                static_cast<float>(line_fcs.size() - 1);
+            for (const auto& fc : line_fcs) used_main += fc.final_main;
+            const float remaining = line_is_row
+                ? std::max(0.0f, line_main_size - used_main) : 0.0f;
+
+            float main_cursor = line_main_start;
+            float effective_gap = line_gap;
+            if (remaining > 0.0f) {
+                if (justify_str == "flex-end" || justify_str == "end") {
+                    main_cursor += remaining;
+                } else if (justify_str == "center") {
+                    main_cursor += remaining / 2.0f;
+                } else if (justify_str == "space-between" &&
+                           line_fcs.size() > 1) {
+                    effective_gap += remaining /
+                        static_cast<float>(line_fcs.size() - 1);
+                } else if (justify_str == "space-around") {
+                    const float around =
+                        remaining / static_cast<float>(line_fcs.size());
+                    main_cursor += around / 2.0f;
+                    effective_gap += around;
+                }
+            }
+
+            // Phase D: layout per item + track cross extent.
+            float container_cross = 0.0f;
+            for (auto& fc : line_fcs) {
+                const float cw = line_is_row ? fc.final_main
+                                             : line_main_size;
+                const float x = line_is_row ? main_cursor
+                                            : line_cross_start;
+                const float y = line_is_row ? 0.0f : main_cursor;
+
+                fc.final_box = std::make_unique<LayoutBox>(
+                    layout_element(*fc.el, styles, measurer, x, y, cw,
+                                   own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
+                                   own_dir, image_dims, font_metrics));
+                const float cross_size = line_is_row
+                    ? fc.final_box->height : fc.final_box->width;
+                if (cross_size > container_cross) {
+                    container_cross = cross_size;
+                }
+                main_cursor += fc.final_main + effective_gap;
+            }
+
+            // Phase E: cross-axis alignment (row only; column's
+            // align-items deferred per ADR-029).
+            if (line_is_row) {
+                for (auto& fc : line_fcs) {
+                    float cross_off = 0.0f;
+                    if (align_str == "flex-end") {
+                        cross_off = container_cross -
+                                    fc.final_box->height;
+                    } else if (align_str == "center") {
+                        cross_off = (container_cross -
+                                     fc.final_box->height) / 2.0f;
+                    }
+                    // stretch: no-op (natural height, top-aligned) —
+                    // documented v1 limitation.
+                    shift_subtree_y(*fc.final_box,
+                                    line_cross_start + cross_off);
+                }
+            }
+            return {container_cross, used_main};
+        };
+
+        if (!fcs.empty()) {
+            // ADR-048: dispatch on flex-wrap. nowrap (default)
+            // preserves ADR-029 single-line behavior byte-for-byte;
+            // wrap activates the multi-line algorithm.
+            const std::string flex_wrap =
+                get_prop("flex-wrap", "nowrap");
+            const bool do_wrap =
+                (flex_wrap == "wrap") && is_row;
+
+            const float line_main_start = is_row ? content_x : content_y;
+            const float line_cross_start = is_row ? content_y : content_x;
+
+            if (!do_wrap) {
+                // Single-line (identical to ADR-029 pre-ADR-048).
+                const FlexLineResult r = resolve_flex_line(
+                    fcs, line_main_start, line_cross_start, content_w,
+                    justify, align, is_row, gap);
+                for (auto& fc : fcs) {
+                    box.children.push_back(std::move(fc.final_box));
+                }
+                cursor_y = content_y + (is_row ? r.container_cross
+                                                : r.used_main);
+            } else {
+                // ADR-048: multi-line wrap. Break fcs into lines
+                // by accumulated basis + gap vs content_w, resolve
+                // each line independently, stack lines with gap
+                // (v1: gap is used for both axes; align-content
+                // deferred).
+                std::vector<std::vector<FC>> lines;
+                std::vector<FC> current_line;
+                float line_main_sum = 0.0f;
+                for (auto& fc : fcs) {
+                    const float candidate = (current_line.empty()
+                        ? 0.0f : line_main_sum + gap) + fc.basis;
+                    if (!current_line.empty() &&
+                        candidate > content_w) {
+                        lines.push_back(std::move(current_line));
+                        current_line.clear();
+                        line_main_sum = 0.0f;
+                    }
+                    line_main_sum = (current_line.empty()
+                        ? fc.basis : line_main_sum + gap + fc.basis);
+                    current_line.push_back(std::move(fc));
+                }
+                if (!current_line.empty()) {
+                    lines.push_back(std::move(current_line));
+                }
+
+                float cross_cursor = content_y;
+                for (size_t i = 0; i < lines.size(); ++i) {
+                    const FlexLineResult r = resolve_flex_line(
+                        lines[i], line_main_start, cross_cursor,
+                        content_w, justify, align, is_row, gap);
+                    for (auto& fc : lines[i]) {
+                        box.children.push_back(std::move(fc.final_box));
+                    }
+                    cross_cursor += r.container_cross;
+                    if (i + 1 < lines.size()) cross_cursor += gap;
+                }
+                cursor_y = cross_cursor;
+            }
+        }
+
+        flex_handled = true;
+    }
+
+    // ADR-028: grid layout dispatch. If this element's display is
+    // grid AND its ComputedStyle declares a parseable template,
+    // dispatch to grid children layout. Otherwise (grid without
+    // template, or any non-grid display) fall through to block.
+    bool grid_handled = false;
+    if (!flex_handled && display_of(style) == Display::Grid && style) {
+        auto tmpl = parse_grid_template(*style, ctx);
+        if (tmpl && !tmpl->columns.empty()) {
+            // Parse column-gap (fallback 0).
+            float col_gap = 0.0f;
+            if (const auto g = style->get("column-gap");
+                g && !is_auto(*g)) {
+                col_gap = parse_length(*g, ctx);
+            }
+
+            const auto col_widths = compute_column_widths(
+                tmpl->columns, content_w, col_gap);
+
+            struct PlacedChild {
+                std::unique_ptr<LayoutBox> box;
+                int row = 0;
+                int col = 0;
+                int row_span = 1;
+                int col_span = 1;
+            };
+            std::vector<PlacedChild> placed;
+
+            // Layout each direct child at y=0 within its cell's
+            // horizontal bounds. Y position comes after row heights
+            // are computed.
+            for (const auto& child : el.children()) {
+                if (child->type() != dom::NodeType::Element) continue;
+                const auto& child_el =
+                    static_cast<const dom::Element&>(*child);
+                const css::ComputedStyle* child_style =
+                    lookup(styles, child_el);
+                if (display_of(child_style) == Display::None) continue;
+
+                if (!child_style) continue;
+                const auto ga = child_style->get("grid-area");
+                if (!ga) continue;  // v1: children without grid-area skipped
+                auto area_it = tmpl->areas.find(*ga);
+                if (area_it == tmpl->areas.end()) continue;
+
+                const int row = area_it->second.row;
+                const int col = area_it->second.col;
+                const int row_span = area_it->second.row_span;
+                const int col_span = area_it->second.col_span;
+
+                // Cell X position = content_x + sum of widths before
+                // + gaps before.
+                float cell_x = content_x;
+                for (int c = 0;
+                     c < col && c < static_cast<int>(col_widths.size());
+                     ++c) {
+                    cell_x += col_widths[c] + col_gap;
+                }
+                float cell_w = 0.0f;
+                for (int c = col;
+                     c < col + col_span &&
+                     c < static_cast<int>(col_widths.size());
+                     ++c) {
+                    cell_w += col_widths[c];
+                }
+                if (col_span > 1) cell_w += col_gap * (col_span - 1);
+
+                auto child_box = std::make_unique<LayoutBox>(
+                    layout_element(child_el, styles, measurer, cell_x, 0.0f,
+                                   cell_w, own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
+                                   own_dir, image_dims, font_metrics));
+                PlacedChild pc;
+                pc.box = std::move(child_box);
+                pc.row = row;
+                pc.col = col;
+                pc.row_span = row_span;
+                pc.col_span = col_span;
+                placed.push_back(std::move(pc));
+            }
+
+            // Compute row heights: max natural content height across
+            // children placed at each row. For Fr and Auto rows,
+            // natural content height is the flow-layout resolution
+            // (ADR-028 v1).
+            int num_rows = static_cast<int>(tmpl->rows.size());
+            if (num_rows < 1) num_rows = 1;
+            for (const auto& pc : placed) {
+                if (pc.row + pc.row_span > num_rows) {
+                    num_rows = pc.row + pc.row_span;
+                }
+            }
+            std::vector<float> row_heights(num_rows, 0.0f);
+            for (const auto& pc : placed) {
+                if (pc.row < num_rows &&
+                    pc.box->height > row_heights[pc.row]) {
+                    row_heights[pc.row] = pc.box->height;
+                }
+            }
+
+            // Row Y positions: cumulative from content_y, no row gap
+            // by default (Wikipedia uses column-gap only).
+            std::vector<float> row_y(num_rows, content_y);
+            for (int r = 1; r < num_rows; ++r) {
+                row_y[r] = row_y[r-1] + row_heights[r-1];
+            }
+
+            // Shift each child to its row's Y position and append.
+            for (auto& pc : placed) {
+                if (pc.row < num_rows) {
+                    shift_subtree_y(*pc.box, row_y[pc.row]);
+                }
+                box.children.push_back(std::move(pc.box));
+            }
+
+            // Update cursor_y for the final box.height computation.
+            float total_h = 0.0f;
+            for (float h : row_heights) total_h += h;
+            cursor_y = content_y + total_h;
+
+            grid_handled = true;
+        }
+    }
+
+    if (!grid_handled && !flex_handled) {
+        layout_block_children();
+
+        // ADR-042: position absolute children against self's
+        // content box (which is now finalized). Only block
+        // parent case is handled in v1; flex/grid parent
+        // absolutes fall through their own loops and remain
+        // static (documented deferral).
+        if (box.is_containing_block && !pending_absolutes.empty()) {
+            const float abs_cx =
+                box.x + box.border[3] + box.padding[3];
+            const float abs_cy =
+                box.y + box.border[0] + box.padding[0];
+
+            // ADR-042: box.width / box.height are not yet
+            // finalized at this point (they're set after the
+            // dispatch block for some elements). Parse explicit
+            // width/height from style when present, else fall
+            // back to box dimensions.
+            LengthContext dim_ctx;
+            dim_ctx.font_size = own_font_size;
+            dim_ctx.parent_font_size = parent_font_size;
+            dim_ctx.root_font_size = root_font_size;
+            dim_ctx.parent_content_width = parent_content_width;
+            dim_ctx.viewport_w = viewport_w;
+            dim_ctx.viewport_h = viewport_h;
+
+            float abs_cw =
+                box.width - box.border[1] - box.border[3]
+                          - box.padding[1] - box.padding[3];
+            float abs_ch =
+                box.height - box.border[0] - box.border[2]
+                           - box.padding[0] - box.padding[2];
+            if (style) {
+                if (auto w = style->get("width");
+                    w && *w != "auto") {
+                    abs_cw = parse_length(*w, dim_ctx);
+                }
+                if (auto h = style->get("height");
+                    h && *h != "auto") {
+                    abs_ch = parse_length(*h, dim_ctx);
+                }
+            }
+
+            LengthContext abs_ctx;
+            abs_ctx.font_size = own_font_size;
+            abs_ctx.parent_font_size = parent_font_size;
+            abs_ctx.root_font_size = root_font_size;
+            abs_ctx.parent_content_width = abs_cw;
+            // ADR-058: % in top:/bottom: resolves against the
+            // containing block's height, not its width.
+            abs_ctx.parent_content_height = abs_ch;
+            abs_ctx.viewport_w = viewport_w;
+            abs_ctx.viewport_h = viewport_h;
+
+            for (const auto* abs_el : pending_absolutes) {
+                const auto* abs_style = lookup(styles, *abs_el);
+                if (!abs_style) continue;
+
+                // Pre-layout at (0,0) to establish natural size.
+                auto abs_box = std::make_unique<LayoutBox>(
+                    layout_element(*abs_el, styles, measurer,
+                                   0.0f, 0.0f, abs_cw,
+                                   own_content_height,
+                                   own_font_size, root_font_size,
+                                   viewport_w, viewport_h,
+                                   own_dir, image_dims, font_metrics));
+
+                const float natural_w = abs_box->width;
+                const float natural_h = abs_box->height;
+
+                // ADR-058: parse_off_h uses width reference
+                // (left/right); parse_off_v uses height reference
+                // (top/bottom) so % resolves against the correct
+                // containing-block axis.
+                auto parse_off_h = [&](const char* prop)
+                        -> std::optional<float> {
+                    if (auto v = abs_style->get(prop);
+                        v && *v != "auto") {
+                        return parse_length(*v, abs_ctx);
+                    }
+                    return std::nullopt;
+                };
+                auto parse_off_v = [&](const char* prop)
+                        -> std::optional<float> {
+                    if (auto v = abs_style->get(prop);
+                        v && *v != "auto") {
+                        return parse_length_for_height(*v, abs_ctx);
+                    }
+                    return std::nullopt;
+                };
+                const auto top_o    = parse_off_v("top");
+                const auto bottom_o = parse_off_v("bottom");
+                const auto left_o   = parse_off_h("left");
+                const auto right_o  = parse_off_h("right");
+
+                // Horizontal: compute target_x (x_before_margin)
+                // and target_w. Over-constrained: left wins
+                // (CSS SS10.3.7 rule 1, correct for LTR).
+                float target_x = 0.0f;
+                float target_w = natural_w;
+                if (left_o && right_o) {
+                    target_x = abs_cx + *left_o;
+                    target_w = abs_cw - *left_o - *right_o;
+                } else if (left_o) {
+                    target_x = abs_cx + *left_o;
+                } else if (right_o) {
+                    target_x = abs_cx + abs_cw - *right_o - natural_w;
+                } else {
+                    target_x = abs_cx;
+                }
+
+                // Vertical.
+                float target_y = 0.0f;
+                float target_h = natural_h;
+                if (top_o && bottom_o) {
+                    target_y = abs_cy + *top_o;
+                    target_h = abs_ch - *top_o - *bottom_o;
+                } else if (top_o) {
+                    target_y = abs_cy + *top_o;
+                } else if (bottom_o) {
+                    target_y = abs_cy + abs_ch - *bottom_o - natural_h;
+                } else {
+                    target_y = abs_cy;
+                }
+
+                // Shift from (0,0)-layout to target position.
+                if (target_x != 0.0f) {
+                    shift_subtree_x(*abs_box, target_x);
+                }
+                if (target_y != 0.0f) {
+                    shift_subtree_y(*abs_box, target_y);
+                }
+
+                // Apply stretch overrides (v1: box size set post-
+                // layout; nested content may not reflow perfectly
+                // -- documented limitation, no impact for the
+                // first-viewport titlebar pseudo).
+                if (target_w != natural_w) abs_box->width  = target_w;
+                if (target_h != natural_h) abs_box->height = target_h;
+
+                box.children.push_back(std::move(abs_box));
+            }
+        }
+    }
+
+    // ADR-035: reserve layout space for <img> from intrinsic
+    // dimensions. Explicit CSS width (or height) wins; the other
+    // axis is aspect-derived. Neither set: use intrinsic (CSS
+    // spec fallback). Callback null/invalid: existing (h=0).
+    if (image_dims && el.tag() == "img") {
+        const std::string src_attr = el.get_attribute("src");
+        if (!src_attr.empty()) {
+            const ImageDim d = image_dims(src_attr);
+            if (d.valid && d.width > 0.0f && d.height > 0.0f) {
+                float want_w = 0.0f;
+                float want_h = 0.0f;
+                if (style) {
+                    if (auto w = style->get("width");
+                        w && !w->empty() && *w != "auto") {
+                        const float p = parse_length(*w, ctx);
+                        if (p > 0.0f) want_w = p;
+                    }
+                    if (auto h = style->get("height");
+                        h && !h->empty() && *h != "auto") {
+                        const float p = parse_length(*h, ctx);
+                        if (p > 0.0f) want_h = p;
+                    }
+                }
+                // ADR-066 Layer 1: HTML width/height attributes as
+                // presentational hints. Precedence: CSS width wins,
+                // HTML attr is fallback, intrinsic last. Wikipedia's
+                // <figure> photos use <img width="220"> with no CSS
+                // width -- ignored pre-Layer-1, so intrinsic dims
+                // (945px) collapsed following text to 22px.
+                if (want_w == 0.0f) {
+                    if (auto w_attr = el.get_attribute("width");
+                        !w_attr.empty() &&
+                        w_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(w_attr);
+                            if (v > 0.0f) want_w = v;
+                        } catch (...) {}
+                    }
+                }
+                if (want_h == 0.0f) {
+                    if (auto h_attr = el.get_attribute("height");
+                        !h_attr.empty() &&
+                        h_attr.find('%') == std::string::npos) {
+                        try {
+                            const float v = std::stof(h_attr);
+                            if (v > 0.0f) want_h = v;
+                        } catch (...) {}
+                    }
+                }
+                if (want_w > 0.0f && want_h > 0.0f) {
+                    // both explicit
+                } else if (want_w > 0.0f) {
+                    want_h = want_w * (d.height / d.width);
+                } else if (want_h > 0.0f) {
+                    want_w = want_h * (d.width / d.height);
+                } else {
+                    want_w = d.width;
+                    want_h = d.height;
+                }
+                if (want_w > content_w && content_w > 0.0f) {
+                    want_h = want_h * (content_w / want_w);
+                    want_w = content_w;
+                }
+                box.width = want_w
+                          + box.padding[3] + box.padding[1]
+                          + box.border[3] + box.border[1];
+                box.height = want_h
+                           + box.padding[0] + box.padding[2]
+                           + box.border[0] + box.border[2];
+                return box;
+            }
+        }
+    }
+
+    // ADR-039: box model completion.
+
+    // (1) min-width / max-width clamps. Applied after the width
+    // resolution above. auto/none are no-ops. ADR-037 originally
+    // skipped vw/vh here because parse_length returned 0 for
+    // viewport units at that time; ADR-051 + ADR-052 fixed that
+    // (parse + production viewport_h), so ADR-053 removes the
+    // skip. The > 0.0f check below is the safety net for the
+    // initial render (viewport dims are 0 before GTK allocates).
+    if (style) {
+        if (auto mw = style->get("min-width")) {
+            if (!is_auto(*mw) && *mw != "none") {
+                const float min_w = parse_length(*mw, ctx);
+                if (min_w > content_w) content_w = min_w;
+            }
+        }
+        if (auto xw = style->get("max-width")) {
+            if (!is_auto(*xw) && *xw != "none") {
+                const float max_w = parse_length(*xw, ctx);
+                if (max_w > 0.0f && max_w < content_w) content_w = max_w;
+            }
+        }
+    }
+
+    // (2) explicit height from ComputedStyle. Applies to all
+    // non-early-return boxes (regular elements + img with failed
+    // decode; img with valid dims returns early from the img
+    // block above). This is ADR-037's deferred height gap --
+    // search icon w=20 h=0 becomes w=20 h=20.
+    //
+    // ADR-057: % heights resolve against parent_content_height
+    // (or viewport_h for <html>/<body>). When the parent is
+    // auto-height (parent_content_height = 0), parse_length_for_
+    // height returns 0 and the guard below skips -- matching
+    // CSS spec (% on auto parent -> auto).
+    if (style) {
+        if (auto h = style->get("height"); h && !is_auto(*h)) {
+            const float eh = parse_length_for_height(*h, ctx);
+            if (eh > 0.0f) cursor_y = content_y + eh;
+        }
+    }
+
+    // (3) min-height / max-height clamps. ADR-053 removed the
+    // vw/vh skip. ADR-057 removed the % skip -- % resolves
+    // against parent_content_height (or viewport_h for <html>).
+    if (style) {
+        if (auto mh = style->get("min-height")) {
+            if (!is_auto(*mh) && *mh != "none") {
+                const float min_h = parse_length_for_height(*mh, ctx);
+                if (min_h > (cursor_y - content_y)) {
+                    cursor_y = content_y + min_h;
+                }
+            }
+        }
+        if (auto xh = style->get("max-height")) {
+            if (!is_auto(*xh) && *xh != "none") {
+                const float max_h = parse_length_for_height(*xh, ctx);
+                if (max_h > 0.0f && max_h < (cursor_y - content_y)) {
+                    cursor_y = content_y + max_h;
+                }
+            }
+        }
+    }
+
+    // (4) overflow: hidden -> paint clips children to content
+    // bounds. "hidden" and "hidden auto" both set the flag
+    // (v1 treats two-value form as hidden on both axes).
+    if (style) {
+        if (auto ov = style->get("overflow")) {
+            if (ov->find("hidden") != std::string::npos) {
+                box.clip_children = true;
+            }
+        }
+    }
+
+    // ADR-054: transform: rotate(<angle>) -- extract first
+    // rotate() only.
+    // ADR-058: also extract translateY(<value>). The raw value
+    // is resolved AFTER box.height below, because % in
+    // translateY is relative to the element's OWN height.
+    std::string transform_ty_raw;
+    if (style) {
+        if (auto tf = style->get("transform")) {
+            auto open = tf->find("rotate(");
+            if (open != std::string::npos) {
+                const auto start = open + 7;  // "rotate(" is 7 chars
+                const auto close = tf->find(')', start);
+                if (close != std::string::npos) {
+                    box.transform_rotate_deg = parse_angle(
+                        std::string_view(*tf).substr(start, close - start));
+                }
+            }
+            // ADR-058: extract translateY raw token.
+            auto ty_open = tf->find("translateY(");
+            if (ty_open != std::string::npos) {
+                const auto start = ty_open + 11;  // "translateY(" is 11 chars
+                const auto close = tf->find(')', start);
+                if (close != std::string::npos) {
+                    std::string_view raw =
+                        std::string_view(*tf).substr(start, close - start);
+                    // Trim surrounding whitespace.
+                    while (!raw.empty() &&
+                           (raw.front() == ' ' || raw.front() == '\t')) {
+                        raw.remove_prefix(1);
+                    }
+                    while (!raw.empty() &&
+                           (raw.back() == ' ' || raw.back() == '\t')) {
+                        raw.remove_suffix(1);
+                    }
+                    transform_ty_raw = std::string(raw);
+                }
+            }
+        }
+    }
+
+    box.width = content_w
+              + box.padding[3] + box.padding[1]
+              + box.border[3] + box.border[1];
+    box.height = (cursor_y - content_y)
+               + box.padding[0] + box.padding[2]
+               + box.border[0] + box.border[2];
+
+    // ADR-058: resolve translateY now that box.height is known.
+    // % resolves against own height; px/em/rem go through
+    // parse_length. Reuses parse_length_for_height with a
+    // temporarily-overridden ctx (parent_content_height =
+    // own box.height).
+    if (!transform_ty_raw.empty()) {
+        LengthContext ty_ctx = ctx;
+        ty_ctx.parent_content_height = box.height;
+        box.transform_translate_y =
+            parse_length_for_height(transform_ty_raw, ty_ctx);
+    }
+
+    if (log_enabled(LogCategory::LayoutDetail, LogLevel::Trace)) {
+        const char* pos_str = "static";
+        switch (box.position) {
+            case Position::Static:   pos_str = "static";   break;
+            case Position::Relative: pos_str = "relative"; break;
+            case Position::Absolute: pos_str = "absolute"; break;
+            case Position::Fixed:    pos_str = "fixed";    break;
+            case Position::Sticky:   pos_str = "sticky";   break;
+        }
+        HB_LOG(LayoutDetail, Trace,
+            "layout_element: EXIT <%s> id='%s' x=%.1f y=%.1f w=%.1f h=%.1f pos=%s",
+            el.tag().c_str(), el.get_attribute("id").c_str(),
+            box.x, box.y, box.width, box.height, pos_str);
+    }
+    return box;
+}
+
+const dom::Element* find_root_element(const dom::Document& doc) {
+    for (const auto& child : doc.children()) {
+        if (child->type() == dom::NodeType::Element) {
+            return static_cast<const dom::Element*>(child.get());
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+Display display_of(const css::ComputedStyle* style) {
+    if (!style) return Display::Block;
+    const auto v = style->get("display");
+    if (!v) return Display::Block;
+    if (*v == "inline") return Display::Inline;
+    if (*v == "none") return Display::None;
+    if (*v == "grid") return Display::Grid;       // ADR-028
+    if (*v == "flex") return Display::Flex;       // ADR-029
+    if (*v == "inline-flex") return Display::InlineFlex;  // ADR-029
+    if (*v == "list-item") return Display::ListItem;      // ADR-080
+    if (*v == "inline-block") return Display::InlineBlock; // ADR-081
+    return Display::Block;
+}
+
+Direction resolve_direction(const dom::Element& el, Direction parent_dir) {
+    const auto dir_attr = el.get_attribute("dir");
+    if (dir_attr == "ltr") return Direction::Ltr;
+    if (dir_attr == "rtl") return Direction::Rtl;
+    if (dir_attr == "auto") {
+        std::string flat;
+        flatten_inline_text(el, flat);
+        return detect_rtl(flat) ? Direction::Rtl : Direction::Ltr;
+    }
+    return parent_dir;
+}
+
+// =============================================================
+// ADR-042 Commit 2: pseudo-element synthesis (post-walk).
+// =============================================================
+
+// ADR-042: synthesize a pseudo-element box for `ps` (the
+// pseudo-element's ComputedStyle) and attach it to `parent`.
+// Only `content: ''` supported (empty literal); literal text,
+// attr(), counter(), url() all skipped (return without box).
+// Position: absolute boxes are positioned against parent's
+// content box per ADR-042 Commit 1 rules. Position: static
+// boxes append after parent's existing children.
+void apply_one_pseudo(LayoutBox& parent,
+                      const css::ComputedStyle& ps,
+                      float parent_font_size,
+                      float root_font_size,
+                      bool is_before) {
+    auto content = ps.get("content");
+    if (!content) return;
+    const std::string& v = *content;
+    // v1: only empty-string literal (`''` or `""`)
+    if (v != "''" && v != "\"\"") return;
+
+    // Parse position
+    Position pos = Position::Static;
+    if (auto p = ps.get("position")) {
+        if (*p == "absolute") pos = Position::Absolute;
+        else if (*p == "relative") pos = Position::Relative;
+    }
+
+    // Parent's content box
+    const float parent_cx = parent.x + parent.border[3] + parent.padding[3];
+    const float parent_cy = parent.y + parent.border[0] + parent.padding[0];
+    const float parent_cw =
+        parent.width - parent.border[1] - parent.border[3]
+                     - parent.padding[1] - parent.padding[3];
+    const float parent_ch =
+        parent.height - parent.border[0] - parent.border[2]
+                      - parent.padding[0] - parent.padding[2];
+
+    LengthContext ctx;
+    ctx.font_size = parent_font_size;
+    ctx.parent_font_size = parent_font_size;
+    ctx.root_font_size = root_font_size;
+    ctx.parent_content_width = parent_cw > 0.0f ? parent_cw : 0.0f;
+
+    // Explicit width/height
+    float w = parent_cw > 0.0f ? parent_cw : 0.0f;
+    float h = 0.0f;
+    if (auto wh = ps.get("width"); wh && *wh != "auto") {
+        w = parse_length(*wh, ctx);
+    }
+    if (auto hh = ps.get("height"); hh && *hh != "auto") {
+        h = parse_length(*hh, ctx);
+    }
+
+    // Parse offsets
+    auto parse_off = [&](const char* prop) -> std::optional<float> {
+        if (auto o = ps.get(prop); o && *o != "auto") {
+            return parse_length(*o, ctx);
+        }
+        return std::nullopt;
+    };
+    const auto top_o    = parse_off("top");
+    const auto bottom_o = parse_off("bottom");
+    const auto left_o   = parse_off("left");
+    const auto right_o  = parse_off("right");
+
+    // Synthesize box
+    auto pb = std::make_unique<LayoutBox>();
+    pb->element = nullptr;
+    pb->position = pos;
+
+    // Background / border / padding
+    if (auto bg = ps.get("background-color")) {
+        pb->background = parse_color(*bg);
+    }
+    if (auto bc = ps.get("border-color")) {
+        pb->border_color = parse_color(*bc);
+    }
+    if (auto bw = ps.get("border-width"); bw && *bw != "0") {
+        const float wv = parse_length(*bw, ctx);
+        pb->border[0] = pb->border[1] = pb->border[2] = pb->border[3] = wv;
+    }
+    if (auto pad = ps.get("padding")) {
+        const float pv = parse_length(*pad, ctx);
+        pb->padding[0] = pb->padding[1] = pb->padding[2] = pb->padding[3] = pv;
+    }
+
+    if (pos == Position::Absolute) {
+        float x = parent_cx, y = parent_cy;
+        float w_final = w, h_final = h;
+
+        if (left_o && right_o) {
+            x = parent_cx + *left_o;
+            w_final = parent_cw - *left_o - *right_o;
+        } else if (left_o) {
+            x = parent_cx + *left_o;
+        } else if (right_o) {
+            x = parent_cx + parent_cw - *right_o - w;
+        } else {
+            x = parent_cx;
+        }
+
+        if (top_o && bottom_o) {
+            y = parent_cy + *top_o;
+            h_final = parent_ch - *top_o - *bottom_o;
+        } else if (top_o) {
+            y = parent_cy + *top_o;
+        } else if (bottom_o) {
+            y = parent_cy + parent_ch - *bottom_o - h;
+        } else {
+            y = parent_cy;
+        }
+
+        pb->x = x;
+        pb->y = y;
+        pb->width  = w_final + pb->padding[3] + pb->padding[1]
+                             + pb->border[3] + pb->border[1];
+        pb->height = h_final + pb->padding[0] + pb->padding[2]
+                             + pb->border[0] + pb->border[2];
+    } else {
+        // Static: append after existing flow children.
+        float flow_y = parent_cy;
+        for (const auto& c : parent.children) {
+            if (c->kind == LayoutKind::Box) {
+                const auto& cb = static_cast<const LayoutBox&>(*c);
+                const float bottom = cb.y + cb.height + cb.margin[2];
+                if (bottom > flow_y) flow_y = bottom;
+            }
+        }
+        pb->x = parent_cx;
+        pb->y = flow_y;
+        pb->width  = w + pb->padding[3] + pb->padding[1]
+                       + pb->border[3] + pb->border[1];
+        pb->height = h + pb->padding[0] + pb->padding[2]
+                       + pb->border[0] + pb->border[2];
+    }
+
+    // ADR-042: insert at begin for ::before, at end for ::after.
+    if (is_before) {
+        parent.children.insert(parent.children.begin(), std::move(pb));
+    } else {
+        parent.children.push_back(std::move(pb));
+    }
+}
+
+// ADR-042: recursive post-walk. Recurses into children first
+// (bottom-up), then synthesizes pseudo boxes for this element.
+// Only LayoutBox nodes hold elements; inline/text nodes are
+// skipped (pseudo-elements on inline parents deferred).
+void apply_pseudo_elements(LayoutBox& box,
+                           const css::PseudoStyleMap& pseudo_styles,
+                           float parent_font_size,
+                           float root_font_size) {
+    // Bottom-up: recurse into children first.
+    for (auto& child : box.children) {
+        if (child && child->kind == LayoutKind::Box) {
+            apply_pseudo_elements(static_cast<LayoutBox&>(*child),
+                                   pseudo_styles,
+                                   parent_font_size,
+                                   root_font_size);
+        }
+    }
+
+    if (!box.element) return;
+    auto it = pseudo_styles.find(box.element);
+    if (it == pseudo_styles.end()) return;
+
+    // before first (so ::before is visual first in children)
+    if (!it->second.before.declarations.empty()) {
+        apply_one_pseudo(box, it->second.before,
+                         parent_font_size, root_font_size,
+                         /*is_before=*/true);
+    }
+    if (!it->second.after.declarations.empty()) {
+        apply_one_pseudo(box, it->second.after,
+                         parent_font_size, root_font_size,
+                         /*is_before=*/false);
+    }
+}
+
+LayoutBox layout(const dom::Document& doc,
+                 const css::ComputedStyleMap& styles,
+                 TextMeasurer measurer,
+                 float viewport_width,
+                 ImageDimLookup image_dims,
+                 float viewport_height,
+                 float parent_content_height,
+                 FontMetricsProvider font_metrics) { // ADR-057, ADR-082
+    HB_LOG(Layout, Info, "layout: viewport=%.0fx%.0f",
+           viewport_width, viewport_height);
+    const dom::Element* root = find_root_element(doc);
+    if (!root) {
+        HB_LOG(Layout, Warn, "layout: no root element");
+        return LayoutBox{};
+    }
+
+    const css::ComputedStyle* root_style = lookup(styles, *root);
+    const float root_fs =
+        font_size_of(root_style, kDefaultFontSize, kDefaultFontSize);
+
+    return layout_element(*root, styles, measurer, 0.0f, 0.0f,
+                          viewport_width,
+                          parent_content_height,
+                          kDefaultFontSize, root_fs,
+                          viewport_width, viewport_height,
+                          Direction::Ltr, image_dims, font_metrics);
+}
+
+
+namespace {
+
+const dom::Element* hit_test_node(const LayoutNode& node,
+                                  float x, float y) {
+    // Point must be inside this node's half-open box.
+    if (x < node.x || x >= node.x + node.width ||
+        y < node.y || y >= node.y + node.height) {
+        return nullptr;
+    }
+    switch (node.kind) {
+        case LayoutKind::Box: {
+            const auto& box = static_cast<const LayoutBox&>(node);
+            for (const auto& child : box.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            return box.element;
+        }
+        case LayoutKind::Inline: {
+            const auto& inl = static_cast<const LayoutInline&>(node);
+            for (const auto& child : inl.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            return inl.element;
+        }
+        case LayoutKind::InlineContext: {
+            const auto& ctx =
+                static_cast<const LayoutInlineContext&>(node);
+            for (const auto& child : ctx.children) {
+                if (const auto* hit = hit_test_node(*child, x, y)) {
+                    return hit;
+                }
+            }
+            // ADR-018 Commit 4b: flattened inline text lives as
+            // LineFragments with per-fragment element identity.
+            // Return the element of the fragment containing the
+            // point; nullptr (falls through to containing Box)
+            // if the point is in the inline run's whitespace.
+            for (const auto& frag : ctx.lines) {
+                if (x >= frag.x && x < frag.x + frag.width &&
+                    y >= frag.y && y < frag.y + frag.height) {
+                    return frag.element;
+                }
+            }
+            return nullptr;
+        }
+        case LayoutKind::Text:
+            // LayoutText has no element; containing LayoutInline
+            // or LayoutBox provides it.
+            return nullptr;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+// ADR-042 Commit 2: layout with pseudo-element synthesis.
+// Runs the normal layout tree, then walks it bottom-up to
+// synthesize ::before / ::after boxes from pseudo_styles.
+LayoutBox layout_with_pseudo(const dom::Document& doc,
+                             const css::ComputedStyleMap& styles,
+                             const css::PseudoStyleMap& pseudo_styles,
+                             TextMeasurer measurer,
+                             float viewport_width,
+                             ImageDimLookup image_dims,
+                             float viewport_height,
+                             float parent_content_height,
+                             FontMetricsProvider font_metrics) { // ADR-057, ADR-082
+    LayoutBox root = layout(doc, styles, measurer, viewport_width,
+                            image_dims, viewport_height,
+                            parent_content_height,
+                            font_metrics); // ADR-057, ADR-082
+    // Root font size defaults to 16 (pseudo font-size inheritance
+    // from root isn't needed for content: '' -- no text).
+    apply_pseudo_elements(root, pseudo_styles,
+                          /*parent_font_size=*/16.0f,
+                          /*root_font_size=*/16.0f);
+    return root;
+}
+
+const dom::Element* hit_test(const LayoutNode& root,
+                             float x, float y) {
+    return hit_test_node(root, x, y);
+}
+} // namespace honeybee::renderer::layout

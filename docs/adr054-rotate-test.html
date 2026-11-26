@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+  <title>ADR-054: transform: rotate()</title>
+  <style>
+    body {
+      background-color: #ffffff;
+      margin: 20px;
+      font-family: sans-serif;
+      font-size: 14px;
+      color: #333333;
+    }
+    .label {
+      color: #666666;
+      margin-top: 24px;
+      margin-bottom: 8px;
+    }
+    .box {
+      width: 100px;
+      height: 100px;
+      background-color: #d35400;
+      border-width: 2px;
+      border-style: solid;
+      border-color: #333333;
+    }
+    .rect {
+      width: 120px;
+      height: 60px;
+      background-color: #2980b9;
+      border-width: 2px;
+      border-style: solid;
+      border-color: #333333;
+    }
+    .rotated-45 { transform: rotate(45deg); }
+    .rotated-30 { transform: rotate(30deg); }
+  </style>
+</head>
+<body>
+  <div class="label">Control (no transform): upright orange square</div>
+  <div class="box"></div>
+
+  <div class="label">rotate(45deg): orange diamond</div>
+  <div class="box rotated-45"></div>
+
+  <div class="label">rotate(30deg) rectangle: tilted blue rectangle</div>
+  <div class="rect rotated-30"></div>
+</body>
+</html>
