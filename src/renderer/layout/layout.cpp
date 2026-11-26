@@ -1032,6 +1032,17 @@ LayoutBox layout_element(const dom::Element& el,
         }
     }
 
+    // ADR-049: read text-align; justify falls back to Start.
+    if (style) {
+        if (auto ta_v = style->get("text-align")) {
+            box.text_align = resolve_text_align_value(*ta_v);
+            if (*ta_v == "justify") {
+                HB_LOG(Layout, Warn,
+                    "ADR-049: text-align: justify unsupported; using start");
+            }
+        }
+    }
+
     // ADR-033: parse position. ADR-042 extends: relative and
     // absolute are now used (relative = containing block marker,
     // absolute = out-of-flow + positioned). Sticky remains
@@ -1555,8 +1566,12 @@ LayoutBox layout_element(const dom::Element& el,
                 f.font_size = own_font_size;
                 f.color = tc;
                 // ADR-079: apply per-line x_offset.
-                f.x = rtl ? content_x + content_w - f.width - f.x_offset
-                          : content_x + f.x_offset;
+                // ADR-049: text-align on top of ADR-079 x_offset.
+                const float ta_avail =
+                    rtl ? content_w : content_w - f.x_offset;
+                const float ta_off = text_align_offset(
+                    box.text_align, own_dir, f.width, ta_avail);
+                f.x = content_x + (rtl ? 0.0f : f.x_offset) + ta_off;
                 f.y += cursor_y;
                 f.element = &el;
                 if (f.width > max_line_w) max_line_w = f.width;
@@ -1928,15 +1943,24 @@ LayoutBox layout_element(const dom::Element& el,
             // fragment baselines modified by vertical-align.
             ctx->line_baselines.push_back(line_y + line.baseline);
 
-            const float line_start_x =
-                rtl ? content_x + content_w - line.width : content_x;
+            // ADR-049: line_start_x is the physical left edge of the
+            // line after applying the text-align offset.
+            const float ta_line_xo =
+                line.fragments.empty() ? 0.0f
+                                       : line.fragments[0].x_offset;
+            const float ta_avail =
+                rtl ? content_w : content_w - ta_line_xo;
+            const float ta_off = text_align_offset(
+                box.text_align, own_dir, line.width, ta_avail);
+            const float line_start_x = content_x + ta_off;
 
             std::size_t fragment_index = 0;
             for (auto& frag : line.fragments) {
                 // ADR-079: apply per-line x_offset (already frozen
                 // onto the fragment by the breaker).
                 if (rtl) {
-                    frag.x = content_x + content_w - frag.x - frag.width;
+                    frag.x = line_start_x + line.width
+                             - frag.x - frag.width;
                 } else {
                     frag.x = line_start_x + frag.x + frag.x_offset;
                 }
@@ -3649,5 +3673,35 @@ LayoutBox layout_with_pseudo(const dom::Document& doc,
 const dom::Element* hit_test(const LayoutNode& root,
                              float x, float y) {
     return hit_test_node(root, x, y);
+}
+
+// ADR-049: resolve text-align against writing direction and return
+// the offset from the available region's left edge to where the
+// line's left edge should go.
+float text_align_offset(TextAlign align, Direction dir,
+                        float line_w, float avail_w) {
+    if (avail_w < line_w) avail_w = line_w;  // defensive clamp
+    TextAlign a = align;
+    if (a == TextAlign::Start)
+        a = (dir == Direction::Rtl) ? TextAlign::Right : TextAlign::Left;
+    if (a == TextAlign::End)
+        a = (dir == Direction::Rtl) ? TextAlign::Left  : TextAlign::Right;
+    switch (a) {
+        case TextAlign::Center: return (avail_w - line_w) * 0.5f;
+        case TextAlign::Right:  return avail_w - line_w;
+        case TextAlign::Left:
+        default:                return 0.0f;
+    }
+}
+
+// ADR-049: parse a text-align CSS value. Justify and unknown values
+// resolve to Start (callers may warn).
+TextAlign resolve_text_align_value(std::string_view value) {
+    if (value == "left")   return TextAlign::Left;
+    if (value == "center") return TextAlign::Center;
+    if (value == "right")  return TextAlign::Right;
+    if (value == "start")  return TextAlign::Start;
+    if (value == "end")    return TextAlign::End;
+    return TextAlign::Start;
 }
 } // namespace honeybee::renderer::layout

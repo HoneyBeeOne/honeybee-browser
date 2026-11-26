@@ -1,6 +1,6 @@
-# ADR-049: Text Align & Spacing (Measured, Deferred)
+# ADR-049: Text Align & Spacing (Measured; text-align implemented)
 
-**Status:** Deferred
+**Status:** Accepted (text-align implemented 2026-11-26; letter-spacing/word-spacing remain deferred)
 **Date:** 2026-10-29
 **Deciders:** Amr Muhammad (maintainer)
 **Relates to:** ADR-016 (inline formatting), ADR-015 (line breaking), ADR-029 through ADR-048 (measurement-first discipline)
@@ -256,3 +256,40 @@ measurement is not repeated.
 4. **All center/right targets are second-viewport or empty**
 5. **Reactivation requires a real target** -- one of the 4
    listed conditions in "What would reactivate ADR-049"
+
+## Implementation update (2026-11-26)
+
+`text-align` was reactivated and implemented (reactivation
+condition 4: the maintainer chose to ship it as a general CSS
+feature ahead of a specific first-viewport target).
+`letter-spacing` / `word-spacing` remain deferred (0 uses).
+
+**Shipped:**
+- `text-align` added to `is_inherited()` (`cascade.cpp`); it was
+  already whitelisted and parsed.
+- `TextAlign { Start, Left, Center, Right, End }` and
+  `LayoutBox::text_align` (`layout_box.hpp`).
+- `text_align_offset()` and `resolve_text_align_value()` in
+  `layout.cpp`, declared in `layout.hpp` for tests.
+- Placement applied at the `LayoutText` site and both
+  `LayoutInlineContext` sites (line start and per-fragment).
+- `Start`/`End` resolve against direction; default behavior is
+  unchanged in LTR and RTL.
+- `justify` resolves to `Start` and logs a `layout` Warn.
+- Tests: `tests/test_text_align.cpp` (`[adr049]`, 4 cases,
+  18 assertions). Full suite: 3080 assertions green.
+- Verified visually via HTTP: center, right, left, wrapped
+  plain text, mixed `<b>`/`<i>` runs, justify fallback.
+
+**Known limitations:**
+1. `justify` is not supported (falls back to start).
+2. Available width is approximated as `content_w - x_offset`;
+   right-float reserve is not subtracted, so center/right text
+   beside a right float is slightly off (same class as ADR-079
+   deferrals).
+3. RTL math is covered by unit tests only; no RTL-content
+   visual verification.
+
+**Finding:** inline `style=""` attributes are not applied by the
+engine (observed while testing). Tracked as a follow-up; likely
+high value since Wikipedia templates rely on inline styles.

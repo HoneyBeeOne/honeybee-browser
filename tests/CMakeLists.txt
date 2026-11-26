@@ -21,6 +21,7 @@ add_executable(honeybee_tests
   test_layout.cpp
   test_paint.cpp
   test_float_wrap.cpp   # ADR-079
+  test_text_align.cpp   # ADR-049
   test_inline_baseline_paint.cpp   # ADR-082 pixel tests
   test_lexbor_smoke.cpp
   test_convert.cpp
