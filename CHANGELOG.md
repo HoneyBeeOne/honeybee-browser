@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **CSS `text-align`** (ADR-049): `left`, `center`, `right`, `start`,
+  `end` now align lines in block containers (plain text and mixed
+  inline runs); inherited per spec. `start`/`end` resolve against
+  direction. `justify` falls back to `start` with a Warn log.
+  Default behavior unchanged. Known limitation: right-float reserve
+  is not subtracted from the alignment region.
+
 - **CSS border shorthand expansion** (ADR-040): `border: <width> <style> <color>` and
   per-side forms (`border-top/right/bottom/left`) now expand to
   longhands at parse time. Issue-box borders now appear on

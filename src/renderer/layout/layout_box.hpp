@@ -55,6 +55,14 @@ enum class Display : std::uint8_t {
 // Ltr at <html>.
 enum class Direction : std::uint8_t { Ltr, Rtl };
 
+// ADR-049: text alignment. Start/End resolve against the
+// element's writing direction at layout time (LTR: start=left,
+// end=right; RTL: start=right, end=left). Justify is not
+// supported and resolves to Start with a Warn log.
+enum class TextAlign : std::uint8_t {
+    Start, Left, Center, Right, End
+};
+
 enum class LayoutKind {
     Box,
     Text,
@@ -142,6 +150,9 @@ struct LayoutBox final : LayoutNode {
     // this: relative becomes a containing block marker;
     // absolute becomes out-of-flow + positioned).
     Position position = Position::Static;
+
+    // ADR-049: text alignment; inherited from computed style.
+    TextAlign text_align = TextAlign::Start;
 
     // ADR-042: containing block marker. Set when position !=
     // Static (matches CSS: relative/absolute/fixed/sticky all

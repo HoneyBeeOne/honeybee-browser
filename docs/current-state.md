@@ -45,7 +45,8 @@ To reproduce: clone the repo, build, then load `docs/demo.html` in the browser (
 | Pseudo-elements (`::before`, `::after`) | not in selector parser | future ADR |
 | `@media` queries | at-rules skipped by parser | future ADR |
 | `border-radius`, `box-shadow`, `text-decoration` | not in paint | future ADR |
-| `font` shorthand, `max-width`, `text-align` | not implemented | future ADR |
+| `font` shorthand, `max-width` | not implemented | future ADR |
+| `text-align` (left/center/right/start/end) | renders | ADR-049; `justify` falls back to start |
 | `background` shorthand | only `background-color` supported | future ADR |
 | `float`, `position` | layout is block-only | future ADR |
 | `calc()`, `var()`, CSS-wide keywords | simple value parser | future ADR |
@@ -72,7 +73,7 @@ Of the ~10 properties here, HoneyBee renders **two**: `margin: auto` (which corr
 | `max-width: 26em` | ignored | `max-width` not implemented |
 | `margin: auto` | 0 (correct -- no slack) | works, but no effect without `max-width` |
 | `padding: 25vh 2em 2em` | partial -- `25vh` becomes 0 | `vh` not implemented; `2em` works |
-| `text-align: center` | ignored | not implemented |
+| `text-align: center` | renders | ADR-049 |
 
 After ADR-014, the paragraph also gains UA `p { margin: 1em 0 }`
 -- visible as about 16px of whitespace above and below the

@@ -51,7 +51,7 @@ Every significant design choice in HoneyBee is recorded as an ADR. They read as 
 | 046 | [Logging Infrastructure](046-logging.md) | Runtime-gated `HB_LOG` with category + level; env vars `HONEYBEE_LOG` / `_LEVEL` / `_FILE` |
 | 047 | [CSS Mask Image](047-mask-image.md) | `mask-image` parse + paint (cairo_mask); zero first-viewport delta (all targets in hidden ancestors) |
 | 048 | [Flex Wrap (Multi-line)](048-flex-wrap.md) | `flex-wrap: wrap` (row) multi-line algorithm; synthetic-DOM verified; zero first-viewport delta |
-| 049 | [Text Align & Spacing (Deferred)](049-text-align.md) | Measured: `text-align` 26 rules (justify is print-only), `letter-spacing`/`word-spacing` 0 uses. No code; decision recorded |
+| 049 | [Text Align & Spacing](049-text-align.md) | `text-align` left/center/right/start/end implemented (justify falls back to start); `letter-spacing`/`word-spacing` deferred (0 uses) |
 | 050 | [@supports Conditional Rules](050-supports.md) | `@supports` parse + feature-query evaluator; 73 blocks unblocked; layout-verified `.vector-pinned-container` display:block |
 | 051 | [Viewport Units (vh/vw/vmin/vmax)](051-viewport-units.md) | `vh`/`vw`/`vmin`/`vmax` in `parse_length` + `parse_operand`; viewport dims threaded; layout-tree verified, 0 production delta pending GTK height |
 | 052 | [GTK Viewport Height Threading](052-gtk-viewport-height.md) | `m_scroll_window.get_height()` threaded through render/relayout; verified via log (`viewport=1024x678`); closes ADR-051 Deferred |

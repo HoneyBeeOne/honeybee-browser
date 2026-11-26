@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <functional>
+#include <string_view>
 
 #include "renderer/css/cascade.hpp"
 #include "renderer/dom/node.hpp"
@@ -81,4 +82,15 @@ Direction resolve_direction(const dom::Element& el, Direction parent_dir);
 // closest to a leaf; text nodes with no element bubble their
 // containing block back up to the caller.
 const dom::Element* hit_test(const LayoutNode& root, float x, float y);
+
+// ADR-049: resolve text-align to an offset from the available
+// region's left edge to where the line's left edge should go.
+// `Start` and `End` are resolved against `dir` first.
+float text_align_offset(TextAlign align, Direction dir,
+                        float line_w, float avail_w);
+
+// ADR-049: parse a text-align CSS value. Returns Start for
+// missing/invalid values; `justify` resolves to Start (callers
+// may log a Warn).
+TextAlign resolve_text_align_value(std::string_view value);
 } // namespace honeybee::renderer::layout
